@@ -6,6 +6,7 @@
 #     scripts/check.sh                       # build + vet + scoped Go tests + web checks
 #     scripts/check.sh go ./internal/mailing/...   # just those Go packages
 #     scripts/check.sh web                   # just npm run check + npm test
+#     scripts/check.sh build                 # go build + go vet + npm run check only (#0607)
 #     scripts/check.sh all                   # the whole Go suite (a batch's review pass only)
 #     scripts/check.sh guards                # the standalone shell guard tests (see below)
 #     scripts/check.sh browser-nav            # real-browser navigation regression check (#0287)
@@ -20,6 +21,13 @@
 # two stayed green, and jsdom cannot evidence either (see that script's own
 # header). Not part of `go`/`web`/`all`/the default for the same reason
 # `guards` itself is not: it costs nothing on the common path this way.
+#
+# `build` (#0607) is the compile check the implementer runs before any
+# test: go build ./..., go vet ./... and (cd web && npm run check),
+# through runpipe, with the usual verdict. It runs no tests, no gofmt,
+# no floor guard, and needs no database -- it never creates one, even
+# with ISSUE set. Its VERIFICATION PASSED NEVER counts as verification;
+# it only says the tree compiles and type-checks.
 #
 # `guards` runs scripts/check_guard_test.sh, scripts/deploy_guard_test.sh
 # (#0424), scripts/testdb_gc_guard_test.sh, scripts/dev_guard_test.sh,
@@ -404,13 +412,13 @@ if [ -n "$SHELLC_HITS" ]; then
   exit 2
 fi
 
-# 11 = the 9 real call sites (one per go build/vet/test and npm check/test
-# step) plus the 2 in accounting_probe below, which are load-bearing: the live
+# 14 = the 12 real call sites (one per go build/vet/test and npm check/test
+# step, including the build arm's three) plus the 2 in accounting_probe below, which are load-bearing: the live
 # probe is what closes every binding shape this file's patterns cannot name, so
 # deleting it must fail this floor rather than quietly reduce the coverage.
 RUNPIPE_CALLS="$(printf '%s\n' "$SCAN" | grep -c 'runpipe "' || true)"
-if [ "${RUNPIPE_CALLS:-0}" -lt 11 ]; then
-  printf '\033[31mPIPEFAIL REGRESSION (#0208): expected at least 11 runpipe call sites (9 real steps + 2 in the live accounting probe); found %s. A step may have reverted to spelling a shell invocation directly instead of calling the funnel, or the live probe was removed.\033[0m\n' "$RUNPIPE_CALLS" >&2
+if [ "${RUNPIPE_CALLS:-0}" -lt 14 ]; then
+  printf '\033[31mPIPEFAIL REGRESSION (#0208): expected at least 14 runpipe call sites (12 real steps + 2 in the live accounting probe); found %s. A step may have reverted to spelling a shell invocation directly instead of calling the funnel, or the live probe was removed.\033[0m\n' "$RUNPIPE_CALLS" >&2
   exit 2
 fi
 
@@ -795,8 +803,15 @@ if awk "BEGIN{exit !($LOAD > 8)}"; then
   echo "Any TIMING failure you see is that, not a defect. Do not widen a deadline to accommodate it."
 fi
 
+MODE="${1:-default}"; shift || true
+
 OWN_DB=""
-if [ -n "${ISSUE:-}" ]; then
+if [ "$MODE" = build ]; then
+  # #0607: build mode runs no tests, so it needs no database and must
+  # not create one even when ISSUE is set.
+  step "test database"
+  echo "(none -- build mode runs no tests; ISSUE is ignored)"
+elif [ -n "${ISSUE:-}" ]; then
   step "isolated test database for issue $ISSUE"
   if TEST_DATABASE_URL="$(scripts/testdb.sh create "$ISSUE")"; then
     export TEST_DATABASE_URL; OWN_DB="$ISSUE"
@@ -816,8 +831,6 @@ fi
 # any other one lands here and is reported.
 cleanup() { [ -n "$OWN_DB" ] && scripts/testdb.sh drop "$OWN_DB" >/dev/null 2>&1; [ "${EXIT_ACCOUNTED:-0}" -eq 1 ] || { printf '\033[31mNO VERDICT (#0258): scripts/check.sh exited without reporting VERIFICATION PASSED or VERIFICATION FAILED. Treat this as a failure: either the run was interrupted, or something ended it early -- a helper shadowed by a decoy that terminates instead of reporting would look exactly like this.\033[0m\n' >&2; exit 2; }; }
 trap cleanup EXIT
-
-MODE="${1:-default}"; shift || true
 
 go_test() {
   # #0212: the default package list must include every package that can hold
@@ -913,6 +926,13 @@ case "$MODE" in
        floor_guard_check
        go_test "$@" ;;
   web) web_check ;;
+  build)
+       # #0607: compile check only -- see the header comment. No tests,
+       # no gofmt, no floor guard, no database. Never verification.
+       step "go build";      runpipe "go build ./... 2>&1 | tail -$TAIL"
+       step "go vet";        runpipe "go vet ./... 2>&1 | tail -$TAIL"
+       step "npm run check"; runpipe "cd web && npm run check 2>&1 | tail -$TAIL"
+       ;;
   guards)
        # #0207: the "something someone actually runs" for the standalone
        # shell guard tests — see the header comment for why this is its own

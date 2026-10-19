@@ -509,7 +509,7 @@ two agents test at the same time — see `AGENTS.md` §5a.
 
 | Stage | When | Command | What runs |
 |---|---|---|---|
-| **Build only** | implementer, after editing and before any test run | `scripts/check.sh build` (`#0607`; until it lands: `go build ./... && go vet ./...` and `(cd web && npm run check)`) | Go build and vet, `svelte-check`. Stops in seconds with the compiler or type errors. **Never counts as verification.** |
+| **Build only** | implementer, after editing and before any test run | `scripts/check.sh build` | Go build and vet, `svelte-check`. Stops in seconds with the compiler or type errors. **Never counts as verification.** |
 | **Fast tier** (default) | every implementation and every review | `ISSUE=NNNN scripts/check.sh go <packages>` and/or `ISSUE=NNNN scripts/check.sh web` | build, vet, gofmt, the floor guard, the named Go packages (plus every repo-wide guard package the change reaches, per `AGENTS.md` §5's table), and/or `svelte-check` + vitest |
 | **Full tier** | when the plan or the diff touches what a slow check guards (below); and once at the end of each phase | `ISSUE=NNNN scripts/check.sh all` then `scripts/check.sh guards` | the whole Go suite and web suite, then the standalone shell guard tests |
 
@@ -540,6 +540,7 @@ When the review of a phase's last open issue resolves it (every issue in that ph
 #### Commands
 
 ```bash
+scripts/check.sh build                                   # build only: go build + vet + svelte-check, no tests, no DB
 ISSUE=0123 scripts/check.sh go ./internal/handlers/...   # fast tier, scoped, own database
 ISSUE=0123 scripts/check.sh                              # Go (default packages) + web, own database
 scripts/check.sh web                                     # npm run check + npm test

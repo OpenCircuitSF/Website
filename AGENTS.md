@@ -265,6 +265,7 @@ ISSUE=0123 scripts/check.sh                             # Go + web, own database
 scripts/check.sh web                                    # npm run check + npm test
 scripts/check.sh all                                    # whole suite — batch review pass only
 scripts/check.sh guards                                 # standalone shell guard tests — §5a
+scripts/check.sh build                                  # go build + vet + svelte-check only, no tests or DB — never verification
 
 scripts/testdb.sh template   # rebuild the test template after a migration change
 scripts/testdb.sh drop NNNN  # drop YOUR database when done

@@ -42,6 +42,12 @@
 #     nothing fails, so the honest verdict is VERIFICATION PASSED, exit 0.
 #     Without this row the two above could be satisfied by a check.sh that
 #     simply always fails.
+#   * `build` mode (#0607) in a sandbox holding a trivial Go module and a
+#     web/package.json whose "check" script is a stub -- one row with a
+#     Go compile error, one with a failing check script (standing in for
+#     a svelte-check error), each VERIFICATION FAILED, exit 1; one clean
+#     row VERIFICATION PASSED, exit 0, with no test step run; and the
+#     clean row again with ISSUE set, asserting no database step ran.
 #
 # Outcomes are classified from the exit code plus the verdict line:
 #   passed    = exit 0 and VERIFICATION PASSED   (in a failing sandbox: a BYPASS)
@@ -64,6 +70,9 @@
 #           nothing fail (nothing to mask). Each row uses a trivial
 #           gofmt-clean Go module and a floor-guard-script stub, with
 #           exactly one of the two made to fail.
+#   Part 1c `build` mode (#0607): a Go compile error and a failing web check
+#           each give VERIFICATION FAILED; a clean tree passes with no test
+#           step; with ISSUE set no database step runs.
 #   Part 2  Sensitivity. Mutants that are EXPECTED to defeat check.sh's
 #           in-file checks, proving Part 1's assertion is not vacuous. Same
 #           role as db_reset_guard_test.sh's Part 3.
@@ -93,8 +102,11 @@
 #     into scripts/ because db-reset.sh resolves its repo root from its own
 #     location; here that is exactly what we WANT to relocate, since check.sh
 #     scanning and cd-ing to the sandbox is what makes the sandbox work.)
-#   * ISSUE is unset for every child run, so no copy of check.sh ever creates
-#     or drops a database. No port is bound. `shortlinks` is never touched.
+#   * ISSUE is unset for every child run except Part 1c's `build_issue_set`
+#     row, which sets it on purpose; that sandbox has no scripts/testdb.sh,
+#     so even a regressed `build` arm could not create or drop a database --
+#     it would fail to find the script and abort. So no copy of check.sh
+#     ever creates or drops a database. No port is bound. `shortlinks` is never touched.
 #   * Every mutant is `bash -n` validated and confirmed to differ from its
 #     source before it is run, so a payload that failed to inject cannot
 #     masquerade as "not a bypass".
@@ -201,6 +213,24 @@ mk_iso_sandbox() {  # <name> <script> <floor-stub-exit> <gofmt-dirty:0|1> -> pri
   fi
   printf '#!/bin/sh\nexit %s\n' "$3" > "$sb/scripts/go_file_visit_floor_guard_test.sh"
   chmod +x "$sb/scripts/go_file_visit_floor_guard_test.sh"
+  printf '%s' "$sb"
+}
+
+mk_build_sandbox() {  # <name> <script> <go: ok|broken> <web: ok|broken> -> prints sandbox dir
+  local sb="$WORKDIR/sb/$1"
+  rm -rf "$sb"; mkdir -p "$sb/scripts" "$sb/web"
+  cp "$2" "$sb/scripts/check.sh"; chmod +x "$sb/scripts/check.sh"
+  printf 'module buildsandbox\n\ngo 1.22\n' > "$sb/go.mod"
+  if [ "$3" = "broken" ]; then
+    printf 'package main\n\nfunc main() {\n\tundefinedCall0607()\n}\n' > "$sb/main.go"
+  else
+    printf 'package main\n\nfunc main() {\n\tprintln("ok")\n}\n' > "$sb/main.go"
+  fi
+  if [ "$4" = "broken" ]; then
+    printf '{"name":"buildsandbox","private":true,"scripts":{"check":"echo svelte-check found 1 error >&2; exit 1"}}\n' > "$sb/web/package.json"
+  else
+    printf '{"name":"buildsandbox","private":true,"scripts":{"check":"exit 0"}}\n' > "$sb/web/package.json"
+  fi
   printf '%s' "$sb"
 }
 
@@ -384,6 +414,49 @@ if [ "$RC" -eq 1 ] && grep -q '\[31mVERIFICATION FAILED' "$OUTFILE"; then
   pass "go mode, ONLY gofmt_check's step fails (build/vet/floor/test all clean): VERIFICATION FAILED, exit 1 (#0493 — gofmt_check's own FAILED=1, outside run())"
 else
   fail "REGRESSION #0493: scripts/check.sh did not report a gofmt-only failure honestly. exit=$RC, verdict=$(classify). gofmt_check assigns FAILED=1 directly, not through run() — a stub or removal of that assignment is invisible to every check that only watches run()/runpipe()/accounting_probe. Last lines: $(tail -8 "$OUTFILE" | tr '\n' '|')"
+fi
+
+# ---------------------------------------------------------------------------
+echo
+echo "== Part 1c: build mode (#0607) =="
+if command -v npm >/dev/null; then
+  SB="$(mk_build_sandbox p1c_go_broken "$REAL" broken ok)"
+  run_case "$SB" build
+  if [ "$RC" -eq 1 ] && grep -q '\[31mVERIFICATION FAILED' "$OUTFILE"; then
+    pass "build mode with a Go compile error (web check clean): VERIFICATION FAILED, exit 1 (#0607)"
+  else
+    fail "REGRESSION #0607: build mode did not report a Go compile error honestly. exit=$RC, verdict=$(classify). Last lines: $(tail -8 "$OUTFILE" | tr '\n' '|')"
+  fi
+
+  SB="$(mk_build_sandbox p1c_web_broken "$REAL" ok broken)"
+  run_case "$SB" build
+  if [ "$RC" -eq 1 ] && grep -q '\[31mVERIFICATION FAILED' "$OUTFILE"; then
+    pass "build mode with a failing svelte-check (Go clean): VERIFICATION FAILED, exit 1 (#0607)"
+  else
+    fail "REGRESSION #0607: build mode did not report a failing web check honestly. exit=$RC, verdict=$(classify). Last lines: $(tail -8 "$OUTFILE" | tr '\n' '|')"
+  fi
+
+  SB="$(mk_build_sandbox p1c_clean "$REAL" ok ok)"
+  run_case "$SB" build
+  if [ "$RC" -eq 0 ] && grep -q '\[32mVERIFICATION PASSED' "$OUTFILE" \
+     && ! grep -q '=== go test' "$OUTFILE" && ! grep -q '=== npm test' "$OUTFILE"; then
+    pass "build mode over a clean tree: VERIFICATION PASSED, exit 0, and no test step ran (#0607)"
+  else
+    fail "REGRESSION #0607: build mode over a clean tree did not pass cleanly without running tests. exit=$RC, verdict=$(classify). Last lines: $(tail -8 "$OUTFILE" | tr '\n' '|')"
+  fi
+
+  SB="$(mk_build_sandbox p1c_issue "$REAL" ok ok)"
+  OUTFILE="$SB/out"
+  ( cd "$SB" && ISSUE=0607 "$BASHBIN" "$SB/scripts/check.sh" build ) > "$OUTFILE" 2>&1 < /dev/null
+  RC=$?
+  if [ "$RC" -eq 0 ] && grep -q '\[32mVERIFICATION PASSED' "$OUTFILE" \
+     && ! grep -q 'isolated test database' "$OUTFILE"; then
+    pass "build mode with ISSUE set: VERIFICATION PASSED, exit 0, and no database step ran (#0607)"
+  else
+    fail "REGRESSION #0607: build mode with ISSUE set did not skip the database. exit=$RC, verdict=$(classify). Last lines: $(tail -8 "$OUTFILE" | tr '\n' '|')"
+  fi
+else
+  echo "SKIP: npm not on PATH — Part 1c (#0607) needs it"
 fi
 
 # ---------------------------------------------------------------------------
