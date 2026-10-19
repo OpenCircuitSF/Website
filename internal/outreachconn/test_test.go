@@ -80,6 +80,9 @@ func TestBlueskyConnection(t *testing.T) {
 	}))
 	defer srv.Close()
 	m := testMgr(t, map[string]string{KeyBlueskyPDSURL: srv.URL, KeyBlueskyHandle: "alice.example.test", KeyBlueskyAppPassword: tokenCanary})
+	// The reload's handle lookup (#0601) also signs in here; let it finish
+	// before the handler's flag changes, or the two race.
+	m.lookups.Wait()
 	r := m.Test(context.Background(), GroupBluesky)
 	if !r.OK || r.Detail != "Signed in to Bluesky as @alice.example.test" {
 		t.Errorf("ok result = %+v", r)

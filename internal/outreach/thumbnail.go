@@ -60,6 +60,11 @@ type thumbResult struct {
 type thumbCache struct {
 	mu sync.Mutex
 	m  map[thumbKey]thumbResult
+	// shrinkMu lets one shrink run at a time, so a burst of preview GETs on a
+	// cold cache waits for the first decode and then hits the cache instead
+	// of decoding the same large cover side by side (#0601 review: at the
+	// pixel cap one decode can hold a few hundred MB on a 1.8 GB box).
+	shrinkMu sync.Mutex
 }
 
 func (c *thumbCache) get(k thumbKey) (thumbResult, bool) {
@@ -128,6 +133,8 @@ func (p *Publisher) thumbnail(cover *string) (data []byte, mime, reason string) 
 	}
 	key := thumbKey{full, fi.Size(), fi.ModTime().UnixNano()}
 	if fi.Size() > int64(bluesky.MaxThumbBytes) {
+		p.thumbs.shrinkMu.Lock()
+		defer p.thumbs.shrinkMu.Unlock()
 		if r, ok := p.thumbs.get(key); ok {
 			return r.data, r.mime, r.reason
 		}

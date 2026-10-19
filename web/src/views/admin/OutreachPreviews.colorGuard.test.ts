@@ -1,5 +1,6 @@
 // #0601: hashtags and links in the post previews are text on the page, so they
-// use --accent (5:1 or better on the page in both themes). --accent-text is the
+// use --accent (light #2F7D0C is 4.76:1 on --bg-page and 5.17:1 on
+// --bg-panel; dark #68FF23 is 13.7:1 or better). --accent-text is the
 // colour for text ON an accent fill (#0A0D0B dark, #FFFFFF light), which made
 // the tags vanish. jsdom does not resolve custom properties, so this reads the
 // component sources.

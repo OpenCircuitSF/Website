@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/bluesky"
+	"github.com/brennanMKE/OpenCircuitSF/internal/media"
 )
 
 func noiseImage(w, h int, alpha uint8) *image.NRGBA {
@@ -135,5 +136,32 @@ func TestPublisher_ThumbnailReasons(t *testing.T) {
 		if ok, reason := tc.pub.ThumbStatus(tc.cover); ok || reason != tc.reason {
 			t.Errorf("%s: ok %v reason %q, want %q", tc.name, ok, reason, tc.reason)
 		}
+	}
+}
+
+// #0601 review: a cover that decodes fine but whose header is over the media
+// pixel limits gets no picture. Unlike pixelBomb, this one would decode and
+// shrink if the header check were dropped, so the check itself is what fails it.
+func TestPublisher_ThumbnailOverPixelLimitRefused(t *testing.T) {
+	var pbuf bytes.Buffer
+	if err := png.Encode(&pbuf, noiseImage(media.MaxImageEdgePixels+1, 40, 255)); err != nil {
+		t.Fatal(err)
+	}
+	enc := pbuf.Bytes()
+	// Pad past the blob limit with a tEXt chunk after IHDR (8-byte signature,
+	// then IHDR's 4+4+13+4 bytes), so the file reaches the shrink path.
+	pad := pngChunk("tEXt", bytes.Repeat([]byte("a"), bluesky.MaxThumbBytes))
+	data := append(append(append([]byte{}, enc[:33]...), pad...), enc[33:]...)
+	if _, err := png.Decode(bytes.NewReader(data)); err != nil {
+		t.Fatalf("fixture must decode: %v", err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "wide.png"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cover := "/media/wide.png"
+	got, mime, reason := NewPublisher(PublisherDeps{MediaDir: dir}).thumbnail(&cover)
+	if got != nil || mime != "" || reason != ThumbReasonTooBig {
+		t.Errorf("over the pixel limit: got %d bytes, mime %q, reason %q", len(got), mime, reason)
 	}
 }
