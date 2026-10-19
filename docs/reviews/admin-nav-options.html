@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Admin nav options</title>
+<style>
+/* Tokens: copied from web/src/app.css (PRD §4.2). Light is :root; dark is
+   restated under prefers-color-scheme (guarded) and under [data-theme=dark]
+   so the toggle wins both ways, exactly as the site does it. */
+:root{color-scheme:light dark;
+--bg-page:#F4F6F3;--bg-panel:#FFFFFF;--bg-subtle:#E9EEE6;--bg-header:#E1E8DE;
+--text:#10140F;--text-muted:#4C574A;--text-faint:#5F6A5C;
+--border:#CFD8CA;--border-strong:#87977F;
+--accent:#2F7D0C;--accent-hover:#245F09;--accent-text:#FFFFFF;--accent-subtle:#E4F1DB;--accent-dim:#79C34A;
+--warning:#8A5A00;--danger:#B4231B;--danger-subtle:#FBE7E4;
+--space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:24px;--space-6:32px;
+--font:'Archivo',ui-sans-serif,system-ui,sans-serif;
+--font-mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+--fs-sm:12px;--fs-base:13px;--fs-md:15px;--fs-lg:18px;--fs-xl:22px;--lh:1.45;--radius:4px;--border-w:1px}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+--bg-page:#0A0D0B;--bg-panel:#121712;--bg-subtle:#182018;--bg-header:#1B231C;
+--text:#E8F0E8;--text-muted:#9AA79E;--text-faint:#7E8D82;--border:#243028;--border-strong:#4E6553;
+--accent:#68FF23;--accent-hover:#8AFF55;--accent-text:#0A0D0B;--accent-subtle:#142B0C;--accent-dim:#3C9E0F;
+--warning:#E5B22C;--danger:#FF5F56;--danger-subtle:#2A1512}}
+:root[data-theme="dark"]{
+--bg-page:#0A0D0B;--bg-panel:#121712;--bg-subtle:#182018;--bg-header:#1B231C;
+--text:#E8F0E8;--text-muted:#9AA79E;--text-faint:#7E8D82;--border:#243028;--border-strong:#4E6553;
+--accent:#68FF23;--accent-hover:#8AFF55;--accent-text:#0A0D0B;--accent-subtle:#142B0C;--accent-dim:#3C9E0F;
+--warning:#E5B22C;--danger:#FF5F56;--danger-subtle:#2A1512}
+
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--bg-page);color:var(--text);font-family:var(--font);font-size:var(--fs-base);line-height:var(--lh);-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration-thickness:1px;text-underline-offset:3px}
+.page{max-width:1280px;margin:0 auto;padding:var(--space-5) var(--space-4) 80px}
+h1{font-size:var(--fs-xl);margin:0 0 var(--space-2)}
+h2{font-size:var(--fs-lg);margin:var(--space-6) 0 var(--space-1);padding-top:var(--space-4);border-top:1px solid var(--border)}
+h2 small{font-weight:400;color:var(--text-muted);font-size:var(--fs-base);margin-left:var(--space-2)}
+p{max-width:72ch}
+.lede{color:var(--text-muted);margin:0 0 var(--space-4)}
+.prompt{font-family:var(--font-mono);color:var(--accent);margin:0 0 var(--space-3)}
+.prompt::before{content:"> ";color:var(--accent-dim)}
+.summary{margin:0 0 var(--space-4);font-size:var(--fs-md)}
+.caption{color:var(--text-muted);font-size:var(--fs-sm);margin:var(--space-2) 0 0;max-width:none}
+.theme{position:fixed;top:var(--space-3);right:var(--space-3);z-index:5;font-family:var(--font-mono);font-size:var(--fs-sm);background:var(--bg-panel);color:var(--text);border:1px solid var(--border-strong);border-radius:var(--radius);padding:var(--space-1) var(--space-2);cursor:pointer}
+.pros{display:grid;grid-template-columns:1fr 1fr;gap:var(--space-4);margin:var(--space-4) 0 0;max-width:72ch}
+.pros ul{margin:0;padding-left:18px}.pros h4{margin:0 0 var(--space-1);font-size:var(--fs-sm);text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted)}
+.cost{display:inline-block;font-family:var(--font-mono);font-size:var(--fs-sm);padding:1px 8px;border-radius:10px;background:var(--accent-subtle);color:var(--accent);font-weight:700;vertical-align:middle}
+
+/* Frames */
+.frames{display:grid;grid-template-columns:minmax(0,1fr) 390px;gap:var(--space-5);align-items:start}
+@media (max-width:900px){.frames{grid-template-columns:1fr}}
+.frame{border:1px solid var(--border-strong);border-radius:6px;background:var(--bg-page);overflow:hidden;position:relative}
+.frame-bar{display:flex;align-items:center;gap:var(--space-2);background:var(--bg-header);border-bottom:1px solid var(--border);padding:6px var(--space-3);font-family:var(--font-mono);font-size:var(--fs-sm);color:var(--text-faint)}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block}.d1{background:var(--danger)}.d2{background:var(--warning)}.d3{background:var(--accent)}
+.frame-body{padding:var(--space-4)}
+.phone{width:390px;max-width:100%}
+.phone .frame-body{padding:var(--space-3);min-height:520px}
+
+/* Mock app chrome (mirrors .app-header / Panel.svelte) */
+.hdr{background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-2) var(--space-3);margin-bottom:var(--space-3);display:flex;align-items:center;justify-content:space-between;gap:var(--space-2);flex-wrap:wrap}
+.hdr b{font-size:var(--fs-md);font-weight:600}
+.hdr .r{display:flex;gap:var(--space-3);align-items:center;color:var(--text-muted)}
+.hdr .btn{border:1px solid var(--border-strong);border-radius:var(--radius);padding:3px 10px;background:var(--bg-panel);color:var(--text);font-size:var(--fs-sm)}
+.oldtabs{display:flex;gap:var(--space-1);padding:0 var(--space-2);flex:1}
+.oldtab{padding:var(--space-1) var(--space-2);border-radius:var(--radius);color:var(--text-muted)}
+.oldtab.on{background:var(--accent-subtle);color:var(--accent);font-weight:600}
+.panel{background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:var(--space-3);overflow:hidden}
+.panel-h{background:var(--bg-header);border-bottom:1px solid var(--border);padding:var(--space-2) var(--space-3);font-weight:600;display:flex;justify-content:space-between;align-items:center;gap:var(--space-2);flex-wrap:wrap}
+.panel-b{padding:var(--space-3)}
+table{width:100%;border-collapse:collapse;font-size:var(--fs-base)}
+th{text-align:left;background:var(--bg-header);color:var(--text-muted);font-weight:600;font-size:var(--fs-sm);text-transform:uppercase;letter-spacing:.03em;padding:var(--space-1) var(--space-3);border-bottom:1px solid var(--border)}
+td{padding:var(--space-2) var(--space-3);border-bottom:1px solid var(--border);vertical-align:middle}
+tr:last-child td{border-bottom:none}
+.badge{display:inline-block;font-size:var(--fs-sm);padding:1px 8px;border-radius:10px;background:var(--accent-subtle);color:var(--accent);font-weight:600;white-space:nowrap}
+.badge.m{background:var(--bg-subtle);color:var(--text-muted)}
+.rowbtn{display:inline-block;padding:2px 10px;border:1px solid var(--accent);border-radius:var(--radius);color:var(--accent);text-decoration:none;white-space:nowrap}
+.muted{color:var(--text-muted)}
+.sub{display:flex;gap:var(--space-2);flex-wrap:nowrap;overflow-x:auto;font-weight:400;font-size:var(--fs-base)}
+.sub a{color:var(--text-muted);text-decoration:none;padding:2px 6px;border-bottom:2px solid transparent;white-space:nowrap}
+.sub a.on{color:var(--text);border-bottom-color:var(--accent);font-weight:600}
+.scroll{overflow-x:auto;white-space:nowrap;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.scroll::-webkit-scrollbar{display:none}
+.fade{position:relative}.fade::after{content:"";position:absolute;right:0;top:0;bottom:0;width:28px;background:linear-gradient(to right,transparent,var(--bg-page));pointer-events:none}
+
+/* CURRENT: 14 bordered, underlined pills with group labels */
+.cur{display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:flex-end;margin-bottom:var(--space-3)}
+.cur .g{display:flex;flex-wrap:wrap;gap:var(--space-2);align-items:center;padding-left:var(--space-3);border-left:1px solid var(--border)}
+.cur .gl{font-size:var(--fs-sm);color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em}
+.pill{background:var(--bg-panel);border:1px solid var(--border);border-bottom-width:2px;border-radius:var(--radius);padding:var(--space-2) var(--space-4);font-size:var(--fs-md);color:var(--text-muted);text-decoration:underline;text-underline-offset:3px;min-height:40px;display:inline-flex;align-items:center}
+.pill.on{border-bottom-color:var(--accent);color:var(--accent);font-weight:600}
+.sel{width:100%;min-height:44px;font-family:var(--font);font-size:var(--fs-md);padding:var(--space-2) var(--space-3);background:var(--bg-panel);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:var(--space-3)}
+
+/* OPTION A: section tabs + contextual screen row */
+.t1{display:flex;gap:var(--space-1);margin-bottom:var(--space-1)}
+.t1 a{padding:var(--space-2) var(--space-3);border-radius:var(--radius);color:var(--text-muted);text-decoration:none;font-size:var(--fs-md);white-space:nowrap;min-height:36px;display:inline-flex;align-items:center}
+.t1 a.on{background:var(--accent-subtle);color:var(--accent);font-weight:600}
+.t2{display:flex;gap:var(--space-3);padding:0 var(--space-2);border-bottom:1px solid var(--border);margin-bottom:var(--space-4)}
+.t2 a{padding:var(--space-2) var(--space-1);color:var(--text-muted);text-decoration:none;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
+.t2 a.on{color:var(--text);border-bottom-color:var(--accent);font-weight:600}
+.phone .t1 a{font-size:var(--fs-base);padding:var(--space-2) 9px}
+.phone .t1,.phone .t2{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+
+/* OPTION B: sidebar */
+.sbl{display:grid;grid-template-columns:190px minmax(0,1fr);gap:var(--space-4);align-items:start}
+.sb{background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-2) 0;font-size:var(--fs-base)}
+.sb a,.sb button{display:flex;align-items:center;gap:6px;width:100%;text-align:left;padding:6px var(--space-3);color:var(--text-muted);text-decoration:none;background:none;border:0;font:inherit;cursor:pointer}
+.sb a.on{color:var(--accent);font-weight:600}
+.sb a.on::before{content:">";color:var(--accent-dim);font-family:var(--font-mono);margin-left:-12px;width:6px}
+.sb .gh{display:flex;justify-content:space-between;padding:10px var(--space-3) 4px;font-size:var(--fs-sm);color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+.sb .gh.open{color:var(--text)}
+.sb .gh .n{font-weight:400;font-family:var(--font-mono);text-transform:none;letter-spacing:0}
+.sb .l1{padding-left:22px}.sb .l2{padding-left:36px;font-size:var(--fs-sm)}
+.sb .sec{color:var(--text)}
+.crumb{color:var(--text-muted);margin:0 0 var(--space-3);font-size:var(--fs-base)}
+.crumb a{color:var(--text-muted)}.crumb b{color:var(--text);font-weight:600}
+.menubtn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border-strong);border-radius:var(--radius);background:var(--bg-panel);color:var(--text);padding:6px 10px;font:inherit;cursor:pointer}
+.menubtn .ham{font-family:var(--font-mono);color:var(--accent)}
+.drawer{position:absolute;inset:0;background:rgba(0,0,0,.35);display:none;z-index:2}
+.drawer.open{display:block}
+.drawer .sb{position:absolute;top:0;bottom:0;left:0;width:280px;border-radius:0;overflow:auto;box-shadow:4px 0 16px rgba(0,0,0,.25)}
+.drawer .close{position:absolute;right:var(--space-3);top:var(--space-2);width:auto;padding:4px 8px;border:1px solid var(--border);border-radius:var(--radius);color:var(--text)}
+
+/* OPTION C: hubs */
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--space-3)}
+.phone .cards{grid-template-columns:1fr}
+.card{display:block;background:var(--bg-panel);border:1px solid var(--border);border-radius:var(--radius);padding:var(--space-3);text-decoration:none;color:var(--text)}
+.card b{display:block;color:var(--accent);margin-bottom:2px}
+.card span{color:var(--text-muted);font-size:var(--fs-sm)}
+.card .n{display:block;font-family:var(--font-mono);color:var(--text);margin-top:6px}
+
+/* OPTION D: disclosure menus + palette */
+.bar{display:flex;align-items:center;gap:var(--space-1);border-bottom:1px solid var(--border);padding-bottom:var(--space-2);margin-bottom:var(--space-4);position:relative}
+.bar>a,.bar>.dd>button{padding:var(--space-2) var(--space-3);border-radius:var(--radius);color:var(--text-muted);text-decoration:none;font:inherit;font-size:var(--fs-md);background:none;border:0;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.bar .dd{position:relative}
+.bar .dd>button.on{background:var(--accent-subtle);color:var(--accent);font-weight:600}
+.bar .dd>button .ch{font-size:10px;opacity:.8}
+.menu{display:none;position:absolute;top:calc(100% + 4px);left:0;min-width:200px;background:var(--bg-panel);border:1px solid var(--border-strong);border-radius:var(--radius);box-shadow:0 6px 20px rgba(0,0,0,.2);padding:var(--space-1) 0;z-index:3}
+.menu.open{display:block}
+.menu a{display:flex;justify-content:space-between;padding:6px var(--space-3);color:var(--text);text-decoration:none}
+.menu a.on{color:var(--accent);font-weight:600}
+.menu a.l2{padding-left:28px;font-size:var(--fs-sm);color:var(--text-muted)}.menu a.l2.on{color:var(--accent)}
+.menu a:hover{background:var(--bg-subtle)}
+.goto{margin-left:auto;display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:var(--radius);padding:5px 10px;color:var(--text-faint);font-family:var(--font-mono);font-size:var(--fs-sm);background:var(--bg-panel)}
+.goto kbd{border:1px solid var(--border-strong);border-radius:3px;padding:0 4px;font-family:inherit;font-size:11px}
+.sheetbtn{width:100%;justify-content:space-between;margin-bottom:var(--space-3)}
+.sheet{display:none;background:var(--bg-panel);border:1px solid var(--border-strong);border-radius:var(--radius);margin:-6px 0 var(--space-3);padding:var(--space-2)}
+.sheet.open{display:block}
+.sheet input{width:100%;font:inherit;padding:6px 8px;border:1px solid var(--border-strong);border-radius:var(--radius);background:var(--bg-page);color:var(--text);margin-bottom:var(--space-2)}
+.sheet .gh{font-size:var(--fs-sm);color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;padding:8px 8px 2px}
+.sheet a{display:block;padding:7px 8px;color:var(--text);text-decoration:none;border-radius:var(--radius)}
+.sheet a.on{color:var(--accent);font-weight:600;background:var(--accent-subtle)}
+.sheet a.l2{padding-left:24px;font-size:var(--fs-sm);color:var(--text-muted)}.sheet a.l2.on{color:var(--accent)}
+.hint{font-size:var(--fs-sm);color:var(--text-faint);margin:var(--space-2) 0 0}
+</style>
+</head>
+<body>
+<button class="theme" type="button" id="theme" aria-live="polite">theme: auto</button>
+<div class="page">
+<p class="prompt">open_circuit_sf // admin_nav_options</p>
+<h1>Admin navigation — four options</h1>
+<p class="lede">Companion to <code>admin-nav-options.md</code>. Every mockup shows the same state, <b>Workshops → Outreach → Posts</b>, at a desktop width and at 390px. Colours and spacing are the site's own tokens from <code>app.css</code>; the self-hosted fonts are not bundled, so this renders in the system fallbacks. Buttons marked ▾ or Menu toggle the mock menus and drawer.</p>
+
+<!-- ───────────────────────── CURRENT ───────────────────────── -->
+<h2>Current <small>what #0586 shipped — for comparison</small></h2>
+<p class="summary">Fourteen bordered, underlined pills in three labelled groups, wrapping to two rows; a native select at 480px and below.</p>
+<div class="frames">
+ <div class="frame"><div class="frame-bar"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span> desktop · 1040px shell</div>
+  <div class="frame-body">
+   <div class="hdr"><b>Open Circuit SF</b><nav class="oldtabs"><span class="oldtab">Account</span><span class="oldtab on">Admin</span></nav><span class="btn">Sign out</span></div>
+   <nav class="cur" aria-label="Admin sections (current)">
+    <a class="pill">Overview</a>
+    <div class="g"><span class="gl">Mailing list</span><a class="pill">Subscribers</a><a class="pill">Pending</a><a class="pill">Suppressions</a><a class="pill">Deliverability</a><a class="pill">Campaigns</a><a class="pill">Interests</a></div>
+    <div class="g"><span class="gl">Workshops</span><a class="pill">Workshops</a><a class="pill on">Outreach</a></div>
+    <div class="g"><span class="gl">System</span><a class="pill">Settings</a><a class="pill">Users</a><a class="pill">Audit log</a><a class="pill">CRT session</a></div>
+   </nav>
+   <nav class="sub" style="margin-bottom:12px"><a class="on" style="text-decoration:underline;border:0">Posts</a><a style="text-decoration:underline">Flyer spots</a><a style="text-decoration:underline">Flyers</a><a style="text-decoration:underline">Results</a></nav>
+   <div class="panel"><div class="panel-h">Outreach</div><table><tr><th>Workshop</th><th>Date</th><th>Outreach</th><th></th></tr>
+   <tr><td>LED Programming</td><td>Sat Oct 31, 10:00 AM</td><td><span class="badge">Announced</span></td><td><a class="rowbtn">Open</a></td></tr>
+   <tr><td>Intro to Soldering</td><td>Sat Nov 14, 1:00 PM</td><td><span class="badge m">Not started</span></td><td><a class="rowbtn">Promote</a></td></tr></table></div>
+  </div></div>
+ <div class="frame phone"><div class="frame-bar"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span> phone · 390px</div>
+  <div class="frame-body">
+   <div class="hdr"><b>Open Circuit SF</b><span class="btn">Sign out</span><nav class="oldtabs" style="flex:0 0 100%;padding:0"><span class="oldtab">Account</span><span class="oldtab on">Admin</span></nav></div>
+   <select class="sel" aria-label="Admin section"><option>Outreach</option></select>
+   <nav class="sub" style="margin-bottom:12px"><a class="on" style="text-decoration:underline;border:0">Posts</a><a style="text-decoration:underline">Flyer spots</a><a style="text-decoration:underline">Flyers</a><a style="text-decoration:underline">Results</a></nav>
+   <div class="panel"><div class="panel-h">Outreach</div><table><tr><th>Workshop</th><th>Outreach</th><th></th></tr>
+   <tr><td>LED Programming</td><td><span class="badge">Announced</span></td><td><a class="rowbtn">Open</a></td></tr>
+   <tr><td>Intro to Soldering</td><td><span class="badge m">Not started</span></td><td><a class="rowbtn">Promote</a></td></tr></table></div>
+  </div></div>
+</div>
+<p class="caption">Four rows of chrome on the phone (title, Account/Admin, select, sub-nav) before any content; on desktop the active pill is the least prominent thing in the bar.</p>
+
+<!-- ───────────────────────── OPTION A ───────────────────────── -->
+<h2>Option A — Section tabs + contextual screen row <span class="cost">S</span> <small>recommended</small></h2>
+<p class="summary">Row one is the four sections; row two shows only the active section's screens. Overview has no row two. Level three (Posts · Flyer spots · …) lives in the panel.</p>
+<div class="frames">
+ <div class="frame"><div class="frame-bar"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span> desktop · 1040px shell</div>
+  <div class="frame-body">
+   <div class="hdr"><b>Open Circuit SF</b><span class="r"><a>Account</a><span class="btn">Sign out</span></span></div>
+   <nav class="t1" aria-label="Admin sections"><a>Overview</a><a class="on" aria-current="true">Workshops</a><a>Mailing list</a><a>System</a></nav>
+   <nav class="t2" aria-label="Workshops screens"><a>Workshops</a><a class="on" aria-current="page">Outreach</a></nav>
+   <div class="panel"><div class="panel-h">Outreach <nav class="sub" aria-label="Outreach sections"><a class="on" aria-current="page">Posts</a><a>Flyer spots</a><a>Flyers</a><a>Results</a></nav></div>
+   <table><tr><th>Workshop</th><th>Date</th><th>Outreach</th><th></th></tr>
+   <tr><td>LED Programming</td><td>Sat Oct 31, 10:00 AM</td><td><span class="badge">Announced</span></td><td><a class="rowbtn">Open</a></td></tr>
+   <tr><td>Intro to Soldering</td><td>Sat Nov 14, 1:00 PM</td><td><span class="badge m">Not started</span></td><td><a class="rowbtn">Promote</a></td></tr></table></div>
+   <p class="hint">On <code>#/</code> (Overview) only row one shows. On Mailing list, row two reads Campaigns · Subscribers · Pending confirmations · Deliverability · Suppressions · Interests. On System: Settings · Home screen · Users · Audit log.</p>
+  </div></div>
+ <div class="frame phone"><div class="frame-bar"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span> phone · 390px</div>
+  <div class="frame-body">
+   <div class="hdr"><b>Open Circuit SF</b><span class="r"><a>Account</a><span class="btn">Sign out</span></span></div>
+   <nav class="t1" aria-label="Admin sections"><a>Overview</a><a class="on" aria-current="true">Workshops</a><a>Mailing list</a><a>System</a></nav>
+   <nav class="t2" aria-label="Workshops screens"><a>Workshops</a><a class="on" aria-current="page">Outreach</a></nav>
+   <div class="panel"><div class="panel-h">Outreach</div><div class="panel-b" style="padding-bottom:0"><nav class="sub fade" aria-label="Outreach sections"><a class="on" aria-current="page">Posts</a><a>Flyer spots</a><a>Flyers</a><a>Results</a></nav></div>
+   <table><tr><th>Workshop</th><th>Outreach</th><th></th></tr>
+   <tr><td>LED Programming</td><td><span class="badge">Announced</span></td><td><a class="rowbtn">Open</a></td></tr>
+   <tr><td>Intro to Soldering</td><td><span class="badge m">Not started</span></td><td><a class="rowbtn">Promote</a></td></tr></table></div>
+   <p class="hint">Both rows are one line and scroll sideways if a label ever gets longer. No select.</p>
+  </div></div>
+</div>
+<div class="pros"><div><h4>For</h4><ul><li>14 visible links become 4 + 2 (at most 4 + 6)</li><li>Workshops ↔ Outreach, Campaigns: one click</li><li>No new routes, layout, or interaction model</li><li>Existing <code>.nav-tab.active</code> and <code>.subtab.active</code> styles, minus boxes and underlines</li></ul></div><div><h4>Against</h4><ul><li>The whole map is never visible at once</li><li>Non-adjacent switches are two clicks</li><li>Three levels of tabs when Outreach is open</li></ul></div></div>
+<p class="caption">Files: <code>adminRouter.ts</code>, <code>Admin.svelte</code>, <code>Admin.nav.behavior.test.ts</code>. Keep the <code>.subtab</code> class and the focus-outline guard is untouched.</p>
+
+<!-- ───────────────────────── OPTION B ───────────────────────── -->
+<h2>Option B — Left sidebar with collapsible sections <span class="cost">M</span></h2>
+<p class="summary">A 190px tree beside the content: the active section expanded with its screens and views, the others collapsed to a label and a count. On a phone the tree becomes a drawer behind a Menu button.</p>
+<div class="frames">
+ <div class="frame"><div class="frame-bar"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span> desktop · 1040px shell (content loses ~200px)</div>
+  <div class="frame-body">
+   <div class="hdr"><b>Open Circuit SF</b><span class="r"><a>Account</a><span class="btn">Sign out</span></span></div>
+   <div class="sbl">
+    <nav class="sb" aria-label="Admin">
+     <a class="sec">Overview</a>
+     <div class="gh open"><span>Workshops</span></div>
+     <a class="l1">Workshops</a>
+     <a class="l1 on" aria-current="page">Outreach</a>
+     <a class="l2" style="color:var(--text);font-weight:600">Posts</a><a class="l2">Flyer spots</a><a class="l2">Flyers</a><a class="l2">Results</a>
+     <button class="gh" aria-expanded="false"><span>Mailing list</span><span class="n">6 ▸</span></button>
+     <button class="gh" aria-expanded="false"><span>System</span><span class="n">4 ▸</span></button>
+    </nav>
+    <div>
+     <div class="panel"><div class="panel-h">Outreach</div>
+     <table><tr><th>Workshop</th><th>Date</th><th>Outreach</th><th></th></tr>
+     <tr><td>LED Programming</td><td>Sat Oct 31, 10:00 AM</td><td><span class="badge">Announced</span></td><td><a class="rowbtn">Open</a></td></tr>
+     <tr><td>Intro to Soldering</td><td>Sat Nov 14, 1:00 PM</td><td><span class="badge m">Not started</span></td><td><a class="rowbtn">Promote</a></td></tr></table></div>
+     <p class="hint">The <code>&gt;</code> chevron (<code>--accent-dim</code>, the PRD's prompt motif) marks the current item. Expanded state is derived from the route, never stored.</p>
+    </div>
+   </div>
+  </div></div>
+ <div class="frame phone"><div class="frame-bar"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span> phone · 390px — tap Menu</div>
+  <div class="frame-body">
+   <div class="hdr"><b>Open Circuit SF</b><span class="btn">Sign out</span></div>
+   <p style="margin:0 0 12px"><button class="menubtn" type="button" data-toggle="#drawerB" aria-expanded="false" aria-controls="drawerB"><span class="ham">☰</span> Menu <span class="muted">· Workshops / Outreach</span></button></p>
+   <div class="panel"><div class="panel-h">Outreach</div><div class="panel-b" style="padding-bottom:0"><nav class="sub fade"><a class="on">Posts</a><a>Flyer spots</a><a>Flyers</a><a>Results</a></nav></div>
+   <table><tr><th>Workshop</th><th>Outreach</th><th></th></tr>
+   <tr><td>LED Programming</td><td><span class="badge">Announced</span></td><td><a class="rowbtn">Open</a></td></tr>
+   <tr><td>Intro to Soldering</td><td><span class="badge m">Not started</span></td><td><a class="rowbtn">Promote</a></td></tr></table></div>
+   <p class="hint">The drawer is a modal dialog: Escape closes, focus returns to Menu, choosing an item navigates and closes.</p>
+  </div>
+  <div class="drawer" id="drawerB">
+   <nav class="sb" aria-label="Admin">
+    <button class="close" type="button" data-toggle="#drawerB">Close</button>
+    <a class="sec">Overview</a>
+    <div class="gh open"><span>Workshops</span></div>
+    <a class="l1">Workshops</a><a class="l1 on" aria-current="page">Outreach</a>
+    <a class="l2" style="color:var(--text);font-weight:600">Posts</a><a class="l2">Flyer spots</a><a class="l2">Flyers</a><a class="l2">Results</a>
+    <div class="gh"><span>Mailing list</span></div>
+    <a class="l1">Campaigns</a><a class="l1">Subscribers</a><a class="l1">Pending confirmations</a><a class="l1">Deliverability</a><a class="l1">Suppressions</a><a class="l1">Interests</a>
+    <div class="gh"><span>System</span></div>
+    <a class="l1">Settings</a><a class="l1">Home screen</a><a class="l1">Users</a><a class="l1">Audit log</a>
+   </nav>
+  </div>
+ </div>
+</div>
+<div class="pros"><div><h4>For</h4><ul><li>Strongest wayfinding: the whole path is always lit</li><li>Everything one or two clicks away, siblings visible</li><li>Outreach's and Settings' sub-navs fold into the tree</li></ul></div><div><h4>Against</h4><ul><li>Content column loses ~200px unless the admin shell is widened</li><li>A drawer with focus handling to build and test</li><li>A persistent column of mostly collapsed labels for a two-screen daily routine</li></ul></div></div>
+<p class="caption">Files: A's three plus <code>Admin.svelte</code> layout, a <code>lib/adminDrawer.ts</code>, <code>Outreach.svelte</code> (drop its sub-nav), <code>app.css</code> (wide shell), and a look at the wide tables.</p>
+
+<!-- ───────────────────────── OPTION C ───────────────────────── -->
+<h2>Option C — Section hubs with a breadcrumb <span class="cost">M</span> <small>L with live counts</small></h2>
+<p class="summary">The top bar is only the four sections. A section opens a hub of cards, one per screen, with a sentence and a number. Inside a screen, a breadcrumb replaces the second row.</p>
+<div class="frames">
+ <div class="frame"><div class="frame-bar"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span> desktop · inside a screen</div>
+  <div class="frame-body">
+   <div class="hdr"><b>Open Circuit SF</b><span class="r"><a>Account</a><span class="btn">Sign out</span></span></div>
+   <nav class="t1" aria-label="Admin sections"><a>Overview</a><a class="on" aria-current="true">Workshops</a><a>Mailing list</a><a>System</a></nav>
+   <nav class="crumb" aria-label="Breadcrumb"><a>Workshops</a> / <a>Outreach</a> / <b aria-current="page">Posts</b></nav>
+   <div class="panel"><div class="panel-h">Outreach <nav class="sub" aria-label="Outreach sections"><a class="on" aria-current="page">Posts</a><a>Flyer spots</a><a>Flyers</a><a>Results</a></nav></div>
+   <table><tr><th>Workshop</th><th>Date</th><th>Outreach</th><th></th></tr>
+   <tr><td>LED Programming</td><td>Sat Oct 31, 10:00 AM</td><td><span class="badge">Announced</span></td><td><a class="rowbtn">Open</a></td></tr>
+   <tr><td>Intro to Soldering</td><td>Sat Nov 14, 1:00 PM</td><td><span class="badge m">Not started</span></td><td><a class="rowbtn">Promote</a></td></tr></table></div>
+   <p class="hint">Getting to Workshops from here: breadcrumb → Workshops hub → card. Two clicks, no sibling in view.</p>
+  </div></div>
+ <div class="frame phone"><div class="frame-bar"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span> phone · 390px — the Mailing list hub</div>
+  <div class="frame-body">
+   <div class="hdr"><b>Open Circuit SF</b><span class="r"><a>Account</a><span class="btn">Sign out</span></span></div>
+   <nav class="t1" aria-label="Admin sections"><a>Overview</a><a>Workshops</a><a class="on" aria-current="page">Mailing list</a><a>System</a></nav>
+   <div class="cards" style="margin-top:12px">
+    <a class="card"><b>Campaigns</b><span>Compose, test-send, schedule, send.</span><span class="n">1 draft · last sent Oct 3</span></a>
+    <a class="card"><b>Subscribers</b><span>Search, export, import, suppress.</span><span class="n">212 active</span></a>
+    <a class="card"><b>Pending confirmations</b><span>Signups that never confirmed.</span><span class="n">3 waiting</span></a>
+    <a class="card"><b>Deliverability</b><span>Bounces and complaints after a send.</span><span class="n">0 in 30 days</span></a>
+    <a class="card"><b>Suppressions</b><span>Addresses that must never be mailed.</span><span class="n">12</span></a>
+    <a class="card"><b>Interests</b><span>The signup form's topics.</span><span class="n">12 active</span></a>
+   </div>
+  </div></div>
+</div>
+<div class="pros"><div><h4>For</h4><ul><li>The only option that explains the rare screens where you find them</li><li>Simplest accessibility story: plain links throughout</li><li>One row of chrome plus a breadcrumb</li></ul></div><div><h4>Against</h4><ul><li>Taxes the daily path: Workshops ↔ Outreach is two clicks via a hub</li><li>Three new hub routes (<code>#/mailing-list</code>, <code>#/system</code>, a Workshops hub that cannot be <code>#/workshops</code>)</li><li>Hubs want content; three sections have 2–4 screens</li><li>Live counts need extra API calls</li></ul></div></div>
+<p class="caption">Files: <code>adminRouter.ts</code> (hub routes), <code>Admin.svelte</code>, a new <code>SectionHub.svelte</code>, tests; counts touch <code>api.ts</code> and the overview endpoint.</p>
+
+<!-- ───────────────────────── OPTION D ───────────────────────── -->
+<h2>Option D — Compact bar with disclosure menus + ⌘K <span class="cost">M–L</span></h2>
+<p class="summary">One row: Overview and three section buttons that open menus of their screens; the active button names the current screen. A "Go to…" palette jumps anywhere by name.</p>
+<div class="frames">
+ <div class="frame"><div class="frame-bar"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span> desktop · the Workshops menu open</div>
+  <div class="frame-body" style="min-height:360px">
+   <div class="hdr"><b>Open Circuit SF</b><span class="r"><a>Account</a><span class="btn">Sign out</span></span></div>
+   <nav class="bar" aria-label="Admin">
+    <a>Overview</a>
+    <div class="dd"><button type="button" class="on" data-toggle="#menuD" aria-expanded="true" aria-controls="menuD">Workshops · Outreach <span class="ch">▾</span></button>
+     <div class="menu open" id="menuD"><a>Workshops</a><a class="on" aria-current="page">Outreach <span>✓</span></a><a class="l2 on">Posts</a><a class="l2">Flyer spots</a><a class="l2">Flyers</a><a class="l2">Results</a></div></div>
+    <div class="dd"><button type="button">Mailing list <span class="ch">▾</span></button></div>
+    <div class="dd"><button type="button">System <span class="ch">▾</span></button></div>
+    <span class="goto"><kbd>⌘K</kbd> Go to…</span>
+   </nav>
+   <div class="panel"><div class="panel-h">Outreach <nav class="sub"><a class="on">Posts</a><a>Flyer spots</a><a>Flyers</a><a>Results</a></nav></div>
+   <table><tr><th>Workshop</th><th>Date</th><th>Outreach</th><th></th></tr>
+   <tr><td>LED Programming</td><td>Sat Oct 31, 10:00 AM</td><td><span class="badge">Announced</span></td><td><a class="rowbtn">Open</a></td></tr>
+   <tr><td>Intro to Soldering</td><td>Sat Nov 14, 1:00 PM</td><td><span class="badge m">Not started</span></td><td><a class="rowbtn">Promote</a></td></tr></table></div>
+   <p class="hint">Disclosure-navigation pattern: <code>button[aria-expanded]</code> + a list of plain links; opens on click only, Escape closes and returns focus. Not <code>role="menu"</code>.</p>
+  </div></div>
+ <div class="frame phone"><div class="frame-bar"><span class="dot d1"></span><span class="dot d2"></span><span class="dot d3"></span> phone · 390px — tap the bar</div>
+  <div class="frame-body">
+   <div class="hdr"><b>Open Circuit SF</b><span class="btn">Sign out</span></div>
+   <button type="button" class="menubtn sheetbtn" data-toggle="#sheetD" aria-expanded="false" aria-controls="sheetD"><span><span class="muted">Workshops ·</span> Outreach</span><span class="muted">▾</span></button>
+   <div class="sheet" id="sheetD">
+    <input type="search" placeholder="Go to…" aria-label="Go to">
+    <a>Overview</a>
+    <div class="gh">Workshops</div><a>Workshops</a><a class="on" aria-current="page">Outreach</a><a class="l2 on">Posts</a><a class="l2">Flyer spots</a><a class="l2">Flyers</a><a class="l2">Results</a>
+    <div class="gh">Mailing list</div><a>Campaigns</a><a>Subscribers</a><a>Pending confirmations</a><a>Deliverability</a><a>Suppressions</a><a>Interests</a>
+    <div class="gh">System</div><a>Settings</a><a>Home screen</a><a>Users</a><a>Audit log</a>
+   </div>
+   <div class="panel"><div class="panel-h">Outreach</div><div class="panel-b" style="padding-bottom:0"><nav class="sub fade"><a class="on">Posts</a><a>Flyer spots</a><a>Flyers</a><a>Results</a></nav></div>
+   <table><tr><th>Workshop</th><th>Outreach</th><th></th></tr>
+   <tr><td>LED Programming</td><td><span class="badge">Announced</span></td><td><a class="rowbtn">Open</a></td></tr>
+   <tr><td>Intro to Soldering</td><td><span class="badge m">Not started</span></td><td><a class="rowbtn">Promote</a></td></tr></table></div>
+  </div></div>
+</div>
+<div class="pros"><div><h4>For</h4><ul><li>Least chrome: one row everywhere</li><li>The palette is fast for a keyboard-first single operator</li><li>Built from the same tables, so it cannot name a screen that does not exist</li></ul></div><div><h4>Against</h4><ul><li>Every navigation is two actions; nothing visible until opened</li><li>Weakest "where am I" with menus closed</li><li>A menu component and a palette dialog the console does not have today</li></ul></div></div>
+<p class="caption">Files: a <code>NavMenu.svelte</code> + <code>lib/navMenu.ts</code> (keys) + tests, <code>Admin.svelte</code>, phone sheet; palette adds <code>lib/commandPalette.ts</code> and a dialog.</p>
+
+<h2>Recommendation</h2>
+<p><b>Option A</b>, with the shared information architecture (Overview · Workshops · Mailing list · System; Campaigns first in Mailing list; "Pending confirmations" and "Home screen" as labels), the Account/Admin pair folded into the header, and one chip style for Outreach's and Settings' sub-navs. It answers "organize by sections so they don't all have to be visible" literally, keeps the daily pair one click apart, changes no route and no layout, and reuses the two active styles the console already has. D's palette can be added later on top of the same tables if wanted. Details, costs and the issue plan are in the markdown note.</p>
+</div>
+<script>
+(function(){
+  var root=document.documentElement,btn=document.getElementById('theme'),order=['auto','light','dark'],i=0;
+  btn.addEventListener('click',function(){i=(i+1)%3;var t=order[i];if(t==='auto')root.removeAttribute('data-theme');else root.setAttribute('data-theme',t);btn.textContent='theme: '+t;});
+  // Mock toggles: a button with data-toggle="#id" flips .open on that element and its own aria-expanded.
+  var togglers=document.querySelectorAll('[data-toggle]');
+  for(var k=0;k<togglers.length;k++){togglers[k].addEventListener('click',function(e){
+    var t=document.querySelector(e.currentTarget.getAttribute('data-toggle'));if(!t)return;
+    var open=t.classList.toggle('open');
+    var owner=document.querySelector('[aria-controls="'+t.id+'"]');if(owner)owner.setAttribute('aria-expanded',open?'true':'false');
+  });}
+})();
+</script>
+</body>
+</html>
