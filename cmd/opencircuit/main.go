@@ -2190,9 +2190,13 @@ func mountAndServe(
 		// connection is the one ambiguous state. net/http's Shutdown counts
 		// a connection with no request read yet as busy until it is ~5s
 		// old, which collides with the 5s budget, and a client's spare
-		// pre-dialed connection (a browser preconnect, or Go's own
-		// http.Transport dialing a second connection that loses the race
-		// to an idle one) parks there without ever sending a byte. The log
+		// pre-dialed connection (Go's own http.Transport dialing a second
+		// connection that loses the race to an idle one, or a browser
+		// preconnect when a browser talks to this listener directly, as in
+		// dev --built) parks there without ever sending a byte. Production
+		// is fronted by Apache, whose mod_proxy dials the backend only to
+		// send a request, so a browser preconnect ends at Apache and a
+		// "new" entry there is rarer than in tests. The log
 		// line says so, so a "new" entry is not read as a hang. Only the
 		// deadline case is annotated; Shutdown can also return a
 		// listener-close error on its fast path, and wrapping that would
