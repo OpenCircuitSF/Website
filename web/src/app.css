@@ -568,8 +568,9 @@ tbody tr:last-child td { border-bottom: none; }
 
   /*
    * Stack the app-header so title / nav-tabs / sign-out don't fight for space.
-   * Consumers (Dashboard, Account, Admin) each define .nav-tabs and .nav-tab
-   * as scoped Svelte styles; the shared header layout change is done here.
+   * Account defines .nav-tabs/.nav-tab as scoped Svelte styles (Admin's
+   * header has had no tab row since #0599); the shared header layout change
+   * is done here.
    */
   .app-header {
     flex-wrap: wrap;

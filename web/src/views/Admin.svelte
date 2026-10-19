@@ -2547,7 +2547,7 @@
     {#if adminRoute.section === 'not-found'}
       <Panel title="Not found">
         <p class="text-muted">That admin page doesn't exist, or its link is malformed.</p>
-        <a class="subtab" href={adminSectionHash('overview')}>Back to Overview</a>
+        <a href={adminSectionHash('overview')}>Back to Overview</a>
       </Panel>
     {/if}
   {/if}
@@ -2621,8 +2621,11 @@
     font-weight: 600;
   }
   .subtab {
+    /* No negative margin to overlap the row's 1px rule: the row scrolls
+       (overflow-x:auto, so overflow-y computes to auto too), and a border
+       hanging 1px past it would be clipped and make the row scroll
+       vertically by 1px. */
     border-bottom: 2px solid transparent;
-    margin-bottom: -1px;
     padding: var(--space-2) var(--space-1);
     font-size: var(--fs-md);
     font-family: var(--font);
