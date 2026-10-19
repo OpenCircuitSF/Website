@@ -82,9 +82,11 @@ func TestMountAndServe_NoIndexHeaderWiredAroundWholeMux(t *testing.T) {
 			nil, nil, nil, nil, nil, nil,
 			site, requireSession, requireAdmin, nil, ready)
 	}()
-	waitForHealthy(t, &http.Client{Timeout: wiringHTTPTimeout}, baseURL, errCh, ready)
-
-	client := &http.Client{Timeout: wiringHTTPTimeout}
+	// #0596: this test SIGTERMs mountAndServe below and wants nil back, so
+	// it must not leave a spare StateNew connection behind — see
+	// newShutdownWiringClient.
+	client := newShutdownWiringClient()
+	waitForHealthy(t, client, baseURL, errCh, ready)
 
 	present := []struct {
 		method     string

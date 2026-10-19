@@ -177,7 +177,10 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 			passthrough, passthrough, nil, ready)
 	}()
 
-	client := &http.Client{Timeout: wiringHTTPTimeout}
+	// #0596: not a plain &http.Client{} — see newShutdownWiringClient. A
+	// spare connection from the shared default transport held Shutdown
+	// open for its full 5s budget and failed this test at normal load.
+	client := newShutdownWiringClient()
 	waitForHealthy(t, client, baseURL, errCh, ready)
 
 	email := fmt.Sprintf("zz-sigterm-%d@example.com", testdb.Unique())

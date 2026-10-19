@@ -2186,14 +2186,23 @@ func mountAndServe(
 		// still active: an open GET /api/events stream produces exactly
 		// this and is benign (the SSE client reconnects), while any other
 		// state — e.g. a half-open connection that never finished sending a
-		// request — is worth an operator's attention. Only the deadline
-		// case is annotated; Shutdown can also return a listener-close
-		// error on its fast path, and wrapping that would misattribute it.
+		// request — is worth an operator's attention. #0596: a "new"
+		// connection is the one ambiguous state. net/http's Shutdown counts
+		// a connection with no request read yet as busy until it is ~5s
+		// old, which collides with the 5s budget, and a client's spare
+		// pre-dialed connection (a browser preconnect, or Go's own
+		// http.Transport dialing a second connection that loses the race
+		// to an idle one) parks there without ever sending a byte. The log
+		// line says so, so a "new" entry is not read as a hang. Only the
+		// deadline case is annotated; Shutdown can also return a
+		// listener-close error on its fast path, and wrapping that would
+		// misattribute it.
 		if shutdownErr != nil && errors.Is(shutdownErr, context.DeadlineExceeded) {
 			stillActive := activeConns.describe()
 			log.Printf("opencircuit: srv.Shutdown did not finish within %s: %v — "+
 				"connections still active at expiry: %s (a long-lived GET /api/events stream produces exactly this and is benign; "+
-				"any other shape is worth investigating)",
+				"a \"new\" connection has had no request read yet and is held busy for ~5s by net/http, which an unused "+
+				"pre-dialed client connection also produces; any other shape is worth investigating)",
 				shutdownServerTimeout, shutdownErr, stillActive)
 			shutdownErr = fmt.Errorf("opencircuit: graceful shutdown incomplete after %s: %w — "+
 				"connections still active at expiry: %s",

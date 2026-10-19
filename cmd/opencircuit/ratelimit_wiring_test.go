@@ -261,3 +261,28 @@ func waitForHealthy(t *testing.T, client *http.Client, baseURL string, errCh cha
 	}
 	resp.Body.Close()
 }
+
+// newShutdownWiringClient returns the HTTP client a wiring test must use
+// when it later SIGTERMs mountAndServe and expects a prompt, nil return
+// (#0596). It has its own Transport with keep-alives disabled, so every
+// request dials exactly one connection, carries exactly one request on it,
+// and the connection closes with the response.
+//
+// A plain &http.Client{} cannot promise that. It shares
+// http.DefaultTransport, which, when a request arrives while the previous
+// response's connection is not yet back in the idle pool, starts dialing a
+// second connection and then hands the request to whichever is ready
+// first. If the idle one wins, the spare is parked in the pool unused. The
+// server sees it as http.StateNew, and net/http's Shutdown counts a
+// StateNew connection as busy until it is ~5s old, which is exactly
+// shutdownServerTimeout. One such spare turned a millisecond shutdown into
+// a 5s timeout with an error and failed
+// TestMountAndServe_SIGTERMReleasesInFlightClaim at normal load. The
+// failing run's own log named it: a "new" connection on the port right
+// after the health check's.
+func newShutdownWiringClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{DisableKeepAlives: true},
+		Timeout:   wiringHTTPTimeout,
+	}
+}
