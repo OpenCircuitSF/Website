@@ -13,6 +13,7 @@ const getWorkshopOutreachResults = vi.fn<(id: number) => Promise<OutreachResults
 const startOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const resetOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const scheduleAllOutreach = vi.fn();
+const takedownOutreachPost = vi.fn();
 const listOutreachFlyers = vi.fn<() => Promise<{ flyers: { id: number; workshop_id: number }[] }>>();
 vi.mock('../../lib/api', () => ({
   getWorkshopOutreach: (id: number) => getWorkshopOutreach(id),
@@ -24,6 +25,7 @@ vi.mock('../../lib/api', () => ({
   listOutreachFlyers: () => listOutreachFlyers(),
   scheduleAllOutreach: (...a: unknown[]) => scheduleAllOutreach(...a),
   createOutreachPost: vi.fn(),
+  takedownOutreachPost: (id: number) => takedownOutreachPost(id),
   ApiError: class ApiError extends Error {
     status: number;
     constructor(status: number, message: string) {
@@ -43,6 +45,7 @@ afterEach(() => {
   resetOutreach.mockReset();
   listOutreachFlyers.mockReset();
   scheduleAllOutreach.mockReset();
+  takedownOutreachPost.mockReset();
 });
 
 const channels = [
@@ -283,5 +286,28 @@ describe('OutreachWorkshop', () => {
     getWorkshopOutreach.mockRejectedValue(new ApiError(500, 'boom', null));
     render(OutreachWorkshop, { workshopId: 5 });
     expect(await screen.findByRole('button', { name: 'Retry' })).toBeTruthy();
+  });
+});
+
+describe('OutreachWorkshop: Delete and redo (#0606)', () => {
+  const posted = (): OutreachPost =>
+    ({ id: 3, outreach_id: 9, channel: 'bluesky', wave: 'announce', status: 'posted', body: 'Old body', customized: false, posted_at: '2026-10-18T17:00:00Z', remote_url: 'https://bsky.app/profile/x/post/abc', attempt_generation: 1 }) as unknown as OutreachPost;
+
+  it('a posted Bluesky post in the announcement offers Delete and redo, and confirming takes it down and reloads', async () => {
+    const draft = { ...posted(), status: 'draft', body: 'New body', posted_at: null, remote_url: null } as unknown as OutreachPost;
+    getWorkshopOutreach.mockResolvedValueOnce(view({ posts: [posted()] })).mockResolvedValue(view({ posts: [draft] }));
+    getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);
+    takedownOutreachPost.mockResolvedValue(draft);
+    render(OutreachWorkshop, { workshopId: 5 });
+    const btn = await screen.findByRole('button', { name: 'Delete and redo…' });
+    await fireEvent.click(btn);
+    const dlg = screen.getByRole('dialog');
+    expect(dlg.textContent).toContain('Delete this post from Bluesky?');
+    expect(takedownOutreachPost).not.toHaveBeenCalled();
+    await fireEvent.click(screen.getByRole('button', { name: 'Delete post' }));
+    await waitFor(() => expect(takedownOutreachPost).toHaveBeenCalledWith(3));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Delete and redo…' })).toBeNull());
+    expect(getWorkshopOutreach.mock.calls.length).toBeGreaterThan(1);
   });
 });

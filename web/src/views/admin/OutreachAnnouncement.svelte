@@ -20,6 +20,7 @@
     updateOutreachPost,
     scheduleOutreachPost,
     unscheduleOutreachPost,
+    takedownOutreachPost,
     ApiError,
   } from '../../lib/api';
   import {
@@ -93,6 +94,10 @@
   let postBusy = $state(false);
   let postSnapshot = $state<{ post: OutreachPost; channel: OutreachChannel }[]>([]);
   let scheduling = $state(false);
+  // Delete and redo (#0604, #0606): the posted auto post being confirmed, if any.
+  let takedownTarget = $state<{ post: OutreachPost; channel: OutreachChannel } | null>(null);
+  let takedownBusy = $state(false);
+  let takedownError = $state<string | null>(null);
   // svelte-ignore state_referenced_locally
   let scheduleLocal = $state(initialSchedule());
 
@@ -168,6 +173,24 @@
     postLine = r.line;
     postBusy = false;
     postOpen = false;
+  }
+
+  async function confirmTakedown(): Promise<void> {
+    const t = takedownTarget;
+    if (!t) return;
+    takedownBusy = true;
+    takedownError = null;
+    try {
+      onChange(await takedownOutreachPost(t.post.id));
+      status = `Deleted from ${t.channel.label}. It is a draft again, with the current link.`;
+      takedownTarget = null;
+      reload();
+    } catch (err) {
+      takedownError = msg(err, 'Could not delete the post. Please try again.');
+      errorText = takedownError;
+    } finally {
+      takedownBusy = false;
+    }
   }
 
   const schedule = () =>
@@ -278,6 +301,9 @@
             {#if post.status !== 'posted' && post.status !== 'queued'}
               <Button onclick={() => (customizingId = post.id)} disabled={busy || customizingId !== null}>Customize…</Button>
             {/if}
+            {#if cardButtons(post, channel, view.available).takedown}
+              <Button onclick={() => { takedownError = null; takedownTarget = { post, channel }; }} disabled={busy}>Delete and redo…</Button>
+            {/if}
             {#if post.customized && post.status !== 'posted' && post.status !== 'queued'}
               <Button onclick={() => useShared(post)} disabled={busy || customizingId !== null}>Use shared message</Button>
             {/if}
@@ -316,6 +342,17 @@
   <p class="text-error" role="alert">{errorText}</p>
 </section>
 
+{#if takedownTarget}
+  <OutreachPostDialog
+    mode="takedown"
+    {view}
+    items={[takedownTarget]}
+    inFlight={takedownBusy}
+    errorMessage={takedownError}
+    onConfirm={() => void confirmTakedown()}
+    onClose={() => !takedownBusy && (takedownTarget = null)}
+  />
+{/if}
 {#if postOpen}
   <OutreachPostDialog
     mode={postSnapshot.every((i) => i.post.status === 'failed') ? 'retry' : 'post'}
