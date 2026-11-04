@@ -78,6 +78,7 @@ vi.mock('../lib/api', () => ({
   reactivateUser: vi.fn(),
   listAudit: (...args: unknown[]) => listAudit(...args),
   listInterests: () => listInterests(),
+  listEventTypes: vi.fn(() => Promise.resolve({ event_types: [] })),
   createInterest: vi.fn(),
   updateInterest: vi.fn(),
   deleteInterest: vi.fn(),

@@ -153,6 +153,11 @@ func (h *AdminWorkshopsHandler) invalidate() {
 	}
 }
 
+const (
+	eventTypeNotFoundMessage = "that event type does not exist"
+	eventTypeDisabledMessage = "that event type is disabled; choose an enabled one"
+)
+
 // ── Response shapes ──────────────────────────────────────────────────────────
 
 type workshopView struct {
@@ -174,6 +179,15 @@ type workshopView struct {
 	InterestIDs     []int64 `json:"interest_ids"`
 	CreatedAt       string  `json:"created_at"`
 	UpdatedAt       string  `json:"updated_at"`
+	// EventTypeID is admin-only; EventType is shared with the public view (#0613).
+	EventTypeID int64            `json:"event_type_id"`
+	EventType   eventTypeRefView `json:"event_type"`
+}
+
+// eventTypeRefView is how a listing names its type on the wire (#0613).
+type eventTypeRefView struct {
+	Slug string `json:"slug"`
+	Name string `json:"name"`
 }
 
 func toWorkshopView(w workshops.Workshop) workshopView {
@@ -200,6 +214,8 @@ func toWorkshopView(w workshops.Workshop) workshopView {
 		InterestIDs:     ids,
 		CreatedAt:       w.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:       w.UpdatedAt.UTC().Format(time.RFC3339),
+		EventTypeID:     w.EventTypeID,
+		EventType:       eventTypeRefView{Slug: w.EventTypeSlug, Name: w.EventTypeName},
 	}
 }
 
@@ -257,6 +273,7 @@ type createWorkshopRequest struct {
 	SignupURL       *string `json:"signup_url,omitempty"`
 	CoverImage      *string `json:"cover_image,omitempty"`
 	InterestIDs     []int64 `json:"interest_ids,omitempty"`
+	EventTypeID     *int64  `json:"event_type_id,omitempty"`
 }
 
 // Create handles POST /admin/workshops. Always creates in status='draft'
@@ -328,6 +345,7 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		SignupURL:       signupURL,
 		CoverImage:      coverImage,
 		InterestIDs:     req.InterestIDs,
+		EventTypeID:     req.EventTypeID,
 	})
 	switch {
 	case err == nil:
@@ -336,6 +354,12 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, workshops.ErrInterestNotFound):
 		writeError(w, http.StatusBadRequest, "one or more interest ids do not exist")
+		return
+	case errors.Is(err, workshops.ErrEventTypeNotFound):
+		writeError(w, http.StatusBadRequest, eventTypeNotFoundMessage)
+		return
+	case errors.Is(err, workshops.ErrEventTypeDisabled):
+		writeError(w, http.StatusBadRequest, eventTypeDisabledMessage)
 		return
 	default:
 		writeError(w, http.StatusInternalServerError, "internal server error")
@@ -356,6 +380,7 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 				"slug":         created.Slug,
 				"title":        created.Title,
 				"interest_ids": created.InterestIDs,
+				"event_type":   created.EventTypeSlug,
 			},
 			IP: clientIP(r),
 		})
@@ -396,6 +421,7 @@ type patchWorkshopRequest struct {
 	CoverImage  *string       `json:"cover_image,omitempty"`
 	Status      *string       `json:"status,omitempty"`
 	InterestIDs *[]int64      `json:"interest_ids,omitempty"`
+	EventTypeID *int64        `json:"event_type_id,omitempty"`
 }
 
 // Patch handles PATCH /admin/workshops/{id}: loads the current row, merges
@@ -531,6 +557,7 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		CoverImage:      coverImage,
 		Status:          status,
 		InterestIDs:     interestIDs,
+		EventTypeID:     req.EventTypeID,
 	})
 	switch {
 	case err == nil:
@@ -545,6 +572,12 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, workshops.ErrInterestNotFound):
 		writeError(w, http.StatusBadRequest, "one or more interest ids do not exist")
+		return
+	case errors.Is(err, workshops.ErrEventTypeNotFound):
+		writeError(w, http.StatusBadRequest, eventTypeNotFoundMessage)
+		return
+	case errors.Is(err, workshops.ErrEventTypeDisabled):
+		writeError(w, http.StatusBadRequest, eventTypeDisabledMessage)
 		return
 	default:
 		writeError(w, http.StatusInternalServerError, "internal server error")
@@ -578,6 +611,8 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 				"new_title":        updated.Title,
 				"old_interest_ids": current.InterestIDs,
 				"new_interest_ids": updated.InterestIDs,
+				"old_event_type":   current.EventTypeSlug,
+				"new_event_type":   updated.EventTypeSlug,
 			},
 			IP: clientIP(r),
 		})

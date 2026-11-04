@@ -28,7 +28,7 @@
 -->
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { listAdminWorkshops, listOutreach, createWorkshop, ApiError } from '../../lib/api';
+  import { listAdminWorkshops, listOutreach, listEventTypes, createWorkshop, ApiError } from '../../lib/api';
   import {
     workshopStatusLabel,
     workshopStatusBadgeClass,
@@ -36,8 +36,9 @@
     toggleSortDirection,
     type SortDirection,
   } from '../../lib/workshopAdmin';
+  import { assignableEventTypes, defaultEventTypeId, eventTypeOptionLabel } from '../../lib/eventTypes';
   import { formatWorkshopDate } from '../../lib/workshops';
-  import type { AdminWorkshop, OutreachSummary } from '../../lib/types';
+  import type { AdminWorkshop, EventType, OutreachSummary } from '../../lib/types';
   import { summariesByWorkshop, outreachChip } from '../../lib/outreachList';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
@@ -76,6 +77,10 @@
 
   let creating = $state(false);
   let newTitle = $state('');
+  // #0613: empty until openCreate's load lands; a failed load hides the select
+  // and omits the field, so the server applies the default.
+  let newTypes = $state<EventType[]>([]);
+  let newEventTypeId = $state<number | null>(null);
   let createError = $state<string | null>(null);
   let submittingCreate = $state(false);
   let modalEl = $state<HTMLDivElement | null>(null);
@@ -91,6 +96,7 @@
     sortedWorkshops.map((w) => ({
       id: w.id,
       title: w.title,
+      typeName: w.event_type.name,
       status: w.status,
       statusLabel: workshopStatusLabel(w.status),
       statusBadgeClass: workshopStatusBadgeClass(w.status),
@@ -152,6 +158,20 @@
     creating = true;
     newTitle = '';
     createError = null;
+    newTypes = [];
+    newEventTypeId = null;
+    void loadNewTypes();
+  }
+
+  async function loadNewTypes(): Promise<void> {
+    try {
+      const all = (await listEventTypes()).event_types;
+      newTypes = assignableEventTypes(all, null);
+      newEventTypeId = defaultEventTypeId(all);
+    } catch {
+      newTypes = [];
+      newEventTypeId = null;
+    }
   }
 
   function closeCreate(): void {
@@ -169,7 +189,9 @@
     submittingCreate = true;
     createError = null;
     try {
-      const created = await createWorkshop({ title });
+      const created = await createWorkshop(
+        newEventTypeId !== null ? { title, event_type_id: newEventTypeId } : { title },
+      );
       creating = false;
       workshops = [created, ...workshops];
       // #0527: the created workshop's editor is a real URL now.
@@ -206,6 +228,7 @@
           <thead>
             <tr>
               <th>Title</th>
+              <th>Type</th>
               <th>Status</th>
               <th>
                 <button type="button" class="link-button sort-button" onclick={toggleSort}>
@@ -223,6 +246,7 @@
                     {row.title}
                   </button>
                 </td>
+                <td>{row.typeName}</td>
                 <td><span class="badge {row.statusBadgeClass}">{row.statusLabel}</span></td>
                 <td>{row.dateLabel}</td>
                 <td><span class="badge badge-{row.chip.tone}">{row.chip.label}</span></td>
@@ -268,6 +292,21 @@
               disabled={submittingCreate}
             />
           </div>
+          {#if newTypes.length > 0}
+            <div class="field">
+              <label for="new-workshop-event-type">Type</label>
+              <select
+                id="new-workshop-event-type"
+                bind:value={newEventTypeId}
+                disabled={submittingCreate}
+                required
+              >
+                {#each newTypes as type (type.id)}
+                  <option value={type.id}>{eventTypeOptionLabel(type)}</option>
+                {/each}
+              </select>
+            </div>
+          {/if}
           <p class="text-muted create-hint">
             The slug is auto-generated from this title at creation and can't be changed
             afterward. Every other field is set in the full editor next.

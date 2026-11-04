@@ -118,6 +118,8 @@ type publicWorkshopView struct {
 	// the cancellation notice PRD's Notes require.
 	Status    string               `json:"status"`
 	Interests []publicInterestView `json:"interests"`
+	// EventType is the listing's type (#0613), consumed by #0614.
+	EventType eventTypeRefView `json:"event_type"`
 }
 
 func (h *PublicWorkshopsHandler) toPublicView(ctx context.Context, w workshops.Workshop) publicWorkshopView {
@@ -137,6 +139,7 @@ func (h *PublicWorkshopsHandler) toPublicView(ctx context.Context, w workshops.W
 		CoverImage:      w.CoverImage,
 		Status:          w.Status,
 		Interests:       h.resolveInterests(ctx, w.InterestIDs),
+		EventType:       eventTypeRefView{Slug: w.EventTypeSlug, Name: w.EventTypeName},
 	}
 }
 

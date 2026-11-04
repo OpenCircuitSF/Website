@@ -457,3 +457,97 @@ func TestPublicWorkshops_GetBySlug_IncludesInterestTags(t *testing.T) {
 		t.Errorf("Interests = %+v, want one entry with slug %q", got.Interests, interestSlug)
 	}
 }
+
+// ── Event types (#0613) ──────────────────────────────────────────────────────
+
+// publishedWorkshopOfType seeds a published listing with the given type, or the
+// default when typeID is nil.
+func publishedWorkshopOfType(t *testing.T, pool *pgxpool.Pool, typeID *int64) workshops.Workshop {
+	t.Helper()
+	store := workshops.NewStore(pool)
+	ctx := context.Background()
+	w, err := store.Create(ctx, workshops.CreateInput{Title: uniquePublicWorkshopTitle(t), EventTypeID: typeID})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cleanupPublicWorkshop(t, pool, w.ID)
+	w, err = store.Update(ctx, w.ID, workshops.UpdateInput{Title: w.Title, Status: workshops.StatusPublished})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	return w
+}
+
+type publicTypeRow struct {
+	Slug      string           `json:"slug"`
+	EventType eventTypeRefView `json:"event_type"`
+}
+
+func listPublicTypes(t *testing.T, srvURL string) []publicTypeRow {
+	t.Helper()
+	resp, err := http.Get(srvURL + "/api/workshops")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var list struct {
+		Upcoming []publicTypeRow `json:"upcoming"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		t.Fatal(err)
+	}
+	return list.Upcoming
+}
+
+func TestPublicWorkshops_ListCarriesEventType(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(publicWorkshopsMux(pool))
+	defer srv.Close()
+	w := publishedWorkshopOfType(t, pool, nil)
+	for _, row := range listPublicTypes(t, srv.URL) {
+		if row.Slug == w.Slug {
+			if row.EventType != (eventTypeRefView{Slug: "workshop", Name: "Workshop"}) {
+				t.Errorf("event_type = %+v", row.EventType)
+			}
+			return
+		}
+	}
+	t.Errorf("%s missing from list", w.Slug)
+}
+
+func TestPublicWorkshops_DetailCarriesEventType(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(publicWorkshopsMux(pool))
+	defer srv.Close()
+	w := publishedWorkshopOfType(t, pool, nil)
+	resp, err := http.Get(srv.URL + "/api/workshops/" + w.Slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var row publicTypeRow
+	if err := json.NewDecoder(resp.Body).Decode(&row); err != nil {
+		t.Fatal(err)
+	}
+	if row.EventType != (eventTypeRefView{Slug: "workshop", Name: "Workshop"}) {
+		t.Errorf("event_type = %+v", row.EventType)
+	}
+}
+
+func TestPublicWorkshops_DisabledTypeStaysVisible(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(publicWorkshopsMux(pool))
+	defer srv.Close()
+	et := seedEventTypeRow(t, pool)
+	w := publishedWorkshopOfType(t, pool, &et.ID)
+	disableEventType(t, pool, et.ID)
+	for _, row := range listPublicTypes(t, srv.URL) {
+		if row.Slug == w.Slug {
+			if row.EventType.Slug != et.Slug {
+				t.Errorf("event_type = %+v", row.EventType)
+			}
+			return
+		}
+	}
+	t.Errorf("%s missing from list", w.Slug)
+}

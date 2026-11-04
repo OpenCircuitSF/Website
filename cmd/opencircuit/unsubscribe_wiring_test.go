@@ -93,7 +93,7 @@ func TestMountAndServe_UnsubscribePost_NeverRateLimited(t *testing.T) {
 	ready := make(chan struct{})
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
-			nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised by this test */
+			nil, nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised by this test */
 			nil, /* adminSubscribersH: not exercised by this test */
 			nil, /* adminImportsH: not exercised */
 			nil, /* adminPendingH: not exercised by this test */
@@ -223,7 +223,7 @@ func TestMountAndServe_UnsubscribePost_NoSessionNoCSRF(t *testing.T) {
 	ready := make(chan struct{})
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
-			nil, nil, nil, nil, nil, nil,
+			nil, nil, nil, nil, nil, nil, nil,
 			nil,
 			nil, /* adminImportsH: not exercised */
 			nil, /* adminPendingH: not exercised by this test */

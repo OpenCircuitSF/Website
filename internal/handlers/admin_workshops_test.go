@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -1265,5 +1266,149 @@ func TestAdminWorkshops_DeleteSucceeds(t *testing.T) {
 	actions := auditActionsForWorkshop(t, pool, w.ID)
 	if len(actions) != 1 || actions[0] != audit.ActionWorkshopDeleted {
 		t.Errorf("audit actions after delete = %v, want [%s]", actions, audit.ActionWorkshopDeleted)
+	}
+}
+
+// ── Event types (#0613) ──────────────────────────────────────────────────────
+
+// workshopEventTypeServer is a test server with one seeded admin session.
+func workshopEventTypeServer(t *testing.T) (*pgxpool.Pool, func(method, path, body string) (int, []byte)) {
+	t.Helper()
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	t.Cleanup(srv.Close)
+	admin := seedAdmin(t, pool, "admin-workshops-types@example.com")
+	seedSession(t, pool, admin, "workshops-types-token")
+	return pool, func(method, path, body string) (int, []byte) {
+		t.Helper()
+		resp := doJSON(t, srv.Client(), method, srv.URL+path, "workshops-types-token", body)
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, b
+	}
+}
+
+func disableEventType(t *testing.T, pool *pgxpool.Pool, id int64) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `UPDATE event_types SET enabled = FALSE WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type decodedWorkshopType struct {
+	ID          int64 `json:"id"`
+	EventTypeID int64 `json:"event_type_id"`
+	EventType   struct {
+		Slug string `json:"slug"`
+		Name string `json:"name"`
+	} `json:"event_type"`
+}
+
+func decodeWorkshopType(t *testing.T, body []byte) decodedWorkshopType {
+	t.Helper()
+	var w decodedWorkshopType
+	if err := json.Unmarshal(body, &w); err != nil {
+		t.Fatalf("decode: %v (%s)", err, body)
+	}
+	return w
+}
+
+func TestAdminWorkshops_CreateOmittingTypeGetsDefault(t *testing.T) {
+	pool, do := workshopEventTypeServer(t)
+	code, body := do(http.MethodPost, "/admin/workshops", fmt.Sprintf(`{"title":%q}`, uniqueAdminWorkshopTitle(t)))
+	if code != http.StatusCreated {
+		t.Fatalf("status = %d (%s)", code, body)
+	}
+	w := decodeWorkshopType(t, body)
+	cleanupAdminWorkshop(t, pool, w.ID)
+	if w.EventType.Slug != "workshop" || w.EventTypeID != seededEventType(t, pool, "workshop") {
+		t.Errorf("type = %+v", w)
+	}
+}
+
+func TestAdminWorkshops_CreateWithType(t *testing.T) {
+	pool, do := workshopEventTypeServer(t)
+	et := seedEventTypeRow(t, pool)
+	code, body := do(http.MethodPost, "/admin/workshops", fmt.Sprintf(`{"title":%q,"event_type_id":%d}`, uniqueAdminWorkshopTitle(t), et.ID))
+	if code != http.StatusCreated {
+		t.Fatalf("status = %d (%s)", code, body)
+	}
+	w := decodeWorkshopType(t, body)
+	cleanupAdminWorkshop(t, pool, w.ID)
+	if w.EventTypeID != et.ID || w.EventType.Slug != et.Slug {
+		t.Errorf("type = %+v", w)
+	}
+}
+
+func TestAdminWorkshops_CreateRefusesDisabledType(t *testing.T) {
+	pool, do := workshopEventTypeServer(t)
+	et := seedEventTypeRow(t, pool)
+	disableEventType(t, pool, et.ID)
+	code, body := do(http.MethodPost, "/admin/workshops", fmt.Sprintf(`{"title":%q,"event_type_id":%d}`, uniqueAdminWorkshopTitle(t), et.ID))
+	if code != http.StatusBadRequest || !strings.Contains(string(body), "disabled") {
+		t.Errorf("status = %d (%s)", code, body)
+	}
+	code, _ = do(http.MethodPost, "/admin/workshops", fmt.Sprintf(`{"title":%q,"event_type_id":-1}`, uniqueAdminWorkshopTitle(t)))
+	if code != http.StatusBadRequest {
+		t.Errorf("unknown type status = %d, want 400", code)
+	}
+}
+
+func TestAdminWorkshops_PatchKeepsDisabledType(t *testing.T) {
+	pool, do := workshopEventTypeServer(t)
+	et := seedEventTypeRow(t, pool)
+	w, err := workshops.NewStore(pool).Create(context.Background(), workshops.CreateInput{Title: uniqueAdminWorkshopTitle(t), EventTypeID: &et.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupAdminWorkshop(t, pool, w.ID)
+	disableEventType(t, pool, et.ID)
+	path := fmt.Sprintf("/admin/workshops/%d", w.ID)
+	for _, b := range []string{fmt.Sprintf(`{"title":"Keep","event_type_id":%d}`, et.ID), `{"title":"Keep too"}`} {
+		code, body := do(http.MethodPatch, path, b)
+		if code != http.StatusOK || decodeWorkshopType(t, body).EventTypeID != et.ID {
+			t.Errorf("%s: status = %d (%s)", b, code, body)
+		}
+	}
+}
+
+func TestAdminWorkshops_PatchRefusesNewDisabledType(t *testing.T) {
+	pool, do := workshopEventTypeServer(t)
+	et := seedEventTypeRow(t, pool)
+	disableEventType(t, pool, et.ID)
+	w, err := workshops.NewStore(pool).Create(context.Background(), workshops.CreateInput{Title: uniqueAdminWorkshopTitle(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupAdminWorkshop(t, pool, w.ID)
+	code, body := do(http.MethodPatch, fmt.Sprintf("/admin/workshops/%d", w.ID), fmt.Sprintf(`{"event_type_id":%d}`, et.ID))
+	if code != http.StatusBadRequest || !strings.Contains(string(body), "disabled") {
+		t.Errorf("status = %d (%s)", code, body)
+	}
+}
+
+func TestAdminWorkshops_ViewsCarryType(t *testing.T) {
+	pool, do := workshopEventTypeServer(t)
+	w, err := workshops.NewStore(pool).Create(context.Background(), workshops.CreateInput{Title: uniqueAdminWorkshopTitle(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupAdminWorkshop(t, pool, w.ID)
+	code, body := do(http.MethodGet, fmt.Sprintf("/admin/workshops/%d", w.ID), "")
+	got := decodeWorkshopType(t, body)
+	if code != http.StatusOK || got.EventType.Name != "Workshop" || got.EventTypeID == 0 {
+		t.Errorf("detail: status = %d (%s)", code, body)
+	}
+	code, body = do(http.MethodGet, "/admin/workshops", "")
+	var list struct {
+		Workshops []decodedWorkshopType `json:"workshops"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil || code != http.StatusOK {
+		t.Fatalf("list: status = %d err = %v", code, err)
+	}
+	for _, v := range list.Workshops {
+		if v.EventType.Slug == "" || v.EventTypeID == 0 {
+			t.Errorf("list row lacks type: %+v", v)
+		}
 	}
 }

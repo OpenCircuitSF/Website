@@ -38,6 +38,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/db"
 	"github.com/brennanMKE/OpenCircuitSF/internal/devstore"
 	"github.com/brennanMKE/OpenCircuitSF/internal/events"
+	"github.com/brennanMKE/OpenCircuitSF/internal/eventtypes"
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/inbound"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
@@ -276,6 +277,9 @@ func servePostgres(cfg *config.Config) error {
 	// interests.Store is a stateless wrapper over the shared pool, so one
 	// instance safely backs both call sites.
 	adminInterestsH := handlers.NewAdminInterestsHandler(interestsStore, auditLogger)
+
+	// Admin-only event type CRUD (#0613).
+	adminEventTypesH := handlers.NewAdminEventTypesHandler(eventtypes.NewStore(pool), auditLogger)
 
 	// Campaign store, constructed here (ahead of the rest of the campaign
 	// wiring further below) so it can be handed to adminWorkshopsH just
@@ -715,7 +719,7 @@ func servePostgres(cfg *config.Config) error {
 	}
 
 	return mountAndServe(cfg, pool,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, adminOutreachH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminEventTypesH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, adminOutreachH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH, publicArchiveH, sesNotifyH, sesInboundH, sendWorker, outboxWorker, outreachPublisher, site,
 		requireSession, requireAdmin, devAdminAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
@@ -1136,6 +1140,10 @@ func serveDevMode(cfg *config.Config) error {
 	// non-nil) leaves every other admin route working in STORAGE=json mode.
 	var adminInterestsH *handlers.AdminInterestsHandler
 
+	// Admin event types (#0613) have the same devstore gap as adminInterestsH:
+	// nil here leaves every other admin route working in STORAGE=json mode.
+	var adminEventTypesH *handlers.AdminEventTypesHandler
+
 	// Admin subscribers screen (#0032) has the same devstore gap as
 	// adminInterestsH/subscribeH above — internal/devstore has no
 	// subscribers-table backing, and this handler's manual-add path needs a
@@ -1308,7 +1316,7 @@ func serveDevMode(cfg *config.Config) error {
 	var outreachPublisher *outreach.Publisher
 
 	return mountAndServe(cfg, ds,
-		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, adminOutreachH, eventsH, meH, subscribeH,
+		authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminEventTypesH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, adminOutreachH, eventsH, meH, subscribeH,
 		publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH, publicArchiveH, sesNotifyH, sesInboundH, sendWorker, outboxWorker, outreachPublisher, site,
 		requireSession, requireAdmin, devAutoLogin,
 		nil /* ready: only the wiring tests observe listener readiness directly */)
@@ -1345,6 +1353,7 @@ func adminRoutes(
 	adminUsersH *handlers.AdminUsersHandler,
 	adminAuditH *handlers.AdminAuditHandler,
 	adminInterestsH *handlers.AdminInterestsHandler,
+	adminEventTypesH *handlers.AdminEventTypesHandler,
 	adminSubscribersH *handlers.AdminSubscribersHandler,
 	adminImportsH *handlers.AdminImportsHandler,
 	adminPendingH *handlers.AdminPendingHandler,
@@ -1392,6 +1401,14 @@ func adminRoutes(
 			adminRoute{http.MethodPost, "/admin/interests", http.HandlerFunc(adminInterestsH.Create)},
 			adminRoute{http.MethodPatch, "/admin/interests/{id}", http.HandlerFunc(adminInterestsH.Patch)},
 			adminRoute{http.MethodDelete, "/admin/interests/{id}", http.HandlerFunc(adminInterestsH.Delete)},
+		)
+	}
+	if adminEventTypesH != nil {
+		routes = append(routes,
+			adminRoute{http.MethodGet, "/admin/event-types", http.HandlerFunc(adminEventTypesH.List)},
+			adminRoute{http.MethodPost, "/admin/event-types", http.HandlerFunc(adminEventTypesH.Create)},
+			adminRoute{http.MethodPatch, "/admin/event-types/{id}", http.HandlerFunc(adminEventTypesH.Patch)},
+			adminRoute{http.MethodDelete, "/admin/event-types/{id}", http.HandlerFunc(adminEventTypesH.Delete)},
 		)
 	}
 	if adminSubscribersH != nil {
@@ -1652,6 +1669,7 @@ func mountAndServe(
 	adminUsersH *handlers.AdminUsersHandler,
 	adminAuditH *handlers.AdminAuditHandler,
 	adminInterestsH *handlers.AdminInterestsHandler,
+	adminEventTypesH *handlers.AdminEventTypesHandler,
 	adminSubscribersH *handlers.AdminSubscribersHandler,
 	adminImportsH *handlers.AdminImportsHandler,
 	adminPendingH *handlers.AdminPendingHandler,
@@ -1750,7 +1768,7 @@ func mountAndServe(
 	// therefore covered by that test automatically; a route added by editing
 	// mountAndServe directly (bypassing adminRoutes) is the mistake this
 	// structure is meant to make hard to make.
-	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, adminOutreachH) {
+	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminEventTypesH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, adminOutreachH) {
 		mux.Handle(r.method+" "+r.path, requireAdmin(r.handler))
 	}
 

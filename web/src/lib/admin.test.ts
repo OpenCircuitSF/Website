@@ -4,6 +4,7 @@
 // pagination math. No DOM or network — only the data shaping the Admin view
 // delegates to lib/admin.ts.
 
+import type { EventType } from './types';
 import { describe, it, expect } from 'vitest';
 import type { AdminUser, AuditEntry, Interest, Subscriber } from './types';
 import {
@@ -351,6 +352,17 @@ describe('sortedInterests', () => {
 });
 
 describe('reorderSwap', () => {
+  it('swaps event types too (#0613)', () => {
+    const list: EventType[] = [
+      { id: 1, sort_order: 10, slug: 'a', name: 'A', enabled: true, is_default: true, workshop_count: 0, created_at: '' },
+      { id: 2, sort_order: 20, slug: 'b', name: 'B', enabled: true, is_default: false, workshop_count: 0, created_at: '' },
+    ];
+    expect(reorderSwap(list, 2, 'up')).toEqual({
+      moved: { id: 2, sortOrder: 10 },
+      other: { id: 1, sortOrder: 20 },
+    });
+  });
+
   const list = [
     interest({ id: 1, name: 'First', sort_order: 10 }),
     interest({ id: 2, name: 'Second', sort_order: 20 }),

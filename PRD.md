@@ -381,6 +381,7 @@ every size, a real `favicon.svg`, and `currentColor` tinting without the mask.
 | `/admin/deliverability` | Bounce and complaint history, per-address event log, suppression list |
 | `/admin/interests` | CRUD the interest taxonomy, reorder, activate/deactivate |
 | `/admin/campaigns` | List, compose, preview, test-send, target, schedule, send, per-campaign stats |
+| `/admin/event-types` | CRUD event types, reorder, enable/disable, choose the default |
 | `/admin/workshops` | CRUD workshops, publish/unpublish, "announce to list" shortcut |
 | `/admin/users` | Staff user management (copied from ShortLinks) |
 | `/admin/settings` | Registration toggle, send rate, from-addresses, physical mailing address |
@@ -686,6 +687,23 @@ CREATE TABLE outbound_queue (
 CREATE INDEX idx_outbound_queue_due ON outbound_queue (next_attempt_at, id)
     WHERE status = 'queued';
 
+CREATE TABLE event_types (
+    id         BIGSERIAL PRIMARY KEY,
+    slug       TEXT UNIQUE NOT NULL,      -- immutable; #0614 uses it in URLs
+    name       TEXT NOT NULL,
+    enabled    BOOLEAN NOT NULL DEFAULT TRUE,  -- false: no new listings of this type
+    is_default BOOLEAN NOT NULL DEFAULT FALSE,
+    sort_order INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+ALTER TABLE event_types ADD CONSTRAINT event_types_slug_format
+    CHECK (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$');
+ALTER TABLE event_types ADD CONSTRAINT event_types_default_enabled
+    CHECK (NOT is_default OR enabled);
+CREATE UNIQUE INDEX event_types_one_default ON event_types (is_default) WHERE is_default;
+CREATE FUNCTION event_types_default_id() RETURNS BIGINT LANGUAGE sql STABLE
+    AS $$ SELECT id FROM event_types WHERE is_default $$;
+
 CREATE TABLE workshops (
     id               BIGSERIAL PRIMARY KEY,
     slug             TEXT UNIQUE NOT NULL,
@@ -702,9 +720,12 @@ CREATE TABLE workshops (
     cover_image      TEXT,                  -- path under /media
     status           TEXT NOT NULL DEFAULT 'draft',  -- draft | published | canceled
     published_at     TIMESTAMPTZ,
+    event_type_id    BIGINT NOT NULL DEFAULT event_types_default_id()
+                     REFERENCES event_types(id) ON DELETE RESTRICT,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+CREATE INDEX idx_workshops_event_type ON workshops (event_type_id);
 -- Published AND canceled workshops are both publicly visible (#0135: the
 -- index and the detail route must apply the same visibility rule, or a
 -- canceled workshop silently vanishes from the index while its direct link
@@ -1515,6 +1536,7 @@ All of `/auth/*`, `/account/credentials*`, `/admin/users*`, `/admin/settings`,
 | `POST` | `/admin/campaigns/{id}/resume` | Resume a send paused by the delivery-health breaker |
 | `PATCH` | `/admin/campaigns/{id}/archive` | Publish or withhold the archive page |
 | `GET` | `/admin/campaigns/{id}/stats` | Sent / failed / bounced / complained |
+| `GET`/`POST`/`PATCH`/`DELETE` | `/admin/event-types[/{id}]` | Event type CRUD; `PATCH` with `is_default: true` alone moves the default |
 | `GET`/`POST`/`PATCH`/`DELETE` | `/admin/workshops[/{id}]` | Workshop CRUD |
 | `POST` | `/admin/workshops/{id}/announce` | Create a draft campaign pre-filled from the workshop |
 | `GET` | `/api/events` | SSE — live send progress on the campaign screen |

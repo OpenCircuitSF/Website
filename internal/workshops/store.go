@@ -119,6 +119,14 @@ var (
 	// happening" while a campaign still announces it (#0050's Ruling 1).
 	ErrHasCampaigns = errors.New("workshops: has campaigns referencing it; cancel instead of deleting")
 
+	// ErrEventTypeNotFound is returned by Create/Update for a type id that does
+	// not exist (#0613).
+	ErrEventTypeNotFound = errors.New("workshops: event type does not exist")
+
+	// ErrEventTypeDisabled is returned by Create/Update for a new assignment to
+	// a disabled type. A listing that already has the type may keep it (#0613).
+	ErrEventTypeDisabled = errors.New("workshops: event type is disabled")
+
 	// errSlugAttemptsExhausted is wrapped into the error Create returns if
 	// maxSlugAttempts consecutive candidates all collide — effectively
 	// unreachable in practice (it would require ~1000 existing workshops
@@ -173,6 +181,9 @@ type Workshop struct {
 	CoverImage      *string
 	Status          string
 	PublishedAt     *time.Time
+	EventTypeID     int64
+	EventTypeSlug   string
+	EventTypeName   string
 	InterestIDs     []int64
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
@@ -195,10 +206,13 @@ type CreateInput struct {
 	SignupURL       *string
 	CoverImage      *string
 	InterestIDs     []int64
+	// EventTypeID nil means the current default type (#0613).
+	EventTypeID *int64
 }
 
 // UpdateInput is the payload for Update. Unlike a partial PATCH body, this
-// carries every field's fully-resolved target value — the handler merges
+// carries every field's fully-resolved target value, except EventTypeID,
+// where nil keeps the listing's current type (#0613) — the handler merges
 // the caller's optional patch fields onto the current row before calling
 // this method, mirroring mailing.CampaignUpdate and
 // AdminInterestsHandler.Patch's shared merge-then-call-Update shape. Status
@@ -220,6 +234,8 @@ type UpdateInput struct {
 	CoverImage      *string
 	Status          string
 	InterestIDs     []int64
+	// EventTypeID nil keeps the listing's current type (#0613).
+	EventTypeID *int64
 }
 
 // Store is the data-access layer over workshops and workshop_interests.
@@ -234,7 +250,9 @@ func NewStore(pool *pgxpool.Pool) *Store {
 
 const workshopColumns = `id, slug, title, summary, body_md, starts_at, ends_at,
 	location_name, location_address, location_note, capacity, signup_url,
-	cover_image, status, published_at, created_at, updated_at`
+	cover_image, status, published_at, created_at, updated_at, event_type_id,
+	(SELECT slug FROM event_types et WHERE et.id = workshops.event_type_id),
+	(SELECT name FROM event_types et WHERE et.id = workshops.event_type_id)`
 
 func scanWorkshop(row pgx.Row) (Workshop, error) {
 	var w Workshop
@@ -242,6 +260,7 @@ func scanWorkshop(row pgx.Row) (Workshop, error) {
 		&w.ID, &w.Slug, &w.Title, &w.Summary, &w.BodyMD, &w.StartsAt, &w.EndsAt,
 		&w.LocationName, &w.LocationAddress, &w.LocationNote, &w.Capacity, &w.SignupURL,
 		&w.CoverImage, &w.Status, &w.PublishedAt, &w.CreatedAt, &w.UpdatedAt,
+		&w.EventTypeID, &w.EventTypeSlug, &w.EventTypeName,
 	); err != nil {
 		return Workshop{}, err
 	}
@@ -586,6 +605,22 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Workshop, error) {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if in.EventTypeID != nil {
+		// FOR SHARE blocks a concurrent disable, which the foreign key's own
+		// FOR KEY SHARE would not.
+		var enabled bool
+		err := tx.QueryRow(ctx, `SELECT enabled FROM event_types WHERE id = $1 FOR SHARE`, *in.EventTypeID).Scan(&enabled)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			return Workshop{}, ErrEventTypeNotFound
+		case err != nil:
+			return Workshop{}, fmt.Errorf("workshops: checking event type for %q: %w", title, err)
+		}
+		if !enabled {
+			return Workshop{}, ErrEventTypeDisabled
+		}
+	}
+
 	var w Workshop
 	var insertErr error
 	for attempt := 0; attempt < maxSlugAttempts; attempt++ {
@@ -610,11 +645,11 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Workshop, error) {
 		}
 		row := sp.QueryRow(ctx,
 			`INSERT INTO workshops (slug, title, summary, body_md, starts_at, ends_at,
-				location_name, location_address, location_note, capacity, signup_url, cover_image)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+				location_name, location_address, location_note, capacity, signup_url, cover_image, event_type_id)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, COALESCE($13::bigint, event_types_default_id()))
 			 RETURNING `+workshopColumns,
 			candidate, title, in.Summary, in.BodyMD, in.StartsAt, in.EndsAt,
-			in.LocationName, in.LocationAddress, in.LocationNote, in.Capacity, in.SignupURL, in.CoverImage,
+			in.LocationName, in.LocationAddress, in.LocationNote, in.Capacity, in.SignupURL, in.CoverImage, in.EventTypeID,
 		)
 		w, insertErr = scanWorkshop(row)
 		if insertErr == nil {
@@ -674,6 +709,25 @@ func (s *Store) Update(ctx context.Context, id int64, in UpdateInput) (Workshop,
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if in.EventTypeID != nil {
+		// Keeping a disabled type the listing already has is allowed; moving to
+		// one is not. FOR SHARE blocks a concurrent disable.
+		var enabled, alreadyHas bool
+		err := tx.QueryRow(ctx,
+			`SELECT et.enabled, EXISTS (SELECT 1 FROM workshops w WHERE w.id = $1 AND w.event_type_id = et.id)
+			   FROM event_types et WHERE et.id = $2 FOR SHARE OF et`,
+			id, *in.EventTypeID).Scan(&enabled, &alreadyHas)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			return Workshop{}, ErrEventTypeNotFound
+		case err != nil:
+			return Workshop{}, fmt.Errorf("workshops: checking event type for %d: %w", id, err)
+		}
+		if !enabled && !alreadyHas {
+			return Workshop{}, ErrEventTypeDisabled
+		}
+	}
+
 	row := tx.QueryRow(ctx,
 		`UPDATE workshops
 		    SET title = $2, summary = $3, body_md = $4, starts_at = $5, ends_at = $6,
@@ -685,12 +739,13 @@ func (s *Store) Update(ctx context.Context, id int64, in UpdateInput) (Workshop,
 		            WHEN status = 'published' AND $13 = 'draft' THEN NULL
 		            ELSE published_at
 		        END,
+		        event_type_id = COALESCE($14::bigint, event_type_id),
 		        updated_at = now()
 		  WHERE id = $1
 		  RETURNING `+workshopColumns,
 		id, title, in.Summary, in.BodyMD, in.StartsAt, in.EndsAt,
 		in.LocationName, in.LocationAddress, in.LocationNote, in.Capacity, in.SignupURL, in.CoverImage,
-		in.Status,
+		in.Status, in.EventTypeID,
 	)
 	updated, err := scanWorkshop(row)
 	switch {

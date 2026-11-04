@@ -33,6 +33,8 @@ import type { AdminWorkshop } from './types';
 
 function workshop(fields: Partial<AdminWorkshop> = {}): AdminWorkshop {
   return {
+    event_type_id: 1,
+    event_type: { slug: 'workshop', name: 'Workshop' },
     id: 1,
     slug: 'soldering-101',
     title: 'Soldering fundamentals',
@@ -654,6 +656,7 @@ describe('workshopToFormFields / blankWorkshopFormFields', () => {
       signupUrl: '',
       coverImage: '',
       interestIds: [],
+      eventTypeId: null,
     });
   });
 
@@ -708,6 +711,7 @@ describe('cloneWorkshopFields', () => {
       signup_url: 'https://example.com/signup',
       cover_image: '/media/soldering.jpg',
       interest_ids: [3, 5],
+      event_type_id: source.event_type_id,
     });
   });
 
@@ -756,5 +760,23 @@ describe('cloneDefaultEndLocal', () => {
     expect(cloneDefaultEndLocal(noEnd, toDatetimeLocalValue('2026-04-05T18:00:00Z'))).toBe('');
     const both = workshop({ starts_at: '2026-03-01T18:00:00Z', ends_at: '2026-03-01T20:30:00Z' });
     expect(cloneDefaultEndLocal(both, '')).toBe('');
+  });
+});
+
+describe('event type on the form (#0613)', () => {
+  it('carries the event type onto form fields', () => {
+    expect(workshopToFormFields(workshop({ event_type_id: 3 })).eventTypeId).toBe(3);
+    expect(blankWorkshopFormFields().eventTypeId).toBeNull();
+  });
+
+  it('includes event_type_id only when one is chosen', () => {
+    const blank = { ...blankWorkshopFormFields(), title: 'T' };
+    expect(validateWorkshopForm(blank)).not.toHaveProperty('event_type_id');
+    expect(validateWorkshopForm({ ...blank, eventTypeId: 4 })).toHaveProperty('event_type_id', 4);
+  });
+
+  it('carries the source event type into a clone', () => {
+    const got = cloneWorkshopFields(workshop({ event_type_id: 5 }), '2027-01-01T18:00', '');
+    expect(got).toHaveProperty('event_type_id', 5);
   });
 });

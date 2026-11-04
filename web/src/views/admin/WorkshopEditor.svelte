@@ -86,6 +86,7 @@
     announceWorkshop,
     previewWorkshop,
     listInterests,
+    listEventTypes,
     mediaUpload,
     ApiError,
   } from '../../lib/api';
@@ -113,7 +114,8 @@
     type WorkshopFormFields,
   } from '../../lib/workshopAdmin';
   import { sortedInterests } from '../../lib/admin';
-  import type { AdminWorkshop, Interest } from '../../lib/types';
+  import { assignableEventTypes, eventTypeOptionLabel } from '../../lib/eventTypes';
+  import type { AdminWorkshop, EventType, Interest } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
   import OutreachEditorSummary from './OutreachEditorSummary.svelte';
@@ -134,8 +136,12 @@
 
   let { workshopId, onBack, onAnnounced, onCloned }: Props = $props();
 
+  // #0613: a disabled current type stays selectable; other disabled types do not.
+  let eventTypes = $state<EventType[]>([]);
+
   // ── Load state ──────────────────────────────────────────────────────────
   let workshop = $state<AdminWorkshop | null>(null);
+  let typeOptions = $derived(assignableEventTypes(eventTypes, workshop?.event_type_id ?? null));
   let loading = $state(true);
   let loadError = $state<string | null>(null);
   let taxonomyInterests = $state<Interest[]>([]);
@@ -154,6 +160,7 @@
     signupUrl: '',
     coverImage: '',
     interestIds: [],
+    eventTypeId: null,
   });
 
   // ── Save state ──────────────────────────────────────────────────────────
@@ -334,8 +341,13 @@
     loading = true;
     loadError = null;
     try {
-      const [w, interestsResp] = await Promise.all([getAdminWorkshop(workshopId), listInterests()]);
+      const [w, interestsResp, eventTypesResp] = await Promise.all([
+        getAdminWorkshop(workshopId),
+        listInterests(),
+        listEventTypes(),
+      ]);
       workshop = w;
+      eventTypes = eventTypesResp.event_types;
       fields = workshopToFormFields(w);
       taxonomyInterests = interestsResp.interests;
       await refreshPreview();
@@ -530,6 +542,20 @@
       <div class="field">
         <label for="workshop-title">Title</label>
         <input id="workshop-title" type="text" bind:value={fields.title} disabled={saving} />
+      </div>
+
+      <div class="field">
+        <label for="workshop-event-type">Type</label>
+        <select
+          id="workshop-event-type"
+          bind:value={fields.eventTypeId}
+          disabled={saving}
+          required
+        >
+          {#each typeOptions as type (type.id)}
+            <option value={type.id}>{eventTypeOptionLabel(type)}</option>
+          {/each}
+        </select>
       </div>
 
       <div class="field">

@@ -316,8 +316,8 @@ export interface SortOrderSwap {
  * on it), it would just make their relative order ambiguous, which this
  * swap avoids by construction.
  */
-export function reorderSwap(
-  sorted: Interest[],
+export function reorderSwap<T extends { id: number; sort_order: number }>(
+  sorted: T[],
   id: number,
   direction: 'up' | 'down',
 ): SortOrderSwap | null {

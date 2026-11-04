@@ -501,7 +501,26 @@ export interface CampaignFailedSend {
  * (GET /api/workshops) only ever contains 'published' rows -- the detail
  * route also serves 'canceled', and this type is shared by both callers.
  */
+/** One row of GET /admin/event-types (#0613), matching eventTypeView. */
+export interface EventType {
+  id: number;
+  slug: string;
+  name: string;
+  enabled: boolean;
+  is_default: boolean;
+  sort_order: number;
+  workshop_count: number;
+  created_at: string;
+}
+
+/** How a listing names its type on the wire (#0613). */
+export interface EventTypeRef {
+  slug: string;
+  name: string;
+}
+
 export interface PublicWorkshop {
+  event_type: EventTypeRef;
   slug: string;
   title: string;
   summary?: string;
@@ -585,6 +604,8 @@ export interface ArchiveDetail {
  * internal/handlers/admin_workshops.go's workshopView.
  */
 export interface AdminWorkshop {
+  event_type_id: number;
+  event_type: EventTypeRef;
   id: number;
   slug: string;
   title: string;

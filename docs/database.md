@@ -1,7 +1,7 @@
 # Database Schema & Migrations
 
 PostgreSQL, schema managed by [`golang-migrate`](https://github.com/golang-migrate/migrate)
-(`migrations/`, numbered `000001`–`000044`). No ORM — every
+(`migrations/`, numbered `000001`–`000045`). No ORM — every
 store issues hand-written SQL through `pgx/v5`.
 
 ## Applying migrations
@@ -114,6 +114,7 @@ why the activity log is not a second package of its own.
 | `000042_outreach_channels_setting` | Widens `server_setting_values_key_check` (`000040`) with `outreach_channels` (`#0588`): the comma list of outreach channels switched on in Settings (default `bluesky,mastodon,instagram`), edited through `internal/serversettings`. Disabled channels are not drafted, and their drafts are not counted or shown (a scheduled, queued, posted or failed post stays shown); their existing posts and links are kept. A new migration, not an edit to `000040`, which production has applied |
 | `000043_outreach_short_url_u_path` | Data repair (`#0603`): rewrites `short_url` in `outreach_links`, `outreach_flyer_links` and `outreach_posts` from `https://host/KEY` to `https://host/u/KEY` (ShortLinks serves redirects only at `/u/{key}`), touching only rows whose path does not already start with `/u/` (an anchored test, so a key beginning with `u` is still repaired). Also replaces each row's old URL (whole URL only, never a prefix of a longer key) with its new one inside the `body` of draft, scheduled, failed and manual posts; posted and queued bodies are left as sent, and a body still carrying the `{link}` token needs no rewrite. The down migration reverses only the `short_url` columns, not bodies. No schema change |
 | `000044_outreach_posts_attempt_generation` | Adds `outreach_posts.attempt_generation INTEGER NOT NULL DEFAULT 0` (`#0604`, "Delete and redo"): counts takedowns of a posted automatic post. Generation 0 keeps the original Bluesky record key and Mastodon `Idempotency-Key` exactly, so in-flight retries are unaffected; each takedown adds one, which the publisher mixes into both keys so a re-send can never recover the deleted record or status. A new migration, not an edit to `000032`, which production has applied |
+| `000045_create_event_types` | Creates `event_types` (`#0613`) with the seeds Workshop (default), Hack Night, Talk, Hackathon and Social; at most one default (`event_types_one_default`), and the default must be enabled. Adds the required `workshops.event_type_id`, `ON DELETE RESTRICT`, defaulting through `event_types_default_id()`, which also backfills existing rows. `internal/eventtypes` owns the table |
 
 `internal/subscribers` (`imports.go`) owns `subscriber_imports`, alongside
 every other table that package already owns — see that file's doc comment.

@@ -501,6 +501,8 @@ export interface WorkshopFormFields {
   signupUrl: string;
   coverImage: string;
   interestIds: number[];
+  // Null means not chosen: the field is omitted and the server decides (#0613).
+  eventTypeId: number | null;
 }
 
 /**
@@ -534,6 +536,8 @@ export interface ValidatedWorkshopFields {
   signup_url: string;
   cover_image: string;
   interest_ids: number[];
+  // Only present when a type is chosen (#0613).
+  event_type_id?: number;
 }
 
 /** Whether a URL uses http:// or https:// -- used for signup_url. */
@@ -704,6 +708,7 @@ export function validateWorkshopForm(
     signup_url: signupUrl,
     cover_image: coverImage,
     interest_ids: fields.interestIds,
+    ...(fields.eventTypeId !== null ? { event_type_id: fields.eventTypeId } : {}),
   };
 }
 
@@ -735,6 +740,7 @@ export function workshopToFormFields(w: AdminWorkshop): WorkshopFormFields {
     signupUrl: w.signup_url ?? '',
     coverImage: w.cover_image ?? '',
     interestIds: w.interest_ids,
+    eventTypeId: w.event_type_id,
   };
 }
 
@@ -753,6 +759,7 @@ export function blankWorkshopFormFields(): WorkshopFormFields {
     signupUrl: '',
     coverImage: '',
     interestIds: [],
+    eventTypeId: null,
   };
 }
 
@@ -812,5 +819,8 @@ export function cloneWorkshopFields(
     signup_url: source.signup_url,
     cover_image: source.cover_image,
     interest_ids: [...source.interest_ids],
+    // A new assignment: the server refuses a disabled type, and the clone
+    // dialog shows that message rather than silently changing type (#0613).
+    event_type_id: source.event_type_id,
   };
 }

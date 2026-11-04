@@ -314,6 +314,16 @@ const (
 	// retiring one with history, which is ActionInterestDeactivated.
 	ActionInterestDeleted = "interest.deleted"
 
+	// Event type lifecycle (#0613). The enabled flag's transition and a change
+	// of default get their own actions, because each changes what a new listing
+	// can be and an operator should see that without decoding metadata.
+	ActionEventTypeCreated        = "event_type.created"
+	ActionEventTypeUpdated        = "event_type.updated"
+	ActionEventTypeDisabled       = "event_type.disabled"
+	ActionEventTypeEnabled        = "event_type.enabled"
+	ActionEventTypeDefaultChanged = "event_type.default_changed"
+	ActionEventTypeDeleted        = "event_type.deleted"
+
 	// CRT session commands (#0393, PRD is silent — this predates a PRD
 	// section): the admin-editable rows behind the home hero's live CRT
 	// screen (#0270, #0274). Unlike the interest taxonomy above, there is no
@@ -557,6 +567,8 @@ const (
 	TargetURLFilter  = "url_filter"
 	TargetSubscriber = "subscriber"
 	TargetInterest   = "interest"
+	// TargetEventType is the target type for the event_type.* actions (#0613).
+	TargetEventType = "event_type"
 	// TargetEmailCampaign is the target type for the email_campaign.*
 	// actions above (#0041).
 	TargetEmailCampaign = "email_campaign"

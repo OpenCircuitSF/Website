@@ -118,6 +118,7 @@ var prdPath = "../../PRD.md"
 // or absence in this set has no effect until that phase ships.
 var prdIndexParityTables = map[string]bool{
 	"subscribers":          true,
+	"event_types":          true,
 	"interests":            true,
 	"subscriber_interests": true,
 	"suppressions":         true,

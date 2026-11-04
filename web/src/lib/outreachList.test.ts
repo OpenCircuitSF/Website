@@ -13,6 +13,8 @@ const NOW = new Date('2026-10-18T12:00:00Z');
 
 function ws(id: number, over: Partial<AdminWorkshop> = {}): AdminWorkshop {
   return {
+    event_type_id: 1,
+    event_type: { slug: 'workshop', name: 'Workshop' },
     id, slug: `w${id}`, title: `W${id}`, status: 'published', starts_at: '2026-11-01T01:30:00Z',
     interest_ids: [], created_at: '', updated_at: '', ...over,
   };

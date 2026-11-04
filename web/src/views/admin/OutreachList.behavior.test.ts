@@ -10,7 +10,7 @@ import type { AdminWorkshop, OutreachSummary, WorkshopOutreach, ConnectionGroup 
 
 const future = (d: number) => new Date(Date.now() + d * 86400000).toISOString();
 function ws(id: number, over: Partial<AdminWorkshop> = {}): AdminWorkshop {
-  return { id, slug: `w${id}`, title: `Workshop ${id}`, status: 'published', starts_at: future(10 + id), interest_ids: [], created_at: '', updated_at: '', ...over };
+  return { event_type_id: 1, event_type: { slug: 'workshop', name: 'Workshop' }, id, slug: `w${id}`, title: `Workshop ${id}`, status: 'published', starts_at: future(10 + id), interest_ids: [], created_at: '', updated_at: '', ...over };
 }
 function sum(id: number, counts: Record<string, number>): OutreachSummary {
   return { outreach_id: id, workshop_id: id, workshop_slug: '', workshop_title: '', workshop_status: 'published', campaign_slug: 'c', starts_at: null, counts, created_at: '' };

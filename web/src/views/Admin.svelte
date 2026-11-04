@@ -146,6 +146,7 @@
   import { APP_NAME } from '../lib/branding';
   import Campaigns from './admin/Campaigns.svelte';
   import Workshops from './admin/Workshops.svelte';
+  import EventTypes from './admin/EventTypes.svelte';
   import Outreach from './admin/Outreach.svelte';
   import Dashboard from './admin/Dashboard.svelte';
   import Pending from './admin/Pending.svelte';
@@ -2532,6 +2533,10 @@
         onGoToSettings={() => (window.location.hash = adminSectionHash('settings'))}
         onGoToAudit={goToCampaignAudit}
       />
+    {/if}
+
+    {#if adminRoute.section === 'event-types'}
+      <EventTypes />
     {/if}
 
     {#if adminRoute.section === 'workshops'}

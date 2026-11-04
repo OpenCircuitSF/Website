@@ -9,6 +9,7 @@ import type {
   AuditEntry,
   AdminUser,
   Setting,
+  EventType,
   Interest,
   CrtCommand,
   OutreachConnections,
@@ -432,6 +433,34 @@ export function updateInterest(
  */
 export function deleteInterest(id: number): Promise<{ message: string }> {
   return apiDelete<{ message: string }>(`/admin/interests/${id}`);
+}
+
+// ── Admin: event types (#0613) ───────────────────────────────────────────────
+
+/** GET /admin/event-types: every type, with a per-type listing count. */
+export function listEventTypes(): Promise<{ event_types: EventType[] }> {
+  return apiGet<{ event_types: EventType[] }>('/admin/event-types');
+}
+
+/** POST /admin/event-types. */
+export function createEventType(slug: string, name: string, sortOrder: number): Promise<EventType> {
+  return apiPost<EventType>('/admin/event-types', { slug, name, sort_order: sortOrder });
+}
+
+/**
+ * PATCH /admin/event-types/{id}. `is_default: true` must be sent alone, and the
+ * slug cannot be changed.
+ */
+export function updateEventType(
+  id: number,
+  fields: { name?: string; sort_order?: number; enabled?: boolean; is_default?: true },
+): Promise<EventType> {
+  return apiPatch<EventType>(`/admin/event-types/${id}`, fields);
+}
+
+/** DELETE /admin/event-types/{id}: refused (409) when in use or the default. */
+export function deleteEventType(id: number): Promise<{ message: string }> {
+  return apiDelete<{ message: string }>(`/admin/event-types/${id}`);
 }
 
 // ── Admin: CRT session commands (#0393) ──────────────────────────────────────
@@ -1182,6 +1211,7 @@ export function unsubscribeOneClick(token: string | null): Promise<UnsubscribeRe
  * comment for the full reasoning.
  */
 export interface CreateWorkshopFields {
+  event_type_id?: number;
   title: string;
   summary?: string;
   body_md?: string;
@@ -1210,6 +1240,7 @@ export interface CreateWorkshopFields {
  * cannot express without this wrapper. See optional.go's doc comment.
  */
 export interface PatchWorkshopFields {
+  event_type_id?: number;
   title?: string;
   summary?: string;
   body_md?: string;

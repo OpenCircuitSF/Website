@@ -549,3 +549,148 @@ func TestDelete_Succeeds(t *testing.T) {
 		t.Fatalf("GetByID after delete: err = %v, want ErrNotFound", err)
 	}
 }
+
+// ── Event types (#0613) ──────────────────────────────────────────────────────
+
+// seedEventType adds a throwaway type. Register it before any listing using it,
+// so cleanup removes the listing first.
+func seedEventType(t *testing.T, pool *pgxpool.Pool, enabled bool) int64 {
+	t.Helper()
+	slug := fmt.Sprintf("zz-test-%d", testdb.Unique())
+	var id int64
+	if err := pool.QueryRow(context.Background(),
+		`INSERT INTO event_types (slug, name, enabled) VALUES ($1, $1, $2) RETURNING id`, slug, enabled).Scan(&id); err != nil {
+		t.Fatalf("seed event type: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM event_types WHERE id = $1`, id) })
+	return id
+}
+
+func setEventTypeEnabled(t *testing.T, pool *pgxpool.Pool, id int64, enabled bool) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `UPDATE event_types SET enabled = $2 WHERE id = $1`, id, enabled); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreateDefaultsEventType(t *testing.T) {
+	store := NewStore(testPool(t))
+	w := createTestWorkshop(t, store, uniqueTitle(t))
+	if w.EventTypeSlug != "workshop" || w.EventTypeName != "Workshop" || w.EventTypeID == 0 {
+		t.Errorf("type = %d %q %q", w.EventTypeID, w.EventTypeSlug, w.EventTypeName)
+	}
+}
+
+func TestCreateFollowsCurrentDefault(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	id := seedEventType(t, pool, true)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `UPDATE event_types SET is_default = FALSE WHERE is_default`)
+		_, _ = pool.Exec(ctx, `UPDATE event_types SET is_default = TRUE WHERE slug = 'workshop'`)
+	})
+	if _, err := pool.Exec(ctx, `UPDATE event_types SET is_default = FALSE WHERE is_default`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE event_types SET is_default = TRUE WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+	w := createTestWorkshop(t, store, uniqueTitle(t))
+	if w.EventTypeID != id {
+		t.Errorf("EventTypeID = %d, want %d", w.EventTypeID, id)
+	}
+}
+
+func TestCreateRefusesDisabledEventType(t *testing.T) {
+	pool := testPool(t)
+	id := seedEventType(t, pool, false)
+	_, err := NewStore(pool).Create(context.Background(), CreateInput{Title: uniqueTitle(t), EventTypeID: &id})
+	if !errors.Is(err, ErrEventTypeDisabled) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestCreateRefusesUnknownEventType(t *testing.T) {
+	id := int64(-1)
+	_, err := NewStore(testPool(t)).Create(context.Background(), CreateInput{Title: uniqueTitle(t), EventTypeID: &id})
+	if !errors.Is(err, ErrEventTypeNotFound) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestUpdateKeepsDisabledEventType(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	id := seedEventType(t, pool, true)
+	w, err := store.Create(ctx, CreateInput{Title: uniqueTitle(t), EventTypeID: &id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM workshops WHERE id = $1`, w.ID) })
+	setEventTypeEnabled(t, pool, id, false)
+	got, err := store.Update(ctx, w.ID, UpdateInput{Title: "Kept", Status: StatusDraft, EventTypeID: &id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EventTypeID != id || got.Title != "Kept" {
+		t.Errorf("got = %+v", got)
+	}
+}
+
+func TestUpdateRefusesMovingToDisabledEventType(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	id := seedEventType(t, pool, false)
+	w := createTestWorkshop(t, store, uniqueTitle(t))
+	_, err := store.Update(context.Background(), w.ID, UpdateInput{Title: w.Title, Status: StatusDraft, EventTypeID: &id})
+	if !errors.Is(err, ErrEventTypeDisabled) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestUpdateNilEventTypeLeavesItUnchanged(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	id := seedEventType(t, pool, true)
+	w, err := store.Create(ctx, CreateInput{Title: uniqueTitle(t), EventTypeID: &id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM workshops WHERE id = $1`, w.ID) })
+	got, err := store.Update(ctx, w.ID, UpdateInput{Title: w.Title, Status: StatusDraft})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EventTypeID != id {
+		t.Errorf("EventTypeID = %d, want %d", got.EventTypeID, id)
+	}
+}
+
+func TestListVisibleKeepsDisabledTypeListings(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	id := seedEventType(t, pool, true)
+	w, err := store.Create(ctx, CreateInput{Title: uniqueTitle(t), EventTypeID: &id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM workshops WHERE id = $1`, w.ID) })
+	if _, err := store.Update(ctx, w.ID, UpdateInput{Title: w.Title, Status: StatusPublished}); err != nil {
+		t.Fatal(err)
+	}
+	setEventTypeEnabled(t, pool, id, false)
+	upcoming, _, err := store.ListVisible(ctx, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range upcoming {
+		if u.ID == w.ID {
+			return
+		}
+	}
+	t.Errorf("listing %d missing from upcoming", w.ID)
+}

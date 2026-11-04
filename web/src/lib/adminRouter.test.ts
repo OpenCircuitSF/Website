@@ -240,3 +240,12 @@ describe('admin nav groups (#0599)', () => {
     expect(ADMIN_NAV_SECTIONS.length).toBe(1 + ADMIN_NAV_GROUPS.flatMap((g) => g.sections).length);
   });
 });
+
+describe('event types section (#0613)', () => {
+  it('routes #/event-types and lists it in the Workshops group', () => {
+    expect(parseAdminHash('#/event-types')?.section).toBe('event-types');
+    const group = ADMIN_NAV_GROUPS.find((g) => g.label === 'Workshops');
+    expect(group?.sections).toContain('event-types');
+    expect(ADMIN_SECTION_LABELS['event-types']).toBe('Event types');
+  });
+});
