@@ -40,7 +40,7 @@ var channels = []Channel{
 	{Name: "mastodon", Label: "Mastodon", UTMSource: "mastodon", UTMMedium: "social", CharLimit: 500, Automatic: true},
 	{Name: "instagram", Label: "Instagram", UTMSource: "instagram", UTMMedium: "social"},
 	{Name: "tiktok", Label: "TikTok", UTMSource: "tiktok", UTMMedium: "video"},
-	{Name: "youtube", Label: "YouTube", UTMSource: "youtube", UTMMedium: "video"},
+	{Name: "youtube", Label: "YouTube Shorts", UTMSource: "youtube", UTMMedium: "video"},
 }
 
 var waves = []Wave{

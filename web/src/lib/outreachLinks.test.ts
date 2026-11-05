@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   canScheduleAll,
   draftAllMessage,
+  handLinkReportMessage,
   linkClicksLabel,
   linkFailureReasonLabel,
   linkReportMessage,
@@ -37,6 +38,31 @@ describe('linkFailureReasonLabel', () => {
     expect(linkFailureReasonLabel('code_changed')).toBe('the location code changed');
     expect(linkFailureReasonLabel('failed')).toBe('failed');
     expect(linkFailureReasonLabel('mystery')).toBe('failed');
+  });
+});
+
+describe('handLinkReportMessage', () => {
+  it('is null when nothing failed', () => {
+    expect(handLinkReportMessage(null)).toBeNull();
+    expect(handLinkReportMessage({ created: 6, existing: 3, failed: [], stopped: false })).toBeNull();
+  });
+  it('words one failure in the singular', () => {
+    expect(
+      handLinkReportMessage({ created: 5, existing: 3, stopped: false, failed: [{ kind: 'post', label: 'TikTok · Reminder', reason: 'failed' }] }),
+    ).toBe('1 ShortLink could not be created: TikTok · Reminder (failed). Everything else here still works, and opening this page again tries again.');
+  });
+  it('words several in the plural and never names a button', () => {
+    const msg = handLinkReportMessage({
+      created: 4, existing: 3, stopped: true,
+      failed: [
+        { kind: 'post', label: 'TikTok · Reminder', reason: 'rate_limited' },
+        { kind: 'post', label: 'YouTube Shorts · Final', reason: 'timeout' },
+      ],
+    });
+    expect(msg).toBe(
+      '2 ShortLinks could not be created: TikTok · Reminder (ShortLinks is rate limiting), YouTube Shorts · Final (timed out). Everything else here still works, and opening this page again tries again.',
+    );
+    expect(msg).not.toMatch(/Create missing links/);
   });
 });
 

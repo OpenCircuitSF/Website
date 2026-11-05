@@ -14,11 +14,12 @@
 -->
 <script lang="ts">
   import { untrack, type Snippet } from 'svelte';
-  import { getWorkshopOutreach, getWorkshopOutreachResults, startOutreach, ApiError } from '../../lib/api';
+  import { ensureOutreachHandLinks, getWorkshopOutreach, getWorkshopOutreachResults, startOutreach, ApiError } from '../../lib/api';
   import { adminSettingsHash, adminWorkshopHash } from '../../lib/adminRouter';
   import { shouldPoll, unavailableMessage } from '../../lib/outreach';
   import { resultsStatusMessage } from '../../lib/outreachResults';
   import { pollDelay } from '../../lib/outreachCards';
+  import { handLinkReportMessage } from '../../lib/outreachLinks';
   import type { OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
 
@@ -77,6 +78,27 @@
   // Once per workshop: a failed start shows Try again instead of looping.
   let autoStartTried: number | null = null;
 
+  // #0623: once per workshop per mount, so an outage does not loop; opening the
+  // page again tries again. Not awaited by load(): the page and results never
+  // wait on ShortLinks.
+  let handLinksTried: number | null = null;
+  let handLinkNote = $state('');
+
+  async function ensureHandLinks(id: number): Promise<void> {
+    try {
+      const report = await ensureOutreachHandLinks(id);
+      if (id !== workshopId) return;
+      handLinkNote = handLinkReportMessage(report) ?? '';
+      if (report.created > 0 || (report.drafted ?? 0) > 0) {
+        await refreshQuietly();
+        void loadResults();
+      }
+    } catch {
+      if (id !== workshopId) return;
+      handLinkNote = 'ShortLinks for hand-posted channels could not be made. Everything else here still works, and opening this page again tries again.';
+    }
+  }
+
   async function load(): Promise<void> {
     loadError = null;
     notFound = false;
@@ -97,6 +119,10 @@
       autoStartTried = workshopId;
       await start();
       return;
+    }
+    if (autoStart && view?.hand_links_pending && handLinksTried !== workshopId) {
+      handLinksTried = workshopId;
+      void ensureHandLinks(workshopId);
     }
     if (view?.outreach) await loadResults();
   }
@@ -201,10 +227,12 @@
   {/if}
   <!-- Always rendered, so a late results message is announced. -->
   <p class="text-muted results-status" role="status">{resultsLine}</p>
+  <p class="text-warn hand-link-status" role="status">{handLinkNote}</p>
 </div>
 
 <style>
-  .results-status:empty {
+  .results-status:empty,
+  .hand-link-status:empty {
     display: none;
   }
 </style>

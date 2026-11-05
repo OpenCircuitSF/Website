@@ -515,6 +515,10 @@ type outreachPanelView struct {
 	ThumbReason string `json:"thumb_reason,omitempty"`
 	// LinkReport is set only on Start's response (#0568).
 	LinkReport *outreachLinkReport `json:"link_report,omitempty"`
+	// HandLinks is one row per switched-on hand-posted channel by wave (#0623).
+	HandLinks []outreachHandLinkView `json:"hand_links"`
+	// HandLinksPending is true when outreach is available and a row has no URL.
+	HandLinksPending bool `json:"hand_links_pending"`
 }
 
 func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop, o *outreach.Outreach) (outreachPanelView, error) {
@@ -528,6 +532,7 @@ func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop,
 		Channels:    h.channelViews(nil),
 		Waves:       []outreachWaveView{},
 		Posts:       []outreachPostView{},
+		HandLinks:   []outreachHandLinkView{},
 	}
 	switch {
 	case !h.linksEnabled():
@@ -551,6 +556,12 @@ func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop,
 		if v.CanReset, err = h.store.CanReset(ctx, o.ID); err != nil {
 			return v, err
 		}
+		links, err := h.store.ListPostLinks(ctx, o.ID)
+		if err != nil {
+			return v, err
+		}
+		v.HandLinks, v.HandLinksPending = h.handLinkViews(links, posts)
+		v.HandLinksPending = v.HandLinksPending && v.Available
 		f := h.facts(wk)
 		for _, p := range h.enabledPosts(posts) {
 			v.Posts = append(v.Posts, h.postView(p, f, wk.Status))

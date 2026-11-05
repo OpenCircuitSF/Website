@@ -176,7 +176,7 @@ describe('OutreachBulkActions', () => {
 
   it('says by-hand channels are not scheduled and links the posting-hour setting, times with PT (#0587)', async () => {
     const d = await open();
-    expect(d.getByText(/Posts you make by hand \(Instagram, TikTok, YouTube\) are not scheduled\./)).toBeTruthy();
+    expect(d.getByText(/Posts you make by hand \(Instagram, TikTok, YouTube Shorts\) are not scheduled\./)).toBeTruthy();
     expect(d.getByRole('link', { name: 'change it in Settings' }).getAttribute('href')).toBe('#/settings?section=outreach');
     expect(d.getByText(/Bluesky · Reminder — Fri, Nov 27, 5:00 PM PT/)).toBeTruthy();
   });

@@ -19,6 +19,7 @@ import type {
   ConnectionTestResult,
   OutreachLinksView,
   OutreachDraftAllResult,
+  OutreachLinkReport,
   OutreachScheduleAllResult,
   OutreachLocation,
   FlyerLinkInfo,
@@ -1375,6 +1376,11 @@ export function getWorkshopOutreachLinks(workshopId: number): Promise<OutreachLi
 /** POST /admin/workshops/{id}/outreach/links — create every missing tracked link (idempotent). */
 export function createWorkshopOutreachLinks(workshopId: number): Promise<OutreachLinksView> {
   return apiPost<OutreachLinksView>(`/admin/workshops/${workshopId}/outreach/links`);
+}
+
+/** POST /admin/workshops/{id}/outreach/hand-links — make missing hand-posted links, and a draft with each where the wave is written (#0623). */
+export function ensureOutreachHandLinks(workshopId: number): Promise<OutreachLinkReport> {
+  return apiPost<OutreachLinkReport>(`/admin/workshops/${workshopId}/outreach/hand-links`);
 }
 
 /** POST /admin/workshops/{id}/outreach/draft-all — draft every empty cell; never overwrites a post. */

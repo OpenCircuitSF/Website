@@ -893,6 +893,16 @@ export interface WorkshopOutreach {
   can_reset?: boolean;
   /** Set only on Start's response (#0568). */
   link_report?: OutreachLinkReport;
+  /** #0623: one row per switched-on hand-posted channel by wave. */
+  hand_links?: OutreachHandLink[];
+  /** #0623: outreach is available and a row in hand_links has no URL. */
+  hand_links_pending?: boolean;
+}
+
+export interface OutreachHandLink {
+  channel: string;
+  wave: string;
+  short_url: string | null;
 }
 
 export interface OutreachLinkFailure {
@@ -909,6 +919,8 @@ export interface OutreachLinkReport {
   existing: number;
   failed: OutreachLinkFailure[];
   stopped: boolean;
+  /** #0623: posts the hand-links pass made alongside new links. */
+  drafted?: number;
 }
 
 export interface OutreachLinkRow {

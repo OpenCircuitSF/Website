@@ -40,9 +40,9 @@ const (
 	DefaultOutreachHashtags = "#sanfrancisco #electronics"
 	DefaultOutreachPostHour = "10"
 	// DefaultOutreachChannels is the set of channels outreach drafts, counts
-	// and shows until Settings says otherwise (#0588): the two the site posts
-	// itself and Instagram. TikTok and YouTube need a video, so they start off.
-	DefaultOutreachChannels = "bluesky,mastodon,instagram"
+	// and shows until Settings says otherwise (#0588, #0623): every channel
+	// starts on. The last three are posted by hand.
+	DefaultOutreachChannels = "bluesky,mastodon,instagram,tiktok,youtube"
 	// MaxOutreachHashtags bounds the site-wide set.
 	MaxOutreachHashtags = 6
 	// MaxHashtagRunes bounds one tag after its "#"; Bluesky's tag facet

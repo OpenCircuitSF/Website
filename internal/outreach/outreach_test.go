@@ -17,7 +17,7 @@ func TestChannelTable(t *testing.T) {
 		{"mastodon", "Mastodon", "mastodon", "social", 500, true},
 		{"instagram", "Instagram", "instagram", "social", 0, false},
 		{"tiktok", "TikTok", "tiktok", "video", 0, false},
-		{"youtube", "YouTube", "youtube", "video", 0, false},
+		{"youtube", "YouTube Shorts", "youtube", "video", 0, false},
 	}
 	got := Channels()
 	if len(got) != len(want) {

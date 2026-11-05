@@ -147,7 +147,7 @@
         <a href={adminSettingsHash('outreach')}>change it in Settings</a>.
       </p>
     {/if}
-    <p class="text-muted">Posts you make by hand (Instagram, TikTok, YouTube) are not scheduled.</p>
+    <p class="text-muted">Posts you make by hand (Instagram, TikTok, YouTube Shorts) are not scheduled.</p>
 
     {#if plan.skipped.length > 0}
       <h3>Skipped</h3>

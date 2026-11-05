@@ -13,6 +13,7 @@ const getWorkshopOutreachResults = vi.fn<(id: number) => Promise<OutreachResults
 const startOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const resetOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const scheduleAllOutreach = vi.fn();
+const ensureOutreachHandLinks = vi.fn();
 const takedownOutreachPost = vi.fn();
 const listOutreachFlyers = vi.fn<() => Promise<{ flyers: { id: number; workshop_id: number }[] }>>();
 vi.mock('../../lib/api', () => ({
@@ -20,6 +21,7 @@ vi.mock('../../lib/api', () => ({
   startOutreach: (id: number) => startOutreach(id),
   getWorkshopOutreachResults: (id: number) => getWorkshopOutreachResults(id),
   createWorkshopOutreachLinks: vi.fn(),
+  ensureOutreachHandLinks: (id: number) => ensureOutreachHandLinks(id),
   draftAllOutreach: vi.fn(),
   resetOutreach: (id: number) => resetOutreach(id),
   listOutreachFlyers: () => listOutreachFlyers(),
@@ -46,6 +48,7 @@ afterEach(() => {
   listOutreachFlyers.mockReset();
   scheduleAllOutreach.mockReset();
   takedownOutreachPost.mockReset();
+  ensureOutreachHandLinks.mockReset();
 });
 
 const channels = [
@@ -153,6 +156,50 @@ describe('OutreachWorkshop', () => {
     expect(byHand.textContent).toContain('Instagram words');
     expect(byHand.textContent).not.toContain('Bluesky words');
     expect(byHand.hasAttribute('open')).toBe(false);
+  });
+
+  describe('hand-posted links (#0623)', () => {
+    const noResults = { status: 'not_started', posts: [], totals: null } as unknown as OutreachResults;
+    const report = (over = {}) => ({ created: 0, existing: 3, failed: [], stopped: false, drafted: 0, ...over });
+
+    it('makes hand-posted links once when the view says they are missing', async () => {
+      getWorkshopOutreach.mockResolvedValue(view({ hand_links_pending: true }));
+      getWorkshopOutreachResults.mockResolvedValue(noResults);
+      ensureOutreachHandLinks.mockResolvedValue(report());
+      render(OutreachWorkshop, { workshopId: 5 });
+      await screen.findByRole('heading', { name: 'Soldering 101' });
+      await waitFor(() => expect(ensureOutreachHandLinks).toHaveBeenCalledWith(5));
+      expect(ensureOutreachHandLinks).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not call it when nothing is missing', async () => {
+      getWorkshopOutreach.mockResolvedValue(view({ hand_links_pending: false }));
+      getWorkshopOutreachResults.mockResolvedValue(noResults);
+      render(OutreachWorkshop, { workshopId: 5 });
+      await screen.findByRole('heading', { name: 'Soldering 101' });
+      await waitFor(() => expect(getWorkshopOutreachResults).toHaveBeenCalled());
+      expect(ensureOutreachHandLinks).not.toHaveBeenCalled();
+    });
+
+    it('keeps the page and shows a note when making the links fails', async () => {
+      getWorkshopOutreach.mockResolvedValue(view({ hand_links_pending: true }));
+      getWorkshopOutreachResults.mockResolvedValue(noResults);
+      ensureOutreachHandLinks.mockRejectedValue(new Error('boom'));
+      render(OutreachWorkshop, { workshopId: 5 });
+      expect(await screen.findByText(/ShortLinks for hand-posted channels could not be made/)).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'Soldering 101' })).toBeTruthy();
+      expect(ensureOutreachHandLinks).toHaveBeenCalledTimes(1);
+    });
+
+    it('reloads the view after links were created', async () => {
+      getWorkshopOutreach.mockResolvedValueOnce(view({ hand_links_pending: true })).mockResolvedValue(view({ hand_links_pending: false }));
+      getWorkshopOutreachResults.mockResolvedValue(noResults);
+      ensureOutreachHandLinks.mockResolvedValue(report({ created: 6, drafted: 4 }));
+      render(OutreachWorkshop, { workshopId: 5 });
+      await waitFor(() => expect(getWorkshopOutreach).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(getWorkshopOutreachResults.mock.calls.length).toBeGreaterThanOrEqual(2));
+      expect(ensureOutreachHandLinks).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('points at Settings when ShortLinks is not connected', async () => {

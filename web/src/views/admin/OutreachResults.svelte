@@ -51,7 +51,7 @@
   const channelEnabled = (_name: string): boolean => true;
   const mastodonNote = $derived(results ? mastodonCountsNote(results) : null);
   // The summary response carries no channel list; labels are fixed server-side.
-  const summaryLabels: Record<string, string> = { bluesky: 'Bluesky', mastodon: 'Mastodon', instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube' };
+  const summaryLabels: Record<string, string> = { bluesky: 'Bluesky', mastodon: 'Mastodon', instagram: 'Instagram', tiktok: 'TikTok', youtube: 'YouTube Shorts' };
 
   // #0552: a response for a workshop no longer selected is discarded.
   let loadSeq = 0;

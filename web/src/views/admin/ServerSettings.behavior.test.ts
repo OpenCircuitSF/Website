@@ -141,7 +141,7 @@ describe('ServerSettings: outreach channels (#0588)', () => {
       {
         name: 'outreach',
         error: '',
-        fields: [{ key: 'outreach_channels', env_var: '', source, value, default: 'bluesky,mastodon,instagram', restart_required: false, pending_restart: false }],
+        fields: [{ key: 'outreach_channels', env_var: '', source, value, default: 'bluesky,mastodon,instagram,tiktok,youtube', restart_required: false, pending_restart: false }],
       },
     ],
   });
@@ -152,9 +152,14 @@ describe('ServerSettings: outreach channels (#0588)', () => {
   }
   const box = (name: string) => screen.getByRole('checkbox', { name }) as HTMLInputElement;
 
-  it('shows the default three on and TikTok and YouTube off', async () => {
-    await mountChannels(channelsFixture('bluesky,mastodon,instagram'));
-    expect(['Bluesky', 'Mastodon', 'Instagram', 'TikTok', 'YouTube'].map((n) => box(n).checked)).toEqual([true, true, true, false, false]);
+  it('shows a saved three on and TikTok and YouTube Shorts off', async () => {
+    await mountChannels(channelsFixture('bluesky,mastodon,instagram', 'database'));
+    expect(['Bluesky', 'Mastodon', 'Instagram', 'TikTok', 'YouTube Shorts'].map((n) => box(n).checked)).toEqual([true, true, true, false, false]);
+  });
+
+  it('shows all five on by default', async () => {
+    await mountChannels(channelsFixture('bluesky,mastodon,instagram,tiktok,youtube'));
+    expect(['Bluesky', 'Mastodon', 'Instagram', 'TikTok', 'YouTube Shorts'].map((n) => box(n).checked)).toEqual([true, true, true, true, true]);
   });
 
   it('saves the switched set as a comma list in channel order', async () => {
@@ -168,7 +173,7 @@ describe('ServerSettings: outreach channels (#0588)', () => {
 
   it('the last channel left on cannot be switched off', async () => {
     await mountChannels(channelsFixture('youtube', 'database'));
-    expect(box('YouTube').disabled).toBe(true);
+    expect(box('YouTube Shorts').disabled).toBe(true);
     expect(box('Bluesky').disabled).toBe(false);
   });
 

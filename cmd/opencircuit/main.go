@@ -1621,6 +1621,7 @@ func adminRoutes(
 			// #0592: reset a workshop's outreach while nothing is public.
 			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/reset", http.HandlerFunc(adminOutreachH.Reset)},
 			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/draft-all", http.HandlerFunc(adminOutreachH.DraftAll)},
+			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/hand-links", http.HandlerFunc(adminOutreachH.EnsureHandLinks)},
 			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/schedule-all", http.HandlerFunc(adminOutreachH.ScheduleAll)},
 			adminRoute{http.MethodGet, "/admin/outreach-results", http.HandlerFunc(adminOutreachH.ResultsSummary)},
 			adminRoute{http.MethodGet, "/admin/outreach-locations", http.HandlerFunc(adminOutreachH.ListLocations)},

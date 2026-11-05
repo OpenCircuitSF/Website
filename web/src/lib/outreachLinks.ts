@@ -32,6 +32,14 @@ export function linkReportMessage(r: OutreachLinkReport | undefined | null): str
   return `${n} ${n === 1 ? 'link' : 'links'} could not be created: ${list}. Everything else is saved — use Create missing links to try again.`;
 }
 
+/** The warning for a hand-links pass, or null when nothing failed (#0623). */
+export function handLinkReportMessage(r: OutreachLinkReport | undefined | null): string | null {
+  if (!r || r.failed.length === 0) return null;
+  const n = r.failed.length;
+  const list = r.failed.map((f) => `${f.label} (${linkFailureReasonLabel(f.reason)})`).join(', ');
+  return `${n} ${n === 1 ? 'ShortLink' : 'ShortLinks'} could not be created: ${list}. Everything else here still works, and opening this page again tries again.`;
+}
+
 const SKIP_REASONS: Record<string, string> = {
   time_passed: 'time has passed',
   no_suggested_time: 'no suggested time — schedule Announce by hand',

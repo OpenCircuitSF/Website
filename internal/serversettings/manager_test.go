@@ -231,3 +231,25 @@ func TestConcurrentApplyAndRead(t *testing.T) {
 	close(stop)
 	wg.Wait()
 }
+
+func TestOutreachChannelsDefaultIsEveryChannel(t *testing.T) {
+	m := load(t, newFake(), nil, nil, nil)
+	got := m.OutreachChannels()
+	if len(got) != len(OutreachChannelNames) {
+		t.Fatalf("channels = %v, want %v", got, OutreachChannelNames)
+	}
+	for i, n := range OutreachChannelNames {
+		if got[i] != n {
+			t.Errorf("channels[%d] = %q, want %q", i, got[i], n)
+		}
+	}
+}
+
+func TestOutreachChannelsSavedValueIsRespected(t *testing.T) {
+	st := newFake()
+	st.rows[KeyOutreachChannels] = "bluesky,mastodon"
+	got := load(t, st, nil, nil, nil).OutreachChannels()
+	if len(got) != 2 || got[0] != "bluesky" || got[1] != "mastodon" {
+		t.Errorf("channels = %v, want the saved two", got)
+	}
+}

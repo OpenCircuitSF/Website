@@ -38,6 +38,10 @@ type outreachLinkReport struct {
 	Existing int                   `json:"existing"` // includes adopted post links
 	Failed   []outreachLinkFailure `json:"failed"`   // never null
 	Stopped  bool                  `json:"stopped"`
+	// Drafted counts the posts EnsureHandLinks made alongside new links (#0623).
+	Drafted int `json:"drafted"`
+	// createdLinks holds the slot links this pass inserted; never sent.
+	createdLinks []outreach.PostLink
 }
 
 // postLinkRequest is the ShortLinks request for one channel x wave slot. No
@@ -111,6 +115,12 @@ func sortedLocations(locs []outreach.Location) []outreach.Location {
 // failures are reported per link and never abort the pass, except a rate
 // limit or the deadline, which stop it with the rest reported as not tried.
 func (h *AdminOutreachHandler) ensureLinks(r *http.Request, actorID int64, o outreach.Outreach, wk workshops.Workshop) (outreachLinkReport, error) {
+	return h.ensureLinksFor(r, actorID, o, wk, h.enabledChannels(), true)
+}
+
+// ensureLinksFor is ensureLinks limited to the given channels, with or without
+// the flyer locations.
+func (h *AdminOutreachHandler) ensureLinksFor(r *http.Request, actorID int64, o outreach.Outreach, wk workshops.Workshop, chs []outreach.Channel, withFlyers bool) (outreachLinkReport, error) {
 	report := outreachLinkReport{Failed: []outreachLinkFailure{}}
 	ctx, cancel := context.WithTimeout(r.Context(), outreachLinksTimeout)
 	defer cancel()
@@ -145,7 +155,7 @@ func (h *AdminOutreachHandler) ensureLinks(r *http.Request, actorID int64, o out
 	}
 
 	var tasks []linkTask
-	for _, ch := range h.enabledChannels() {
+	for _, ch := range chs {
 		for _, wv := range outreach.Waves() {
 			slot := [2]string{ch.Name, wv.Name}
 			if haveLink[slot] {
@@ -163,15 +173,17 @@ func (h *AdminOutreachHandler) ensureLinks(r *http.Request, actorID int64, o out
 			tasks = append(tasks, linkTask{kind: "post", channel: ch, wave: wv})
 		}
 	}
-	for _, l := range sortedLocations(locs) {
-		if !l.Active {
-			continue
+	if withFlyers {
+		for _, l := range sortedLocations(locs) {
+			if !l.Active {
+				continue
+			}
+			if haveFlyer[l.ID] {
+				report.Existing++
+				continue
+			}
+			tasks = append(tasks, linkTask{kind: "flyer", location: l})
 		}
-		if haveFlyer[l.ID] {
-			report.Existing++
-			continue
-		}
-		tasks = append(tasks, linkTask{kind: "flyer", location: l})
 	}
 	if len(tasks) == 0 {
 		return report, nil
@@ -216,6 +228,7 @@ func (h *AdminOutreachHandler) ensureLinks(r *http.Request, actorID int64, o out
 				break
 			}
 			report.Created++
+			report.createdLinks = append(report.createdLinks, row)
 			if h.auditor != nil {
 				id := row.ID
 				h.auditor.Record(r.Context(), audit.Entry{
