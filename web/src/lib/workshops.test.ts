@@ -7,12 +7,16 @@ import {
   hasNoUpcoming,
   nextWorkshops,
   NEXT_UP_LIMIT,
+  typeFilterOptions,
+  selectedTypeSlug,
+  filterListByType,
+  isUnknownType,
 } from './workshops';
 import type { PublicWorkshop, WorkshopsListResponse } from './types';
 
 function workshop(fields: Partial<PublicWorkshop> = {}): PublicWorkshop {
   return {
-    event_type: { slug: 'workshop', name: 'Workshop' },
+    event_type: { slug: 'workshop', name: 'Workshop', sort_order: 10 },
     slug: 'soldering-101',
     title: 'Soldering fundamentals',
     status: 'published',
@@ -114,5 +118,46 @@ describe('nextWorkshops', () => {
   it('returns [] when upcoming is empty, and clamps a negative limit to []', () => {
     expect(nextWorkshops({ upcoming: [] })).toEqual([]);
     expect(nextWorkshops({ upcoming }, -1)).toEqual([]);
+  });
+});
+
+describe('type filter (#0614)', () => {
+  const ofType = (slug: string, name: string, sort_order: number, own: string) =>
+    workshop({ slug: own, event_type: { slug, name, sort_order } });
+  const hack = ofType('hack-night', 'Hack Night', 20, 'h1');
+  const shop = ofType('workshop', 'Workshop', 10, 'w1');
+  const pastHack = ofType('hack-night', 'Hack Night', 20, 'h2');
+
+  it('offers only types with a visible listing, in sort order', () => {
+    expect(typeFilterOptions({ upcoming: [hack, shop], past: [] }).map((o) => o.slug)).toEqual(['workshop', 'hack-night']);
+    const tied = [ofType('b', 'Beta', 5, 'x'), ofType('a', 'Alpha', 5, 'y')];
+    expect(typeFilterOptions({ upcoming: tied, past: [] }).map((o) => o.name)).toEqual(['Alpha', 'Beta']);
+    expect(typeFilterOptions({ upcoming: [], past: [] })).toEqual([]);
+  });
+
+  it('dedupes across upcoming and past', () => {
+    expect(typeFilterOptions({ upcoming: [hack], past: [pastHack] })).toHaveLength(1);
+  });
+
+  it('filters both lists', () => {
+    const list = { upcoming: [hack, shop], past: [pastHack] };
+    const got = filterListByType(list, 'hack-night');
+    expect(got.upcoming.map((w) => w.slug)).toEqual(['h1']);
+    expect(got.past.map((w) => w.slug)).toEqual(['h2']);
+    expect(filterListByType(list, null)).toBe(list);
+  });
+
+  it('reports an unknown type', () => {
+    const options = typeFilterOptions({ upcoming: [hack], past: [] });
+    expect(isUnknownType(options, 'nonsense')).toBe(true);
+    expect(isUnknownType(options, 'hack-night')).toBe(false);
+    expect(isUnknownType(options, null)).toBe(false);
+  });
+
+  it('treats an empty type as none', () => {
+    expect(selectedTypeSlug(new URLSearchParams(''))).toBeNull();
+    expect(selectedTypeSlug(new URLSearchParams('type='))).toBeNull();
+    expect(selectedTypeSlug(new URLSearchParams('type=%20'))).toBeNull();
+    expect(selectedTypeSlug(new URLSearchParams('type=workshop&type=x'))).toBe('workshop');
   });
 });

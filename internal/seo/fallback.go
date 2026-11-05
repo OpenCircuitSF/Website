@@ -82,7 +82,7 @@ type staticCopy struct {
 // way before comparing. (The /about and /privacy pages left this table at
 // #0520 -- see the note inside the map below.)
 //
-// /workshops and /archive are NOT pageStatic routes (they're
+// /events and /archive are NOT pageStatic routes (they're
 // pageWorkshopsIndex/pageArchiveIndex, built from live store data below),
 // but their static headings/ledes/empty-state strings are entered here too
 // so the same drift guard covers them -- renderWorkshopsIndexPage and
@@ -111,7 +111,7 @@ var staticPageCopy = map[string]staticCopy{
 			{Text: `Get notified about new workshops. Pick the topics you care about — nothing else.`},
 		},
 	},
-	"/workshops": {
+	"/events": {
 		Source: "web/src/views/WorkshopsIndex.svelte",
 		H1:     workshopsH1,
 		Blocks: []copyBlock{
@@ -144,11 +144,11 @@ var staticPageCopy = map[string]staticCopy{
 // from web/src/views/Home.svelte, the same normalization the staticPageCopy
 // guard uses.
 const (
-	workshopsH1            = "Workshops"
+	workshopsH1            = "Events"
 	workshopsUpcomingH2    = "Upcoming"
-	workshopsUpcomingEmpty = `Nothing scheduled yet — subscribe and we'll email you the moment a new workshop is announced.`
-	workshopsPastH2        = "Past workshops"
-	workshopsPastEmpty     = `No past workshops yet — this group is just getting started.`
+	workshopsUpcomingEmpty = `Nothing scheduled yet — subscribe and we'll email you the moment a new event is announced.`
+	workshopsPastH2        = "Past events"
+	workshopsPastEmpty     = `No past events yet — this group is just getting started.`
 
 	archiveH1    = "Archive"
 	archiveLede  = `Past emails from Open Circuit SF.`
@@ -156,7 +156,7 @@ const (
 
 	homeNextUpH2    = "Next up"
 	homeNextUpEmpty = `Nothing scheduled yet — check back soon, or subscribe below.`
-	homeSeeAll      = "See all workshops"
+	homeSeeAll      = "See all events"
 	homeReadArchive = "Read the archive"
 
 	// nextUpLimit is Home.svelte's own cap on the "Next up" list
@@ -184,14 +184,14 @@ type navLink struct {
 // visible route is a plain link.
 var fallbackNav = []navLink{
 	{"/", "Home"},
-	{"/workshops", "Workshops"},
+	{"/events", "Events"},
 	{"/about", "About"},
 	{"/subscribe", "Subscribe"},
 	{"/archive", "Archive"},
 	{"/privacy", "Privacy policy"},
 }
 
-// workshopListItem is one row of the /workshops index's Upcoming or Past
+// workshopListItem is one row of the /events index's Upcoming or Past
 // list.
 type workshopListItem struct {
 	Slug    string
@@ -234,7 +234,7 @@ type pageTemplateData struct {
 
 	// pageHome (#0523): the static "/" copy plus the live "Next up" list.
 	// The same workshopListItem shape pageWorkshopsIndex renders, so a
-	// workshop's server fallback row and its /workshops row agree.
+	// workshop's server fallback row and its /events row agree.
 	NextUpHeading string
 	NextUpEmpty   string
 	NextUpItems   []workshopListItem
@@ -265,6 +265,7 @@ type pageTemplateData struct {
 	ArchiveItems []archiveListItem
 
 	// pageWorkshop
+	TypeName      string // the listing's type name (#0614); "" renders no line
 	Canceled      bool
 	DateLabel     string
 	StartsAt      string // raw RFC 3339, for <time datetime="...">
@@ -302,11 +303,11 @@ const pageTemplateSource = `
 <h1>{{.H1}}</h1>
 {{if eq .Kind "static"}}{{range .Blocks}}{{if .Heading}}<h2>{{.Text}}</h2>{{else}}<p>{{.Text}}</p>{{end}}{{end}}
 {{else if eq .Kind "content"}}{{range .IntroBlocks}}{{template "contentBlock" .}}{{end}}{{range .Sections}}<section><h2>{{.Heading}}</h2>{{range .Blocks}}{{template "contentBlock" .}}{{end}}</section>{{end}}
-{{else if eq .Kind "home"}}{{range .Blocks}}{{if .Heading}}<h2>{{.Text}}</h2>{{else}}<p>{{.Text}}</p>{{end}}{{end}}<section><h2>{{.NextUpHeading}}</h2>{{if .NextUpItems}}<ul>{{range .NextUpItems}}<li><a href="/workshops/{{.Slug}}">{{.Title}}</a> — {{.Meta}}{{if .Summary}}<p>{{.Summary}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.NextUpEmpty}}</p>{{end}}<p><a href="/workshops">{{.SeeAllLabel}}</a> · <a href="/archive">{{.ReadArchiveLabel}}</a></p></section>
-{{else if eq .Kind "workshopsIndex"}}<h2>{{.UpcomingHeading}}</h2>{{if .UpcomingItems}}<ul>{{range .UpcomingItems}}<li><a href="/workshops/{{.Slug}}">{{.Title}}</a><br>{{.Meta}}{{if .Summary}}<p>{{.Summary}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.UpcomingEmpty}}</p>{{end}}
-<h2>{{.PastHeading}}</h2>{{if .PastItems}}<ul>{{range .PastItems}}<li><a href="/workshops/{{.Slug}}">{{.Title}}</a><br>{{.Meta}}{{if .Summary}}<p>{{.Summary}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.PastEmpty}}</p>{{end}}
+{{else if eq .Kind "home"}}{{range .Blocks}}{{if .Heading}}<h2>{{.Text}}</h2>{{else}}<p>{{.Text}}</p>{{end}}{{end}}<section><h2>{{.NextUpHeading}}</h2>{{if .NextUpItems}}<ul>{{range .NextUpItems}}<li><a href="/events/{{.Slug}}">{{.Title}}</a> — {{.Meta}}{{if .Summary}}<p>{{.Summary}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.NextUpEmpty}}</p>{{end}}<p><a href="/events">{{.SeeAllLabel}}</a> · <a href="/archive">{{.ReadArchiveLabel}}</a></p></section>
+{{else if eq .Kind "workshopsIndex"}}<h2>{{.UpcomingHeading}}</h2>{{if .UpcomingItems}}<ul>{{range .UpcomingItems}}<li><a href="/events/{{.Slug}}">{{.Title}}</a><br>{{.Meta}}{{if .Summary}}<p>{{.Summary}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.UpcomingEmpty}}</p>{{end}}
+<h2>{{.PastHeading}}</h2>{{if .PastItems}}<ul>{{range .PastItems}}<li><a href="/events/{{.Slug}}">{{.Title}}</a><br>{{.Meta}}{{if .Summary}}<p>{{.Summary}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.PastEmpty}}</p>{{end}}
 {{else if eq .Kind "archiveIndex"}}<p>{{.ArchiveLede}}</p>{{if .ArchiveItems}}<ul>{{range .ArchiveItems}}<li><a href="/archive/{{.Slug}}">{{.Subject}}</a> <time datetime="{{.DateAttr}}">{{.DateLabel}}</time>{{if .Preheader}}<p>{{.Preheader}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.ArchiveEmpty}}</p>{{end}}
-{{else if eq .Kind "workshop"}}{{if .Canceled}}<p>This workshop has been canceled.</p>{{end}}<dl><dt>When</dt><dd><time datetime="{{.StartsAt}}">{{.DateLabel}}</time></dd><dt>Where</dt><dd>{{if .LocationLines}}{{range .LocationLines}}{{.}}<br>{{end}}{{else}}Location TBA{{end}}</dd></dl>{{if .SignupHref}}<p><a href="{{.SignupHref}}" target="_blank" rel="noopener noreferrer">Register for this workshop</a></p>{{end}}{{if .BodyHTML}}<div class="workshop-body">{{.BodyHTML}}</div>{{end}}<p><a href="/workshops">See all workshops</a></p>
+{{else if eq .Kind "workshop"}}{{if .TypeName}}<p>{{.TypeName}}</p>{{end}}{{if .Canceled}}<p>This event has been canceled.</p>{{end}}<dl><dt>When</dt><dd><time datetime="{{.StartsAt}}">{{.DateLabel}}</time></dd><dt>Where</dt><dd>{{if .LocationLines}}{{range .LocationLines}}{{.}}<br>{{end}}{{else}}Location TBA{{end}}</dd></dl>{{if .SignupHref}}<p><a href="{{.SignupHref}}" target="_blank" rel="noopener noreferrer">Register for this event</a></p>{{end}}{{if .BodyHTML}}<div class="workshop-body">{{.BodyHTML}}</div>{{end}}<p><a href="/events">See all events</a></p>
 {{else if eq .Kind "archiveEntry"}}<p><time datetime="{{.DateAttr}}">{{.DateLabel}}</time></p>{{if .BodyHTML}}<div class="archive-body">{{.BodyHTML}}</div>{{end}}<p><a href="/archive">See the archive</a></p>
 {{end}}</main>{{end}}`
 
@@ -385,7 +386,7 @@ func (r *Renderer) renderPage(p pageContent) (pageHTML string, cacheable bool) {
 		w := p.workshop
 		bodyHTML, cacheable := renderMarkdownOrEmpty(w.BodyMD)
 		return r.execTemplate(pageTemplateData{
-			Kind: "workshop", H1: w.Title,
+			Kind: "workshop", H1: w.Title, TypeName: w.EventTypeName,
 			Canceled:      w.Status == WorkshopCanceled,
 			DateLabel:     workshopDateLabel(w.StartsAt, w.EndsAt),
 			StartsAt:      w.StartsAt,
@@ -535,12 +536,15 @@ func buildWorkshopsIndexItems(all []Workshop, now time.Time) (upcoming, past []w
 	return upcoming, past
 }
 
-// toWorkshopListItem builds one /workshops index row (#0519's plan §3):
-// title link, a meta line combining the date label and location label
+// toWorkshopListItem builds one /events index row (#0519's plan §3):
+// title link, a meta line combining the type name, date label and location label
 // (prefixed "Canceled · " when the workshop's status is canceled), and the
 // summary if non-empty.
 func toWorkshopListItem(w Workshop) workshopListItem {
 	meta := workshopDateLabel(w.StartsAt, w.EndsAt) + " · " + workshopLocationLabel(w.LocationName)
+	if w.EventTypeName != "" {
+		meta = w.EventTypeName + " · " + meta
+	}
 	if w.Status == WorkshopCanceled {
 		meta = "Canceled · " + meta
 	}

@@ -44,11 +44,11 @@ func TestDestinationURLExact(t *testing.T) {
 	ch, _ := ChannelByName("bluesky")
 	w, _ := WaveByName("reminder")
 	got := DestinationURL("https://www.opencircuitsf.com/", Facts{Slug: "soldering-101"}, ch, w)
-	want := "https://www.opencircuitsf.com/workshops/soldering-101?utm_campaign=soldering-101&utm_content=reminder&utm_medium=social&utm_source=bluesky"
+	want := "https://www.opencircuitsf.com/events/soldering-101?utm_campaign=soldering-101&utm_content=reminder&utm_medium=social&utm_source=bluesky"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}
-	if rel := DestinationURL("", Facts{Slug: "x"}, ch, w); !strings.HasPrefix(rel, "/workshops/x?") {
+	if rel := DestinationURL("", Facts{Slug: "x"}, ch, w); !strings.HasPrefix(rel, "/events/x?") {
 		t.Errorf("relative = %q", rel)
 	}
 }

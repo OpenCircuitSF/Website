@@ -95,6 +95,7 @@ type eventLD struct {
 	EventAttendanceMode string         `json:"eventAttendanceMode"`
 	Location            eventPlace     `json:"location"`
 	Description         string         `json:"description,omitempty"`
+	Keywords            string         `json:"keywords,omitempty"`
 	Organizer           eventOrganizer `json:"organizer"`
 	Image               string         `json:"image,omitempty"`
 	URL                 string         `json:"url"`
@@ -153,9 +154,10 @@ func buildEvent(w Workshop, baseURL string) (eventLD, bool) {
 		EventAttendanceMode: eventAttendanceOffline,
 		Location:            loc,
 		Description:         w.Summary,
+		Keywords:            w.EventTypeName,
 		Organizer:           eventOrganizer{Type: "Organization", Name: "Open Circuit SF", URL: baseURL + "/"},
 		Image:               image,
-		URL:                 baseURL + "/workshops/" + w.Slug,
+		URL:                 baseURL + "/events/" + w.Slug,
 	}, true
 }
 

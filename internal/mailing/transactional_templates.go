@@ -258,7 +258,7 @@ func BuildAdminAlertEmail(to, baseURL, subject string, lines []string) Message {
 func BuildWelcomeEmail(to, baseURL, listDomain, manageToken string, interestNames []string, physicalAddress string) Message {
 	manageURL := baseURL + "/preferences?token=" + manageToken
 	unsubscribeURL := baseURL + "/unsubscribe?token=" + manageToken
-	workshopsURL := baseURL + "/workshops"
+	workshopsURL := baseURL + "/events"
 
 	interestLine := "You didn't pick any specific topics, so you'll get general announcements about upcoming workshops."
 	if len(interestNames) > 0 {

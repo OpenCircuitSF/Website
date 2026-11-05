@@ -129,7 +129,7 @@ func TestAdminOutreachLinks_StartCreatesEveryLink(t *testing.T) {
 			flyers++
 			if req.UTMContent == locA.Code {
 				sawFlyer = true
-				want := fmt.Sprintf("https://site.example.test/workshops/%s?utm_campaign=%s&utm_content=%s&utm_medium=print&utm_source=flyer", w.Slug, w.Slug, locA.Code)
+				want := fmt.Sprintf("https://site.example.test/events/%s?utm_campaign=%s&utm_content=%s&utm_medium=print&utm_source=flyer", w.Slug, w.Slug, locA.Code)
 				if req.DestinationURL != want {
 					t.Errorf("flyer destination = %q, want %q", req.DestinationURL, want)
 				}
@@ -139,7 +139,7 @@ func TestAdminOutreachLinks_StartCreatesEveryLink(t *testing.T) {
 		posts++
 		if req.UTMSource == "bluesky" && req.UTMContent == "announce" {
 			sawPost = true
-			want := fmt.Sprintf("https://site.example.test/workshops/%s?utm_campaign=%s&utm_content=announce&utm_medium=social&utm_source=bluesky", w.Slug, w.Slug)
+			want := fmt.Sprintf("https://site.example.test/events/%s?utm_campaign=%s&utm_content=announce&utm_medium=social&utm_source=bluesky", w.Slug, w.Slug)
 			if req.DestinationURL != want || req.UTMMedium != "social" || req.UTMCampaign != w.Slug || req.Placement != "bluesky" {
 				t.Errorf("post request = %+v, want destination %q", req, want)
 			}

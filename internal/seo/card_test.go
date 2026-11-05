@@ -371,7 +371,7 @@ func TestWorkshopRouteMetaAndCardHandler_StatusCrossProduct(t *testing.T) {
 
 	site := NewSite([]byte(testTemplate), testBaseURL, source, nil)
 	mux := http.NewServeMux()
-	mux.Handle("GET /workshops/{slug}/og.png", site.WorkshopCardHandler())
+	mux.Handle("GET /events/{slug}/og.png", site.WorkshopCardHandler())
 
 	cases := []struct {
 		name        string
@@ -389,8 +389,8 @@ func TestWorkshopRouteMetaAndCardHandler_StatusCrossProduct(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			body := string(site.renderer.Render("/workshops/" + tc.slug))
-			cardURL := "/workshops/" + tc.slug + "/og.png"
+			body := string(site.renderer.Render("/events/" + tc.slug))
+			cardURL := "/events/" + tc.slug + "/og.png"
 			hasCardURL := strings.Contains(body, cardURL)
 			hasDefault := strings.Contains(body, "/og-default.png")
 
@@ -410,7 +410,7 @@ func TestWorkshopRouteMetaAndCardHandler_StatusCrossProduct(t *testing.T) {
 				}
 			}
 
-			req := httptest.NewRequest(http.MethodGet, "/workshops/"+tc.slug+"/og.png", nil)
+			req := httptest.NewRequest(http.MethodGet, "/events/"+tc.slug+"/og.png", nil)
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, req)
 			if rec.Code != tc.wantStatus {
@@ -429,7 +429,7 @@ func TestWorkshopRouteMetaAndCardHandler_StatusCrossProduct(t *testing.T) {
 				}
 
 				// A second request carrying If-None-Match must 304.
-				req2 := httptest.NewRequest(http.MethodGet, "/workshops/"+tc.slug+"/og.png", nil)
+				req2 := httptest.NewRequest(http.MethodGet, "/events/"+tc.slug+"/og.png", nil)
 				req2.Header.Set("If-None-Match", etag)
 				rec2 := httptest.NewRecorder()
 				mux.ServeHTTP(rec2, req2)
@@ -443,14 +443,14 @@ func TestWorkshopRouteMetaAndCardHandler_StatusCrossProduct(t *testing.T) {
 	t.Run("nil WorkshopSource", func(t *testing.T) {
 		nilSite := NewSite([]byte(testTemplate), testBaseURL, nil, nil)
 		nilMux := http.NewServeMux()
-		nilMux.Handle("GET /workshops/{slug}/og.png", nilSite.WorkshopCardHandler())
+		nilMux.Handle("GET /events/{slug}/og.png", nilSite.WorkshopCardHandler())
 
-		body := string(nilSite.renderer.Render("/workshops/anything"))
+		body := string(nilSite.renderer.Render("/events/anything"))
 		if !strings.Contains(body, "/og-default.png") {
 			t.Error("rendered meta with nil WorkshopSource missing /og-default.png fallback")
 		}
 
-		req := httptest.NewRequest(http.MethodGet, "/workshops/anything/og.png", nil)
+		req := httptest.NewRequest(http.MethodGet, "/events/anything/og.png", nil)
 		rec := httptest.NewRecorder()
 		nilMux.ServeHTTP(rec, req)
 		if rec.Code != http.StatusNotFound {
@@ -470,11 +470,11 @@ func TestWorkshopCoverImageStillWins(t *testing.T) {
 		},
 	}
 	site := NewSite([]byte(testTemplate), testBaseURL, source, nil)
-	body := string(site.renderer.Render("/workshops/has-cover"))
+	body := string(site.renderer.Render("/events/has-cover"))
 	if !strings.Contains(body, testBaseURL+"/soldering.jpg") {
 		t.Errorf("rendered meta does not contain the workshop's own cover_image URL: %s", body)
 	}
-	if strings.Contains(body, "/workshops/has-cover/og.png") {
+	if strings.Contains(body, "/events/has-cover/og.png") {
 		t.Error("rendered meta contains the generated card URL even though cover_image was set")
 	}
 }
@@ -726,5 +726,24 @@ func TestSiteInvalidateClearsArchiveCards(t *testing.T) {
 	fresh := get()
 	if bytes.Equal(fresh.Body.Bytes(), first.Body.Bytes()) {
 		t.Fatal("GET after Invalidate() returned the stale pre-invalidate bytes")
+	}
+}
+
+func TestCardMetaLineIncludesTypeName(t *testing.T) {
+	const starts = "2026-09-12T18:00:00Z"
+	date := formatCardDate(starts)
+	cases := []struct {
+		w    Workshop
+		want string
+	}{
+		{Workshop{EventTypeName: "Hack Night", StartsAt: starts, LocationName: "Noisebridge"}, "Hack Night  ·  " + date + "  ·  Noisebridge"},
+		{Workshop{EventTypeName: "Hack Night"}, "Hack Night"},
+		{Workshop{StartsAt: starts, LocationName: "Noisebridge"}, date + "  ·  Noisebridge"},
+		{Workshop{}, ""},
+	}
+	for _, tc := range cases {
+		if got := cardMetaLine(tc.w); got != tc.want {
+			t.Errorf("cardMetaLine(%+v) = %q, want %q", tc.w, got, tc.want)
+		}
 	}
 }

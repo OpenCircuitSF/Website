@@ -136,7 +136,7 @@ func TestAdminWorkshopAnnounce_PrefillAndLink(t *testing.T) {
 		// #0145: the workshop's own page is always linked, end to end
 		// through the real h.baseURL wired by adminWorkshopAnnounceMux
 		// (adminWorkshopsMux passes "https://example.com").
-		"https://example.com/workshops/" + wk.Slug,
+		"https://example.com/events/" + wk.Slug,
 	}
 	for _, frag := range wantBodyFragments {
 		if !strings.Contains(created.BodyMD, frag) {

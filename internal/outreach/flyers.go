@@ -171,7 +171,7 @@ func FlyerDestinationURL(siteBaseURL, slug, code string) string {
 	q.Set("utm_medium", "print")
 	q.Set("utm_campaign", slug)
 	q.Set("utm_content", code)
-	return strings.TrimRight(siteBaseURL, "/") + "/workshops/" + slug + "?" + q.Encode()
+	return strings.TrimRight(siteBaseURL, "/") + "/events/" + slug + "?" + q.Encode()
 }
 
 // FlyerDateLine renders a workshop's time for a flyer in Pacific time:

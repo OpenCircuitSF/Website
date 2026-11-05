@@ -61,7 +61,7 @@ describe('Mastodon preview', () => {
     const { container } = render(OutreachPostPreview, { view: { workshop: workshop({ cover_image: null }) }, channel: mast, post: mPost() });
     expect(container.querySelector('.hashtag')?.textContent).toBe('#soldering');
     expect(container.querySelector('.link')?.textContent).toBe('https://go.example/m');
-    expect(container.querySelector('.card img')?.getAttribute('src')).toBe('/workshops/solder-101/og.png');
+    expect(container.querySelector('.card img')?.getAttribute('src')).toBe('/events/solder-101/og.png');
     expect(container.querySelector('.card-host')?.textContent).toBe('Open Circuit SF');
   });
   it('draws no link preview when the text has no URL', () => {

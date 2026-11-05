@@ -1,7 +1,7 @@
 package handlers
 
 // #0522's HTML-route status tests: GET /archive/{slug} and
-// /workshops/{slug} through the SPA catch-all must answer with the SAME
+// /events/{slug} through the SPA catch-all must answer with the SAME
 // status their JSON APIs answer with — 410 for a withheld campaign, 404 for
 // an unknown/draft/unsent slug, 200 for published/live records — while
 // still serving the SPA shell as the body, so the in-app not-found and
@@ -89,11 +89,11 @@ func TestSPAHandler_WorkshopDetailStatusMatchesAPI(t *testing.T) {
 		path     string
 		wantCode int
 	}{
-		{"/workshops/live", 200},
-		{"/workshops/canceled-pub", 200},
-		{"/workshops/draft", 404},
-		{"/workshops/ghost-cancel", 404},
-		{"/workshops/no-such-slug", 404},
+		{"/events/live", 200},
+		{"/events/canceled-pub", 200},
+		{"/events/draft", 404},
+		{"/events/ghost-cancel", 404},
+		{"/events/no-such-slug", 404},
 	}
 	for _, c := range cases {
 		rec := serveSPAResolved(t, []SPADeepLinkStatus{h}, c.path)
@@ -111,7 +111,7 @@ func TestSPAHandler_WorkshopDetailStatusMatchesAPI(t *testing.T) {
 // deployment without a live-data store): the dynamic patterns stay 200 per
 // the known-route table, exactly as before this issue.
 func TestSPAHandler_NilResolversKeepRouteTableBehavior(t *testing.T) {
-	for _, p := range []string{"/archive/anything", "/workshops/anything"} {
+	for _, p := range []string{"/archive/anything", "/events/anything"} {
 		rec := serveSPAResolved(t, nil, p)
 		if rec.Code != http.StatusOK {
 			t.Errorf("GET %s with no resolvers: status = %d, want 200 (route table behavior unchanged)", p, rec.Code)

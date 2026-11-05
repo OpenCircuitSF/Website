@@ -236,7 +236,7 @@ describe('pageTitle guard (#0238): titleForRoute is built from the SAME text as 
   for (const [name, file] of Object.entries(GUARDED_VIEW)) {
     it(`${name} -- ${file}'s <h1> matches titleForRoute's heading`, () => {
       const h1Text = firstH1Text(file);
-      const route = parsePath(name === 'workshops' ? '/workshops' : `/${name}`);
+      const route = parsePath(name === 'workshops' ? '/events' : `/${name}`);
       // The route names double as their own path for every guarded entry
       // except home ('/') and admin/account, which parsePath still resolves
       // correctly by name regardless of the literal path string used here --
@@ -299,7 +299,7 @@ describe('titleForRoute', () => {
   });
 
   it('resolves workshop-detail to its documented fallback', () => {
-    expect(titleForRoute(parsePath('/workshops/solder-101'))).toBe('Workshop — Open Circuit SF');
+    expect(titleForRoute(parsePath('/events/solder-101'))).toBe('Event — Open Circuit SF');
   });
 });
 

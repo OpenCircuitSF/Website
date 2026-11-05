@@ -1,6 +1,6 @@
 <script lang="ts">
   // The persistent header shell for every public marketing page (#0017):
-  // logo mark + wordmark, primary nav (Workshops / About / Subscribe, plus
+  // logo mark + wordmark, primary nav (Events / About / Subscribe, plus
   // Admin for signed-in staff), and the theme toggle. Staff sign-in is
   // deliberately NOT here -- it lives in Footer.svelte as an unobtrusive
   // link, per the acceptance criteria ("reachable but unobtrusive").
@@ -24,12 +24,12 @@
     /** Route names that should mark this link aria-current="page". A link
      * covers more than one route name where they're the same section from a
      * user's point of view (e.g. a workshop detail page is still "on" the
-     * Workshops nav item). */
+     * Events nav item). */
     routes: readonly string[];
   }
 
   const NAV_LINKS: readonly NavLink[] = [
-    { href: '/workshops', label: 'Workshops', routes: ['workshops', 'workshop-detail'] },
+    { href: '/events', label: 'Events', routes: ['workshops', 'workshop-detail'] },
     { href: '/about', label: 'About', routes: ['about'] },
     { href: '/subscribe', label: 'Subscribe', routes: ['subscribe', 'subscribe-thanks'] },
   ];

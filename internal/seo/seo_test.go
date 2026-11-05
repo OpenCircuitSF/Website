@@ -39,7 +39,7 @@ func newTestRenderer(source WorkshopSource) *Renderer {
 
 // TestRender_StaticRoutesGetDistinctNonEmptyTitles is #0019's headline
 // acceptance criterion: the compiled-in route table supplies metadata for /,
-// /about, /workshops, /subscribe, (#0070) /privacy, and (#0123) /archive, and
+// /about, /events, /subscribe, (#0070) /privacy, and (#0123) /archive, and
 // all six must be genuinely different from each other -- a bug that served
 // the same title for every route would still pass a test that only checked
 // "some title is present". Renamed from TestRender_StaticRoutesGetDistinctTitles
@@ -52,7 +52,7 @@ func newTestRenderer(source WorkshopSource) *Renderer {
 // close that gap; the name now says what the test actually checks.
 func TestRender_StaticRoutesGetDistinctNonEmptyTitles(t *testing.T) {
 	r := newTestRenderer(nil)
-	paths := []string{"/", "/about", "/privacy", "/workshops", "/subscribe", "/archive"}
+	paths := []string{"/", "/about", "/privacy", "/events", "/subscribe", "/archive"}
 	titles := make(map[string]bool)
 	for _, p := range paths {
 		body := string(r.Render(p))
@@ -114,7 +114,7 @@ func TestRender_KnownNonMarketingRouteGetsFallback(t *testing.T) {
 	}
 }
 
-// TestRender_WorkshopDetailUsesStoreData confirms /workshops/{slug} looks
+// TestRender_WorkshopDetailUsesStoreData confirms /events/{slug} looks
 // the workshop up and uses its title, summary, and cover image, per #0019's
 // acceptance criterion "wired in #0054" -- this is the plumbing that
 // criterion depends on, exercised here with a fake source since the real
@@ -124,11 +124,11 @@ func TestRender_WorkshopDetailUsesStoreData(t *testing.T) {
 		"solder-101": {
 			Slug: "solder-101", Title: "Intro to Soldering",
 			Summary:    "Learn the basics of through-hole soldering.",
-			CoverImage: "/workshops/solder-101/cover.jpg", Status: WorkshopPublished, Published: true,
+			CoverImage: "/events/solder-101/cover.jpg", Status: WorkshopPublished, Published: true,
 		},
 	}
 	r := newTestRenderer(source)
-	body := string(r.Render("/workshops/solder-101"))
+	body := string(r.Render("/events/solder-101"))
 
 	if !strings.Contains(body, "Intro to Soldering") {
 		t.Errorf("workshop title not found in rendered body: %s", body)
@@ -136,7 +136,7 @@ func TestRender_WorkshopDetailUsesStoreData(t *testing.T) {
 	if !strings.Contains(body, "Learn the basics of through-hole soldering.") {
 		t.Errorf("workshop summary not found in rendered body: %s", body)
 	}
-	if !strings.Contains(body, testBaseURL+"/workshops/solder-101/cover.jpg") {
+	if !strings.Contains(body, testBaseURL+"/events/solder-101/cover.jpg") {
 		t.Errorf("workshop cover image not resolved to an absolute URL: %s", body)
 	}
 }
@@ -151,7 +151,7 @@ func TestRender_WorkshopDetailUnknownSlugFallsBack(t *testing.T) {
 	r := newTestRenderer(source)
 
 	for _, slug := range []string{"does-not-exist", "secret-draft"} {
-		body := string(r.Render("/workshops/" + slug))
+		body := string(r.Render("/events/" + slug))
 		if strings.Contains(body, "Unreleased Workshop") {
 			t.Errorf("slug %q: draft workshop title leaked into rendered body: %s", slug, body)
 		}
@@ -174,7 +174,7 @@ func fullWorkshop(slug string, status WorkshopStatus) Workshop {
 		Slug:            slug,
 		Title:           "Intro to Soldering",
 		Summary:         "Learn the basics of through-hole soldering.",
-		CoverImage:      "/workshops/" + slug + "/cover.jpg",
+		CoverImage:      "/events/" + slug + "/cover.jpg",
 		Status:          status,
 		Published:       true,
 		StartsAt:        "2026-09-12T18:00:00Z",
@@ -227,7 +227,7 @@ func assertNoJSONLD(t *testing.T, body string) {
 func TestRender_JSONLD_PublishedWorkshopHasFullEvent(t *testing.T) {
 	source := fakeWorkshopSource{"solder-101": fullWorkshop("solder-101", WorkshopPublished)}
 	r := newTestRenderer(source)
-	body := string(r.Render("/workshops/solder-101"))
+	body := string(r.Render("/events/solder-101"))
 
 	ev := extractJSONLD(t, body)
 
@@ -278,10 +278,10 @@ func TestRender_JSONLD_PublishedWorkshopHasFullEvent(t *testing.T) {
 	if org["url"] != testBaseURL+"/" {
 		t.Errorf("organizer.url = %v, want the site URL", org["url"])
 	}
-	if ev["image"] != testBaseURL+"/workshops/solder-101/cover.jpg" {
+	if ev["image"] != testBaseURL+"/events/solder-101/cover.jpg" {
 		t.Errorf("image = %v, want an absolute URL", ev["image"])
 	}
-	if ev["url"] != testBaseURL+"/workshops/solder-101" {
+	if ev["url"] != testBaseURL+"/events/solder-101" {
 		t.Errorf("url = %v, want the canonical workshop URL", ev["url"])
 	}
 }
@@ -296,7 +296,7 @@ func TestRender_JSONLD_PublishedWorkshopHasFullEvent(t *testing.T) {
 func TestRender_JSONLD_CanceledWorkshopEmitsEventCancelled(t *testing.T) {
 	source := fakeWorkshopSource{"solder-101": fullWorkshop("solder-101", WorkshopCanceled)}
 	r := newTestRenderer(source)
-	body := string(r.Render("/workshops/solder-101"))
+	body := string(r.Render("/events/solder-101"))
 
 	ev := extractJSONLD(t, body)
 	if ev["eventStatus"] != "https://schema.org/EventCancelled" {
@@ -314,7 +314,7 @@ func TestRender_JSONLD_CanceledWorkshopEmitsEventCancelled(t *testing.T) {
 func TestRender_JSONLD_CanceledWorkshopKeepsGenericSocialCard(t *testing.T) {
 	source := fakeWorkshopSource{"solder-101": fullWorkshop("solder-101", WorkshopCanceled)}
 	r := newTestRenderer(source)
-	body := string(r.Render("/workshops/solder-101"))
+	body := string(r.Render("/events/solder-101"))
 
 	title := extractTag(t, body, "title")
 	if strings.Contains(title, "Intro to Soldering") {
@@ -336,7 +336,7 @@ func TestRender_JSONLD_NeverPublishedCanceledOmitsBlockAndUsesGenericCard(t *tes
 	w.Published = false
 	source := fakeWorkshopSource{"secret-canceled-draft": w}
 	r := newTestRenderer(source)
-	body := string(r.Render("/workshops/secret-canceled-draft"))
+	body := string(r.Render("/events/secret-canceled-draft"))
 
 	assertNoJSONLD(t, body)
 
@@ -354,7 +354,7 @@ func TestRender_JSONLD_MissingStartDateOmitsBlock(t *testing.T) {
 	w.StartsAt = ""
 	source := fakeWorkshopSource{"no-date": w}
 	r := newTestRenderer(source)
-	assertNoJSONLD(t, string(r.Render("/workshops/no-date")))
+	assertNoJSONLD(t, string(r.Render("/events/no-date")))
 }
 
 // TestRender_JSONLD_MissingLocationOmitsBlock: a published, dated workshop
@@ -367,7 +367,7 @@ func TestRender_JSONLD_MissingLocationOmitsBlock(t *testing.T) {
 	w.LocationAddress = ""
 	source := fakeWorkshopSource{"no-venue": w}
 	r := newTestRenderer(source)
-	assertNoJSONLD(t, string(r.Render("/workshops/no-venue")))
+	assertNoJSONLD(t, string(r.Render("/events/no-venue")))
 }
 
 // TestRender_JSONLD_OnlyOneOfNameOrAddressStillProducesLocation confirms
@@ -379,7 +379,7 @@ func TestRender_JSONLD_OnlyOneOfNameOrAddressStillProducesLocation(t *testing.T)
 	w.LocationName = ""
 	source := fakeWorkshopSource{"address-only": w}
 	r := newTestRenderer(source)
-	body := string(r.Render("/workshops/address-only"))
+	body := string(r.Render("/events/address-only"))
 
 	ev := extractJSONLD(t, body)
 	loc, ok := ev["location"].(map[string]any)
@@ -398,7 +398,7 @@ func TestRender_JSONLD_DraftAndUnknownSlugOmitBlock(t *testing.T) {
 	source := fakeWorkshopSource{"secret-draft": fullWorkshop("secret-draft", WorkshopDraft)}
 	r := newTestRenderer(source)
 	for _, slug := range []string{"does-not-exist", "secret-draft"} {
-		assertNoJSONLD(t, string(r.Render("/workshops/"+slug)))
+		assertNoJSONLD(t, string(r.Render("/events/"+slug)))
 	}
 }
 
@@ -409,7 +409,7 @@ func TestRender_JSONLD_DraftAndUnknownSlugOmitBlock(t *testing.T) {
 // by TestRender_JSONLD_HomePageEmitsOrganizationAndWebSite.
 func TestRender_JSONLD_StaticRoutesHaveNoBlock(t *testing.T) {
 	r := newTestRenderer(nil)
-	for _, p := range []string{"/about", "/privacy", "/workshops", "/subscribe", "/archive", "/admin"} {
+	for _, p := range []string{"/about", "/privacy", "/events", "/subscribe", "/archive", "/admin"} {
 		assertNoJSONLD(t, string(r.Render(p)))
 	}
 }
@@ -429,7 +429,7 @@ func TestRender_JSONLD_TitleWithQuotesStaysValidJSON(t *testing.T) {
 	w.Summary = tricky
 	source := fakeWorkshopSource{"tricky-title": w}
 	r := newTestRenderer(source)
-	body := string(r.Render("/workshops/tricky-title"))
+	body := string(r.Render("/events/tricky-title"))
 
 	if strings.Contains(body, "<script>alert(1)</script>") {
 		t.Fatalf("literal, unescaped </script> sequence reached the page: %s", body)
@@ -462,8 +462,8 @@ func TestRender_JSONLD_DistinctCanceledWorkshopsDoNotShareCacheEntry(t *testing.
 	source := fakeWorkshopSource{"canceled-a": a, "canceled-b": b}
 	r := newTestRenderer(source)
 
-	bodyA := string(r.Render("/workshops/canceled-a"))
-	bodyB := string(r.Render("/workshops/canceled-b"))
+	bodyA := string(r.Render("/events/canceled-a"))
+	bodyB := string(r.Render("/events/canceled-b"))
 
 	evA := extractJSONLD(t, bodyA)
 	evB := extractJSONLD(t, bodyB)
@@ -503,7 +503,7 @@ func TestRender_EscapesInjectedValues(t *testing.T) {
 		},
 	}
 	r := newTestRenderer(source)
-	body := string(r.Render("/workshops/xss-test"))
+	body := string(r.Render("/events/xss-test"))
 
 	if strings.Contains(body, "<script>alert(1)</script>") {
 		t.Fatalf("unescaped <script> tag leaked into rendered HTML: %s", body)
@@ -529,7 +529,7 @@ func TestRender_AllTokensSubstituted(t *testing.T) {
 		tokenOGImage, tokenOGURL, tokenOGType, tokenTwitterCard,
 		tokenTwitterTitle, tokenTwitterDescription, tokenCanonical, tokenJSONLD, tokenBody,
 	}
-	for _, path := range []string{"/", "/about", "/privacy", "/workshops", "/subscribe", "/nonexistent", "/workshops/some-slug"} {
+	for _, path := range []string{"/", "/about", "/privacy", "/events", "/subscribe", "/nonexistent", "/events/some-slug"} {
 		body := string(r.Render(path))
 		for _, tok := range tokens {
 			if strings.Contains(body, tok) {
@@ -596,7 +596,7 @@ func TestRender_CanonicalMatchesOGURLOnIndexableRoutes(t *testing.T) {
 	}
 	r := NewRenderer([]byte(testTemplate), testBaseURL, source, archive)
 
-	paths := []string{"/", "/about", "/privacy", "/workshops", "/workshops/solder-101", "/subscribe", "/archive", "/archive/09-2026"}
+	paths := []string{"/", "/about", "/privacy", "/events", "/events/solder-101", "/subscribe", "/archive", "/archive/09-2026"}
 	for _, p := range paths {
 		body := string(r.Render(p))
 		ogURL := extractMetaContent(t, body, "og:url")
@@ -636,7 +636,7 @@ func TestRender_NoCanonicalOnPrivateUnknownOrUnpublishedRoutes(t *testing.T) {
 	for _, p := range []string{
 		"/confirm", "/preferences", "/unsubscribe", "/admin", "/account", "/auth", "/login",
 		"/this-page-does-not-exist",
-		"/workshops/unknown-slug", "/workshops/draft-1", "/workshops/ghost-1",
+		"/events/unknown-slug", "/events/draft-1", "/events/ghost-1",
 		"/archive/withheld-1",
 	} {
 		body := string(r.Render(p))
@@ -691,10 +691,10 @@ func TestRender_CachesWithinTTL(t *testing.T) {
 	clock := &fakeClock{t: time.Unix(0, 0)}
 	r.now = clock.now
 
-	first := string(r.Render("/workshops/mutable"))
+	first := string(r.Render("/events/mutable"))
 	source.title = "Changed Title"
 	clock.advance(1 * time.Second) // well within the 60s TTL
-	second := string(r.Render("/workshops/mutable"))
+	second := string(r.Render("/events/mutable"))
 
 	if !strings.Contains(first, "Original Title") {
 		t.Fatalf("first render missing expected title: %s", first)
@@ -717,10 +717,10 @@ func TestRender_CacheExpiresAfterTTL(t *testing.T) {
 	clock := &fakeClock{t: time.Unix(0, 0)}
 	r.now = clock.now
 
-	_ = r.Render("/workshops/mutable")
+	_ = r.Render("/events/mutable")
 	source.title = "Changed Title"
 	clock.advance(r.ttl + time.Second) // past the TTL
-	after := string(r.Render("/workshops/mutable"))
+	after := string(r.Render("/events/mutable"))
 
 	if !strings.Contains(after, "Changed Title") {
 		t.Errorf("expected the TTL-expired render to pick up the source mutation, got: %s", after)
@@ -739,12 +739,12 @@ func TestRender_InvalidateBypassesCacheImmediately(t *testing.T) {
 	clock := &fakeClock{t: time.Unix(0, 0)}
 	r.now = clock.now
 
-	_ = r.Render("/workshops/mutable")
+	_ = r.Render("/events/mutable")
 	source.title = "Changed Title"
 	clock.advance(1 * time.Second) // still well within the TTL
 
 	r.Invalidate()
-	after := string(r.Render("/workshops/mutable"))
+	after := string(r.Render("/events/mutable"))
 
 	if !strings.Contains(after, "Changed Title") {
 		t.Errorf("Invalidate did not force a fresh render within the TTL window; got: %s", after)
@@ -1009,5 +1009,50 @@ func TestRender_JSONLD_NothingOnOtherRoutesForArchive(t *testing.T) {
 	r := newTestRendererWithArchive(source)
 	for _, path := range []string{"/archive", "/about", "/subscribe"} {
 		assertNoJSONLD(t, string(r.Render(path)))
+	}
+}
+
+func TestWorkshopRouteMetaUsesEventsURLs(t *testing.T) {
+	w := fullWorkshop("solder", WorkshopPublished)
+	w.CoverImage = ""
+	body := string(newTestRenderer(fakeWorkshopSource{"solder": w}).Render("/events/solder"))
+	for _, want := range []string{
+		`rel="canonical" href="` + testBaseURL + `/events/solder"`,
+		`property="og:url" content="` + testBaseURL + `/events/solder"`,
+		`property="og:image" content="` + testBaseURL + `/events/solder/og.png"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q", want)
+		}
+	}
+	if strings.Contains(body, "/workshops/") {
+		t.Errorf("body still names an old path: %s", body)
+	}
+
+	w.CoverImage = "/media/solder.png"
+	body = string(newTestRenderer(fakeWorkshopSource{"solder": w}).Render("/events/solder"))
+	if want := `property="og:image" content="` + testBaseURL + `/media/solder.png"`; !strings.Contains(body, want) {
+		t.Errorf("a cover image no longer wins: body missing %q", want)
+	}
+}
+
+func TestEventJSONLDCarriesTypeAndEventsURL(t *testing.T) {
+	w := fullWorkshop("solder", WorkshopPublished)
+	w.EventTypeName = "Hack Night"
+	ld := extractJSONLD(t, string(newTestRenderer(fakeWorkshopSource{"solder": w}).Render("/events/solder")))
+	if ld["keywords"] != "Hack Night" {
+		t.Errorf("keywords = %v", ld["keywords"])
+	}
+	if ld["url"] != testBaseURL+"/events/solder" {
+		t.Errorf("url = %v", ld["url"])
+	}
+	if ld["@type"] != "Event" {
+		t.Errorf("@type = %v", ld["@type"])
+	}
+
+	w.EventTypeName = ""
+	ld = extractJSONLD(t, string(newTestRenderer(fakeWorkshopSource{"solder": w}).Render("/events/solder")))
+	if _, present := ld["keywords"]; present {
+		t.Errorf("keywords present for a listing with no type name: %v", ld["keywords"])
 	}
 }

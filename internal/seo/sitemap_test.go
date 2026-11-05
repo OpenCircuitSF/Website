@@ -29,7 +29,7 @@ func TestSitemap_MarketingRoutesAreKnownRoutes(t *testing.T) {
 // (/about, /privacy, /subscribe) deliberately OMIT <lastmod> — no truthful
 // date exists for copy that never changes, and Google discounts lastmod for
 // a site where it is not consistently accurate. The three data-derived
-// pages (/, /workshops, /archive) also omit it here because their sources
+// pages (/, /events, /archive) also omit it here because their sources
 // are nil, so they have no data to derive a date from.
 func TestSitemap_StaticRoutesPresentWithLastmodPolicy(t *testing.T) {
 	s := NewSitemap(testBaseURL, nil, nil)
@@ -60,7 +60,7 @@ func TestSitemap_StaticRoutesPresentWithLastmodPolicy(t *testing.T) {
 			t.Errorf("%s: <lastmod> = %q, want it omitted (#0533: static copy has no truthful date to state)", path, got)
 		}
 	}
-	for _, path := range []string{"/", "/workshops", "/archive"} {
+	for _, path := range []string{"/", "/events", "/archive"} {
 		if got := lastmods[testBaseURL+path]; got != "" {
 			t.Errorf("%s: <lastmod> = %q, want it omitted when the data source is nil (no data, no date)", path, got)
 		}
@@ -68,7 +68,7 @@ func TestSitemap_StaticRoutesPresentWithLastmodPolicy(t *testing.T) {
 }
 
 // TestSitemap_DataDerivedLastmodForIndexPages is #0533's criterion 2:
-// /workshops' lastmod is the newest PUBLISHED workshop's UpdatedAt,
+// /events' lastmod is the newest PUBLISHED workshop's UpdatedAt,
 // /archive's is the newest published entry's, and /'s is whichever source
 // changed most recently. A draft workshop with a later date must not leak
 // into any of the three, and the entries' own <lastmod> values are
@@ -99,23 +99,23 @@ func TestSitemap_DataDerivedLastmodForIndexPages(t *testing.T) {
 	}
 
 	want := map[string]string{
-		testBaseURL + "/":                 "2026-09-05",
-		testBaseURL + "/workshops":        "2026-08-15",
-		testBaseURL + "/archive":          "2026-09-05",
-		testBaseURL + "/workshops/newest": "2026-08-15",
-		testBaseURL + "/workshops/older":  "2026-07-01",
-		testBaseURL + "/archive/09-2026":  "2026-09-05",
-		testBaseURL + "/archive/07-2026":  "2026-08-01",
-		testBaseURL + "/about":            "",
-		testBaseURL + "/privacy":          "",
-		testBaseURL + "/subscribe":        "",
+		testBaseURL + "/":                "2026-09-05",
+		testBaseURL + "/events":          "2026-08-15",
+		testBaseURL + "/archive":         "2026-09-05",
+		testBaseURL + "/events/newest":   "2026-08-15",
+		testBaseURL + "/events/older":    "2026-07-01",
+		testBaseURL + "/archive/09-2026": "2026-09-05",
+		testBaseURL + "/archive/07-2026": "2026-08-01",
+		testBaseURL + "/about":           "",
+		testBaseURL + "/privacy":         "",
+		testBaseURL + "/subscribe":       "",
 	}
 	for loc, wantLastMod := range want {
 		if got := lastmods[loc]; got != wantLastMod {
 			t.Errorf("%s: <lastmod> = %q, want %q", loc, got, wantLastMod)
 		}
 	}
-	if _, ok := lastmods[testBaseURL+"/workshops/draft"]; ok {
+	if _, ok := lastmods[testBaseURL+"/events/draft"]; ok {
 		t.Error("draft workshop appeared in the sitemap")
 	}
 }
@@ -194,11 +194,11 @@ func TestSitemap_ExcludesUnpublishedWorkshops(t *testing.T) {
 	}
 	xmlStr := string(body)
 
-	if !strings.Contains(xmlStr, testBaseURL+"/workshops/published-1") {
+	if !strings.Contains(xmlStr, testBaseURL+"/events/published-1") {
 		t.Errorf("sitemap missing the published workshop: %s", xmlStr)
 	}
 	for _, excluded := range []string{"draft-1", "unpub-1", "canceled-1", "canceled-2"} {
-		if strings.Contains(xmlStr, "/workshops/"+excluded) {
+		if strings.Contains(xmlStr, "/events/"+excluded) {
 			t.Errorf("sitemap contains excluded (non-published) workshop %q: %s", excluded, xmlStr)
 		}
 	}
@@ -286,4 +286,20 @@ func (m *mutatingSitemapSource) WorkshopBySlug(slug string) (Workshop, bool, err
 
 func (m *mutatingSitemapSource) Workshops() ([]Workshop, error) {
 	return []Workshop{{Slug: m.slug, Status: WorkshopPublished, UpdatedAt: "2026-08-01"}}, nil
+}
+
+func TestSitemapListsEventsNotWorkshops(t *testing.T) {
+	source := fakeWorkshopSource{"solder": {Slug: "solder", Status: WorkshopPublished, Published: true, UpdatedAt: "2026-08-15"}}
+	body, err := NewSitemap(testBaseURL, source, nil).Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	for _, want := range []string{testBaseURL + "/events<", testBaseURL + "/events/solder<"} {
+		if !strings.Contains(string(body), want) {
+			t.Errorf("sitemap missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(string(body), "/workshops") {
+		t.Errorf("sitemap still lists an old path:\n%s", body)
+	}
 }

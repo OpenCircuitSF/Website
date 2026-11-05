@@ -485,7 +485,7 @@ func TestAdminOutreach_CreatePrepareAndPostFlow(t *testing.T) {
 		t.Fatalf("CreateLink calls = %d", len(e.links.links))
 	}
 	l := e.links.links[0]
-	wantDest := fmt.Sprintf("https://site.example.test/workshops/%s?utm_campaign=%s&utm_content=reminder&utm_medium=social&utm_source=instagram", w.Slug, w.Slug)
+	wantDest := fmt.Sprintf("https://site.example.test/events/%s?utm_campaign=%s&utm_content=reminder&utm_medium=social&utm_source=instagram", w.Slug, w.Slug)
 	if l.DestinationURL != wantDest || l.Key != "" || l.CampaignSlug != o.CampaignSlug || l.UTMSource != "instagram" ||
 		l.UTMMedium != "social" || l.UTMCampaign != w.Slug || l.UTMContent != "reminder" || l.Placement != "instagram" {
 		t.Errorf("CreateLink request = %+v", l)

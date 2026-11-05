@@ -299,18 +299,13 @@ func forceEllipsis(d *font.Drawer, s string, maxWidth fixed.Int26_6) string {
 // segment entirely. Returns "" (draw nothing, see cardRenderer.render) when
 // neither is set.
 func cardMetaLine(w Workshop) string {
-	date := formatCardDate(w.StartsAt)
-	venue := strings.TrimSpace(w.LocationName)
-	switch {
-	case date != "" && venue != "":
-		return date + "  ·  " + venue
-	case date != "":
-		return date
-	case venue != "":
-		return venue
-	default:
-		return ""
+	var parts []string
+	for _, part := range []string{strings.TrimSpace(w.EventTypeName), formatCardDate(w.StartsAt), strings.TrimSpace(w.LocationName)} {
+		if part != "" {
+			parts = append(parts, part)
+		}
 	}
+	return strings.Join(parts, "  ·  ")
 }
 
 // archiveCardMeta builds the one-line meta an archive card carries under

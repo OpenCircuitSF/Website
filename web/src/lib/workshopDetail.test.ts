@@ -11,7 +11,7 @@ import type { PublicWorkshop } from './types';
 
 function workshop(fields: Partial<PublicWorkshop> = {}): PublicWorkshop {
   return {
-    event_type: { slug: 'workshop', name: 'Workshop' },
+    event_type: { slug: 'workshop', name: 'Workshop', sort_order: 10 },
     slug: 'soldering-101',
     title: 'Soldering fundamentals',
     status: 'published',

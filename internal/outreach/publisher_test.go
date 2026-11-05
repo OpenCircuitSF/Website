@@ -278,7 +278,7 @@ func TestPublisher_BlueskyCardURISetting(t *testing.T) {
 	for _, tc := range []struct{ setting, wantPrefix string }{
 		{"", "https://go.example.test/"},
 		{"short", "https://go.example.test/"},
-		{"canonical", "https://site.example.test/workshops/"},
+		{"canonical", "https://site.example.test/events/"},
 	} {
 		t.Run("setting="+tc.setting, func(t *testing.T) {
 			s := NewStore(testPool(t))

@@ -32,7 +32,7 @@ const workshop = {
   status: 'draft',
   interest_ids: [],
   event_type_id: 2,
-  event_type: { slug: 'hack-night', name: 'Hack Night' },
+  event_type: { slug: 'hack-night', name: 'Hack Night', sort_order: 10 },
   created_at: '2026-11-04T00:00:00Z',
   updated_at: '2026-11-04T00:00:00Z',
 } as AdminWorkshop;

@@ -133,7 +133,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	adminInterestsH := handlers.NewAdminInterestsHandler(interestsStore, auditLogger)
 	eventTypesStore := eventtypes.NewStore(pool)
 	// #0613: exercised the same way as adminInterestsH above.
-	adminEventTypesH := handlers.NewAdminEventTypesHandler(eventTypesStore, auditLogger)
+	adminEventTypesH := handlers.NewAdminEventTypesHandler(eventTypesStore, auditLogger, nil)
 	subscribersStore := subscribers.NewStore(pool)
 	// #0032: exercised the same way as adminInterestsH above. manualAdd is
 	// nil (matching this test's own "subscribeH: not exercised by this test"

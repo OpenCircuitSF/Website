@@ -517,6 +517,7 @@ export interface EventType {
 export interface EventTypeRef {
   slug: string;
   name: string;
+  sort_order: number;
 }
 
 export interface PublicWorkshop {

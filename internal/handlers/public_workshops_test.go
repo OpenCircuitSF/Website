@@ -506,7 +506,7 @@ func TestPublicWorkshops_ListCarriesEventType(t *testing.T) {
 	w := publishedWorkshopOfType(t, pool, nil)
 	for _, row := range listPublicTypes(t, srv.URL) {
 		if row.Slug == w.Slug {
-			if row.EventType != (eventTypeRefView{Slug: "workshop", Name: "Workshop"}) {
+			if row.EventType != (eventTypeRefView{Slug: "workshop", Name: "Workshop", SortOrder: 10}) {
 				t.Errorf("event_type = %+v", row.EventType)
 			}
 			return
@@ -529,7 +529,7 @@ func TestPublicWorkshops_DetailCarriesEventType(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&row); err != nil {
 		t.Fatal(err)
 	}
-	if row.EventType != (eventTypeRefView{Slug: "workshop", Name: "Workshop"}) {
+	if row.EventType != (eventTypeRefView{Slug: "workshop", Name: "Workshop", SortOrder: 10}) {
 		t.Errorf("event_type = %+v", row.EventType)
 	}
 }

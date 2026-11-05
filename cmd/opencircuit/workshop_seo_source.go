@@ -119,6 +119,7 @@ func toSEOWorkshop(w workshops.Workshop) seo.Workshop {
 		signupURL = *w.SignupURL
 	}
 	return seo.Workshop{
+		EventTypeName:   w.EventTypeName,
 		Slug:            w.Slug,
 		Title:           w.Title,
 		Summary:         summary,

@@ -169,7 +169,7 @@ func TestAnnounceBodyMD_AlwaysLinksToWorkshopPage(t *testing.T) {
 		body := announceBodyMD(wk, baseURL)
 		t.Logf("RENDERED BODY (with signup_url):\n%s", body)
 
-		wantSiteURL := "https://www.opencircuitsf.com/workshops/intro-to-soldering"
+		wantSiteURL := "https://www.opencircuitsf.com/events/intro-to-soldering"
 		if !strings.Contains(body, "[Sign up](https://example.com/rsvp)") {
 			t.Errorf("body missing external Sign up link:\n%s", body)
 		}
@@ -199,7 +199,7 @@ func TestAnnounceBodyMD_AlwaysLinksToWorkshopPage(t *testing.T) {
 		body := announceBodyMD(wk, baseURL)
 		t.Logf("RENDERED BODY (no signup_url):\n%s", body)
 
-		wantSiteURL := "https://www.opencircuitsf.com/workshops/in-house-circuit-bending-night"
+		wantSiteURL := "https://www.opencircuitsf.com/events/in-house-circuit-bending-night"
 		if !strings.Contains(body, "[View this workshop]("+wantSiteURL+")") {
 			t.Errorf("body missing site link %q (this is the whole point of #0145):\n%s", wantSiteURL, body)
 		}
@@ -211,7 +211,7 @@ func TestAnnounceBodyMD_AlwaysLinksToWorkshopPage(t *testing.T) {
 	t.Run("baseURL with a trailing slash never produces a double slash", func(t *testing.T) {
 		wk := workshops.Workshop{Title: "Test", Slug: "test-workshop"}
 		body := announceBodyMD(wk, "https://www.opencircuitsf.com/")
-		want := "https://www.opencircuitsf.com/workshops/test-workshop"
+		want := "https://www.opencircuitsf.com/events/test-workshop"
 		if !strings.Contains(body, want) {
 			t.Errorf("body = %q, want it to contain %q (no double slash)", body, want)
 		}

@@ -34,7 +34,7 @@ import type { AdminWorkshop } from './types';
 function workshop(fields: Partial<AdminWorkshop> = {}): AdminWorkshop {
   return {
     event_type_id: 1,
-    event_type: { slug: 'workshop', name: 'Workshop' },
+    event_type: { slug: 'workshop', name: 'Workshop', sort_order: 10 },
     id: 1,
     slug: 'soldering-101',
     title: 'Soldering fundamentals',

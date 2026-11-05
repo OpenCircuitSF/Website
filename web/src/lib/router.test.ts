@@ -11,7 +11,7 @@
 // for exactly what "verified by rendering" vs "not verified at all" covers.
 
 import { describe, expect, it } from 'vitest';
-import { parsePath, shouldIntercept, STATIC_ROUTES, needsSessionGate, type InterceptCandidate } from './router';
+import { legacyRedirectTarget, parsePath, shouldIntercept, STATIC_ROUTES, needsSessionGate, type InterceptCandidate } from './router';
 
 // Every static PRD §5.1 / auth route, paired with the route name parsePath()
 // resolves it to. Hoisted out of the test body (rather than a local const
@@ -33,7 +33,7 @@ import { parsePath, shouldIntercept, STATIC_ROUTES, needsSessionGate, type Inter
 // written.
 const staticRouteCases: [string, string][] = [
   ['/', 'home'],
-  ['/workshops', 'workshops'],
+  ['/events', 'workshops'],
   ['/archive', 'archive'],
   ['/about', 'about'],
   ['/privacy', 'privacy'],
@@ -67,21 +67,21 @@ describe('parsePath', () => {
     expect(actual).toEqual(expected);
   });
 
-  it('extracts the :slug path parameter for /workshops/:slug', () => {
-    const route = parsePath('/workshops/solder-101');
+  it('extracts the :slug path parameter for /events/:slug', () => {
+    const route = parsePath('/events/solder-101');
     expect(route.name).toBe('workshop-detail');
     expect(route.params).toEqual({ slug: 'solder-101' });
   });
 
   it('decodes a URL-encoded slug', () => {
-    const route = parsePath('/workshops/kicad%20night');
+    const route = parsePath('/events/kicad%20night');
     expect(route.params.slug).toBe('kicad night');
   });
 
   it('does not treat a two-segment workshops path as the index route', () => {
-    // Proves the dynamic pattern actually bites: without it, /workshops/x
+    // Proves the dynamic pattern actually bites: without it, /events/x
     // would fall through to not-found rather than resolving a slug.
-    expect(parsePath('/workshops/x').name).toBe('workshop-detail');
+    expect(parsePath('/events/x').name).toBe('workshop-detail');
   });
 
   it('falls through to not-found for an unmatched path', () => {
@@ -238,5 +238,27 @@ describe('needsSessionGate (#0521)', () => {
     expect(needsSessionGate('workshop-detail')).toBe(false);
     expect(needsSessionGate('not-found')).toBe(false);
     expect(needsSessionGate('home')).toBe(false);
+  });
+});
+
+describe('legacyRedirectTarget (#0614)', () => {
+  it('maps old workshop paths to their events targets', () => {
+    expect(legacyRedirectTarget('/workshops')).toBe('/events?type=workshop');
+    expect(legacyRedirectTarget('/workshops/')).toBe('/events?type=workshop');
+    expect(legacyRedirectTarget('/workshops', '?utm_source=x')).toBe('/events?type=workshop&utm_source=x');
+    expect(legacyRedirectTarget('/workshops/solder')).toBe('/events/solder');
+    expect(legacyRedirectTarget('/workshops/solder/', '?utm_source=x')).toBe('/events/solder?utm_source=x');
+  });
+
+  it('leaves other paths and og.png alone', () => {
+    expect(legacyRedirectTarget('/events')).toBeNull();
+    expect(legacyRedirectTarget('/events/solder')).toBeNull();
+    expect(legacyRedirectTarget('/admin')).toBeNull();
+    expect(legacyRedirectTarget('/workshops/solder/og.png')).toBeNull();
+  });
+
+  it('no longer routes /workshops itself', () => {
+    expect(parsePath('/workshops').name).toBe('not-found');
+    expect(parsePath('/workshops/solder').name).toBe('not-found');
   });
 });

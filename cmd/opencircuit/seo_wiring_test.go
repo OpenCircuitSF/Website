@@ -15,6 +15,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
 	"github.com/brennanMKE/OpenCircuitSF/internal/db"
+	"github.com/brennanMKE/OpenCircuitSF/internal/eventtypes"
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
@@ -26,7 +27,7 @@ import (
 // TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite is #0054's
 // binding proof, carried in from #0051's review Ruling 1: that
 // AdminWorkshopsHandler's cache invalidator and the *seo.Site mountAndServe
-// mounts at GET /workshops/{slug} and GET /sitemap.xml are the SAME
+// mounts at GET /events/{slug} and GET /sitemap.xml are the SAME
 // instance, not two independently-constructed ones. A counting fake inside
 // internal/handlers (as admin_workshops_test.go already has) cannot show
 // this -- it only proves Invalidate gets CALLED, never that the object it's
@@ -243,12 +244,12 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 
 	// Prime the sitemap cache and confirm the workshop is there.
 	sitemapBody := getBody(t, "/sitemap.xml")
-	if !strings.Contains(sitemapBody, "/workshops/"+slug) {
+	if !strings.Contains(sitemapBody, "/events/"+slug) {
 		t.Fatalf("sitemap.xml missing published workshop %s right after publish:\n%s", slug, sitemapBody)
 	}
 
 	// Prime the per-path meta cache and confirm the original title rendered.
-	detailPath := "/workshops/" + slug
+	detailPath := "/events/" + slug
 	firstBody := getBody(t, detailPath)
 	if !strings.Contains(firstBody, origTitle) {
 		t.Fatalf("GET %s missing original title %q:\n%s", detailPath, origTitle, firstBody)
@@ -303,7 +304,7 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 	// Invalidate clears -- drops it too, through the same instance.
 	patchWorkshop(t, created.ID, `{"status":"canceled"}`)
 	sitemapAfterCancel := getBody(t, "/sitemap.xml")
-	if strings.Contains(sitemapAfterCancel, "/workshops/"+slug) {
+	if strings.Contains(sitemapAfterCancel, "/events/"+slug) {
 		t.Fatalf("sitemap.xml still lists canceled workshop %s -- sitemap cache was not invalidated by the same *seo.Site instance:\n%s", slug, sitemapAfterCancel)
 	}
 }
@@ -585,4 +586,186 @@ func TestMountAndServe_CampaignArchiveMutationInvalidatesSharedSEOSite(t *testin
 	if strings.Contains(indexAfterWithhold, `href="`+archiveURL+`"`) {
 		t.Fatalf("GET /archive still links to withheld campaign %s:\n%s", archiveURL, indexAfterWithhold)
 	}
+}
+
+// seoWiringServer mounts the real mux with one shared *seo.Site handed to the
+// listing and type handlers, the production shape, and returns its base URL, a
+// client that does not follow redirects, and the store.
+func seoWiringServer(t *testing.T) (string, *http.Client, *workshops.Store, *eventtypes.Store, *http.Cookie, func(path string, want int) string) {
+	t.Helper()
+	dsn := os.Getenv("TEST_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("TEST_DATABASE_URL not set; skipping live DB integration test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), wiringDBConnectTimeout)
+	defer cancel()
+	pool, err := db.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	registerWiringTest(t)
+	t.Cleanup(func() {
+		truncateAdminWiringTables(t, pool)
+		pool.Close()
+	})
+	truncateAdminWiringTables(t, pool)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close probe listener: %v", err)
+	}
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+	cfg := &config.Config{Port: port, BaseURL: baseURL, WebAuthnRPID: "localhost", WebAuthnRPOrigin: baseURL}
+
+	auditLogger := audit.New(pool)
+	workshopsStore := workshops.NewStore(pool)
+	typesStore := eventtypes.NewStore(pool)
+	site, err := buildSEOSite(cfg, workshopSEOSource{store: workshopsStore}, nil)
+	if err != nil {
+		t.Fatalf("build seo site: %v", err)
+	}
+	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, site, mailing.NewCampaignStore(pool), auditLogger, cfg.BaseURL)
+	adminEventTypesH := handlers.NewAdminEventTypesHandler(typesStore, auditLogger, site)
+
+	requireSession := middleware.RequireSession(auth.NewStore(pool))
+	requireAdmin := func(next http.Handler) http.Handler {
+		return requireSession(middleware.RequireAdmin(next))
+	}
+	token := fmt.Sprintf("seo-events-token-%d", testdb.Unique())
+	adminID := seedAdminWiringUser(t, pool, fmt.Sprintf("seo-events-admin-%d@example.com", testdb.Unique()), true)
+	seedAdminWiringSession(t, pool, adminID, token)
+
+	errCh := make(chan error, 1)
+	ready := make(chan struct{})
+	go func() {
+		errCh <- mountAndServe(cfg, pool,
+			nil, nil, nil, nil, nil, nil, adminEventTypesH,
+			nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+			adminWorkshopsH,
+			nil, nil, nil, nil, nil,
+			nil, nil, nil,
+			nil, nil, nil, nil,
+			nil, nil, nil,
+			nil, nil, nil, nil, nil, nil,
+			site,
+			requireSession, requireAdmin, nil, ready)
+	}()
+	client := &http.Client{
+		Timeout:       wiringHTTPTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	waitForHealthy(t, client, baseURL, errCh, ready)
+
+	get := func(path string, want int) string {
+		t.Helper()
+		resp, err := client.Get(baseURL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("GET %s: read body: %v", path, err)
+		}
+		if resp.StatusCode != want {
+			t.Fatalf("GET %s: status=%d, want %d", path, resp.StatusCode, want)
+		}
+		return string(body)
+	}
+	return baseURL, client, workshopsStore, typesStore, &http.Cookie{Name: auth.SessionCookieName, Value: token}, get
+}
+
+func adminPatch(t *testing.T, client *http.Client, cookie *http.Cookie, url, body string) {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPatch, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("build PATCH: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		t.Fatalf("PATCH %s: status=%d body=%s", url, resp.StatusCode, respBody)
+	}
+}
+
+func TestMountAndServe_EventTypeRenameInvalidatesSharedSEOSite(t *testing.T) {
+	baseURL, client, workshopsStore, typesStore, cookie, get := seoWiringServer(t)
+	ctx := context.Background()
+
+	et, err := typesStore.Create(ctx, fmt.Sprintf("zz-rename-%d", testdb.Unique()), "Zz Before", 900)
+	if err != nil {
+		t.Fatalf("seed type: %v", err)
+	}
+	created, err := workshopsStore.Create(ctx, workshops.CreateInput{Title: fmt.Sprintf("Rename %d", testdb.Unique()), EventTypeID: &et.ID})
+	if err != nil {
+		t.Fatalf("seed listing: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = workshopsStore.Delete(context.Background(), created.ID)
+		_ = typesStore.Delete(context.Background(), et.ID)
+	})
+	adminPatch(t, client, cookie, fmt.Sprintf("%s/admin/workshops/%d", baseURL, created.ID), `{"status":"published"}`)
+
+	// Primes the cache, so a stale render is what a missed invalidation shows.
+	if body := get("/events", http.StatusOK); !strings.Contains(body, "Zz Before") {
+		t.Fatalf("/events missing the type name before the rename:\n%s", body)
+	}
+	adminPatch(t, client, cookie, fmt.Sprintf("%s/admin/event-types/%d", baseURL, et.ID), `{"name":"Zz After"}`)
+	body := get("/events", http.StatusOK)
+	if !strings.Contains(body, "Zz After") || strings.Contains(body, "Zz Before") {
+		t.Fatalf("/events did not pick up the rename:\n%s", body)
+	}
+}
+
+func TestMountAndServe_OldWorkshopURLsRedirectAndKeepUnfurl(t *testing.T) {
+	baseURL, client, workshopsStore, _, cookie, get := seoWiringServer(t)
+	ctx := context.Background()
+
+	covered, err := workshopsStore.Create(ctx, workshops.CreateInput{Title: fmt.Sprintf("Covered %d", testdb.Unique())})
+	if err != nil {
+		t.Fatalf("seed covered listing: %v", err)
+	}
+	plain, err := workshopsStore.Create(ctx, workshops.CreateInput{Title: fmt.Sprintf("Plain %d", testdb.Unique())})
+	if err != nil {
+		t.Fatalf("seed plain listing: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = workshopsStore.Delete(context.Background(), covered.ID)
+		_ = workshopsStore.Delete(context.Background(), plain.ID)
+	})
+	adminPatch(t, client, cookie, fmt.Sprintf("%s/admin/workshops/%d", baseURL, covered.ID), `{"status":"published","cover_image":"/media/cover.png"}`)
+	adminPatch(t, client, cookie, fmt.Sprintf("%s/admin/workshops/%d", baseURL, plain.ID), `{"status":"published"}`)
+
+	resp, err := client.Get(baseURL + "/workshops/" + covered.Slug + "?utm_source=x")
+	if err != nil {
+		t.Fatalf("GET old URL: %v", err)
+	}
+	resp.Body.Close()
+	want := "/events/" + covered.Slug + "?utm_source=x"
+	if resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != want {
+		t.Fatalf("old URL: status=%d Location=%q, want 301 to %q", resp.StatusCode, resp.Header.Get("Location"), want)
+	}
+
+	body := get(want, http.StatusOK)
+	for _, needle := range []string{
+		`rel="canonical" href="` + baseURL + "/events/" + covered.Slug + `"`,
+		`property="og:image" content="` + baseURL + `/media/cover.png"`,
+	} {
+		if !strings.Contains(body, needle) {
+			t.Errorf("redirect target missing %q:\n%s", needle, body)
+		}
+	}
+
+	get("/workshops/"+plain.Slug+"/og.png", http.StatusOK)
+	get("/events/"+plain.Slug+"/og.png", http.StatusOK)
 }

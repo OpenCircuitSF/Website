@@ -20,9 +20,9 @@ func TestRender_WorkshopDetailServesSignupLink(t *testing.T) {
 	w.SignUpURL = "https://www.eventbrite.com/e/solder-101-tickets"
 	source := fakeWorkshopSource{"signup-101": w}
 	r := newTestRenderer(source)
-	body := string(r.Render("/workshops/signup-101"))
+	body := string(r.Render("/events/signup-101"))
 
-	want := `<a href="https://www.eventbrite.com/e/solder-101-tickets" target="_blank" rel="noopener noreferrer">Register for this workshop</a>`
+	want := `<a href="https://www.eventbrite.com/e/solder-101-tickets" target="_blank" rel="noopener noreferrer">Register for this event</a>`
 	if !strings.Contains(body, want) {
 		t.Errorf("expected the validated sign-up anchor %q in body: %s", want, body)
 	}
@@ -39,9 +39,9 @@ func TestRender_WorkshopDetailSignupUnsetOmitsLink(t *testing.T) {
 	w := fullWorkshop("no-signup", WorkshopPublished)
 	source := fakeWorkshopSource{"no-signup": w}
 	r := newTestRenderer(source)
-	body := string(r.Render("/workshops/no-signup"))
+	body := string(r.Render("/events/no-signup"))
 
-	if strings.Contains(body, "Register for this workshop") {
+	if strings.Contains(body, "Register for this event") {
 		t.Errorf("unset signup_url must render no registration link: %s", body)
 	}
 }
@@ -54,7 +54,7 @@ func TestRender_WorkshopDetailSignupTrimmed(t *testing.T) {
 	w.SignUpURL = "  https://example.com/tickets  "
 	source := fakeWorkshopSource{"ws-signup": w}
 	r := newTestRenderer(source)
-	body := string(r.Render("/workshops/ws-signup"))
+	body := string(r.Render("/events/ws-signup"))
 
 	if !strings.Contains(body, `<a href="https://example.com/tickets" target="_blank" rel="noopener noreferrer">`) {
 		t.Errorf("expected the trimmed href to render: %s", body)
@@ -92,13 +92,13 @@ func TestRender_WorkshopDetailSignupSweepsURLValidatorFixture(t *testing.T) {
 		w.SignUpURL = c.Href
 		source := fakeWorkshopSource{"fixture": w}
 		r := newTestRenderer(source)
-		body := string(r.Render("/workshops/fixture"))
+		body := string(r.Render("/events/fixture"))
 
 		// html/template URL-escapes the href (non-ASCII paths become
 		// percent-encoded), so rendered-ness is judged by the anchor's own
 		// label, not by a raw substring of the URL. For an unsafe URL the
 		// gate renders no anchor at all, so the label is the discriminator.
-		rendered := strings.Contains(body, `>Register for this workshop</a>`)
+		rendered := strings.Contains(body, `>Register for this event</a>`)
 		if c.Want != rendered {
 			t.Errorf("case %s: url %q validator=%v rendered=%v -- the fallback's render gate disagrees with IsSafeLinkHref", c.ID, c.Href, c.Want, rendered)
 		}
@@ -117,7 +117,7 @@ func TestSignupLabelAndRelMatchTheSPA(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading WorkshopDetail.svelte: %v", err)
 	}
-	for _, want := range []string{`rel="noopener noreferrer"`, `target="_blank"`, "Register for this workshop"} {
+	for _, want := range []string{`rel="noopener noreferrer"`, `target="_blank"`, "Register for this event"} {
 		if !strings.Contains(string(src), want) {
 			t.Errorf("WorkshopDetail.svelte no longer contains %q -- the fallback's sign-up anchor has drifted from the SPA's own", want)
 		}

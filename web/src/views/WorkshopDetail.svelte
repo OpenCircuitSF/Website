@@ -1,5 +1,5 @@
 <script lang="ts">
-  // WorkshopDetail — /workshops/{slug} (#0054, PRD §7.3). The route a social
+  // WorkshopDetail — /events/{slug} (#0054, PRD §7.3). The route a social
   // link points at for one specific session, so its meta tags matter most of
   // any page on the site (this issue's Notes) -- but that half is entirely
   // server-side: internal/seo's Renderer/Sitemap (workshop_seo_source.go,
@@ -80,44 +80,45 @@
   const bodyHTML = $derived(workshop?.body_html ?? '');
 
   function goToWorkshops(): void {
-    navigate('/workshops');
+    navigate('/events');
   }
 </script>
 
 <main id="main-content" class="app-shell workshop-detail-shell">
   {#if status === 'loading'}
-    <TerminalPanel title="workshops // open_circuit_sf">
-      <Prompt text="cat workshops/{$currentRoute.params.slug}.md" />
+    <TerminalPanel title="events // open_circuit_sf">
+      <Prompt text="cat events/{$currentRoute.params.slug}.md" />
       <p class="text-muted">Loading…</p>
     </TerminalPanel>
   {:else if status === 'not-found'}
-    <TerminalPanel title="workshops // open_circuit_sf">
-      <Prompt text="cat workshops/{$currentRoute.params.slug}.md" />
+    <TerminalPanel title="events // open_circuit_sf">
+      <Prompt text="cat events/{$currentRoute.params.slug}.md" />
       <p class="text-error">
-        cat: workshops/{$currentRoute.params.slug}.md: No such workshop
+        cat: events/{$currentRoute.params.slug}.md: No such event
       </p>
       <p class="text-muted">
-        This workshop doesn't exist, or hasn't been published yet.
-        <button type="button" class="link-button" onclick={goToWorkshops}>See all workshops</button>
+        This event doesn't exist, or hasn't been published yet.
+        <button type="button" class="link-button" onclick={goToWorkshops}>See all events</button>
       </p>
     </TerminalPanel>
   {:else if status === 'error'}
-    <TerminalPanel title="workshops // open_circuit_sf">
-      <p class="text-error">Couldn't load this workshop right now. Try refreshing the page.</p>
+    <TerminalPanel title="events // open_circuit_sf">
+      <p class="text-error">Couldn't load this event right now. Try refreshing the page.</p>
     </TerminalPanel>
   {:else if status === 'loaded' && workshop}
     {#if isCanceled(workshop)}
       <Panel>
         <p class="canceled-notice" role="alert">
           <span class="badge badge-danger">Canceled</span>
-          This workshop has been canceled.
+          This event has been canceled.
         </p>
       </Panel>
     {/if}
 
-    <TerminalPanel title="workshop // {workshop.slug}">
-      <Prompt text="cat workshops/{workshop.slug}.md" />
+    <TerminalPanel title="event // {workshop.slug}">
+      <Prompt text="cat events/{workshop.slug}.md" />
       <h1 class="headline" tabindex="-1">{workshop.title}</h1>
+      <p class="event-type">{workshop.event_type.name}</p>
 
       {#if workshop.cover_image}
         <img
@@ -166,7 +167,7 @@
             target="_blank"
             rel="noopener noreferrer"
           >
-            Register for this workshop
+            Register for this event
           </a>
         </p>
       {/if}
@@ -183,7 +184,7 @@
 
     <Panel title="Stay in the loop">
       <p class="text-muted subscribe-lede">
-        Subscribe to hear about this and future workshops. Your topics are pre-selected below.
+        Subscribe to hear about this and future events. Your topics are pre-selected below.
       </p>
       <SubscribeForm {preselect} />
     </Panel>
@@ -206,6 +207,11 @@
     letter-spacing: 0.01em;
     font-size: clamp(22px, 5vw, 32px);
     color: var(--text);
+  }
+
+  .event-type {
+    margin: 0 0 var(--space-3);
+    color: var(--text-muted);
   }
 
   .cover-image {

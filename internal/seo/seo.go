@@ -19,7 +19,7 @@
 //     web/index.html, not a token -- it never varies by route (#0273).
 //  2. On each request, match the path against a route table: a compiled-in
 //     table for the static marketing routes, the workshop store for
-//     /workshops/{slug} (nil only under STORAGE=json, which has no
+//     /events/{slug} (nil only under STORAGE=json, which has no
 //     workshops-table backing -- falls back to the generic default), the
 //     archive source for /archive/{slug} (#0123; nil only under
 //     STORAGE=json, which has no email_campaigns-table backing either --
@@ -214,7 +214,7 @@ type cacheEntry struct {
 // bytes (web.DistFS()'s index.html in production; an in-memory fixture in
 // tests) and the canonical base URL (e.g. cfg.BaseURL, no trailing slash).
 // source may be nil -- nil only under STORAGE=json, which has no
-// workshops-table backing -- in which case /workshops/{slug} requests fall
+// workshops-table backing -- in which case /events/{slug} requests fall
 // back to the generic default metadata (still served with SPAHandler's own
 // 200, since the path matches the known dynamic pattern regardless of
 // whether the slug exists). archive (#0123) may likewise be nil under that
@@ -238,7 +238,7 @@ func NewRenderer(template []byte, baseURL string, source WorkshopSource, archive
 }
 
 // defaultStaticRouteMeta builds the compiled-in route table required by
-// #0019's acceptance criteria: distinct metadata for /, /about, /workshops,
+// #0019's acceptance criteria: distinct metadata for /, /about, /events,
 // and /subscribe. /privacy was added at #0070 for the same reason /about was
 // added at #0019: a route worth sharing gets its own title/description
 // rather than the generic fallback below. /archive was added at #0123 (PRD
@@ -265,7 +265,7 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			// here varies per request.
 			JSONLD: homeJSONLD(baseURL),
 			// #0523: the home page's raw HTML also carries the live "Next
-			// up" list, built from the same workshop source the /workshops
+			// up" list, built from the same workshop source the /events
 			// index reads -- see fallback.go's pageHome branch.
 			page: pageContent{kind: pageHome},
 		},
@@ -293,14 +293,14 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			TwitterCard:   "summary_large_image",
 			page:          pageContent{kind: pageStatic, path: "/privacy"},
 		},
-		"/workshops": {
-			Title:         "Workshops — Open Circuit SF",
-			Description:   "Upcoming hands-on electronics workshops at Open Circuit SF: soldering, PCB design, and hardware hacking in San Francisco.",
-			OGTitle:       "Workshops at Open Circuit SF",
-			OGDescription: "Upcoming hands-on electronics workshops: soldering, PCB design, and hardware hacking.",
+		"/events": {
+			Title:         "Events — Open Circuit SF",
+			Description:   "Upcoming workshops, hack nights and other hands-on electronics events from Open Circuit SF in San Francisco.",
+			OGTitle:       "Events at Open Circuit SF",
+			OGDescription: "Upcoming hands-on electronics events in San Francisco.",
 			OGImage:       image,
-			OGURL:         baseURL + "/workshops",
-			Canonical:     baseURL + "/workshops",
+			OGURL:         baseURL + "/events",
+			Canonical:     baseURL + "/events",
 			OGType:        "website",
 			TwitterCard:   "summary_large_image",
 			page:          pageContent{kind: pageWorkshopsIndex},
@@ -425,7 +425,7 @@ func (r *Renderer) resolve(normalizedPath string) (cacheKey string, meta RouteMe
 }
 
 // workshopRouteMeta looks up slug in the configured WorkshopSource and
-// builds the RouteMeta for a /workshops/{slug} request, including #0055's
+// builds the RouteMeta for a /events/{slug} request, including #0055's
 // JSON-LD (jsonld.go's eventJSONLD).
 //
 // ok=false (share the generic fallback bucket, resolve's caller) for: no
@@ -491,7 +491,7 @@ func (r *Renderer) workshopRouteMeta(slug string) (RouteMeta, bool) {
 	image := absoluteURL(r.baseURL, w.CoverImage)
 	if image == "" {
 		if workshopIsCardable(w) {
-			image = r.baseURL + "/workshops/" + slug + "/og.png"
+			image = r.baseURL + "/events/" + slug + "/og.png"
 		} else {
 			image = r.baseURL + "/og-default.png"
 		}
@@ -503,8 +503,8 @@ func (r *Renderer) workshopRouteMeta(slug string) (RouteMeta, bool) {
 		OGTitle:       w.Title,
 		OGDescription: w.Summary,
 		OGImage:       image,
-		OGURL:         r.baseURL + "/workshops/" + slug,
-		Canonical:     r.baseURL + "/workshops/" + slug,
+		OGURL:         r.baseURL + "/events/" + slug,
+		Canonical:     r.baseURL + "/events/" + slug,
 		OGType:        "website",
 		TwitterCard:   "summary_large_image",
 		JSONLD:        jsonld,
@@ -681,7 +681,7 @@ func normalizePath(path string) string {
 //
 // The cache is keyed by resolve's bucket key, not the raw path (#0073) --
 // resolving that key requires the same work as resolving the meta itself
-// (including a WorkshopSource lookup for a /workshops/{slug} request), so
+// (including a WorkshopSource lookup for a /events/{slug} request), so
 // unlike the previous per-path cache, a repeat request for a workshop-detail
 // page no longer skips that lookup on a cache hit. That trades one bounded,
 // indexed store read per request for eliminating the unbounded per-path

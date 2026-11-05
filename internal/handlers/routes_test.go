@@ -11,7 +11,7 @@ import (
 func TestIsKnownRoute_StaticRoutes(t *testing.T) {
 	known := []string{
 		"/",
-		"/workshops",
+		"/events",
 		"/archive",
 		"/about",
 		"/subscribe",
@@ -33,12 +33,12 @@ func TestIsKnownRoute_StaticRoutes(t *testing.T) {
 }
 
 // TestIsKnownRoute_WorkshopDetail confirms the one dynamic path parameter
-// (/workshops/:slug) is recognized, mirroring router.ts's WORKSHOP_DETAIL.
+// (/events/:slug) is recognized, mirroring router.ts's WORKSHOP_DETAIL.
 func TestIsKnownRoute_WorkshopDetail(t *testing.T) {
 	slugs := []string{
-		"/workshops/solder-101",
-		"/workshops/x",
-		"/workshops/kicad-night-2026",
+		"/events/solder-101",
+		"/events/x",
+		"/events/kicad-night-2026",
 	}
 	for _, path := range slugs {
 		if !isKnownRoute(path) {
@@ -68,9 +68,9 @@ func TestIsKnownRoute_TrailingSlash(t *testing.T) {
 // catch-all: every one of these must resolve to a miss (404), not a route.
 func TestIsKnownRoute_Miss(t *testing.T) {
 	misses := []string{
-		"/dashboard",   // ShortLinks-era path, not part of this product's route table
-		"/aboot",       // typo of /about
-		"/workshops//", // double slash after trimming one still isn't a valid slug segment
+		"/dashboard", // ShortLinks-era path, not part of this product's route table
+		"/aboot",     // typo of /about
+		"/events//",  // double slash after trimming one still isn't a valid slug segment
 		"/nonexistent-page",
 		"",
 	}
@@ -82,14 +82,14 @@ func TestIsKnownRoute_Miss(t *testing.T) {
 }
 
 // TestIsKnownRoute_WorkshopsIndexTrailingSlash pins down an easy-to-get-wrong
-// case: "/workshops/" (the index route WITH a trailing slash) normalizes to
-// "/workshops", which IS known -- it must not be treated as a
+// case: "/events/" (the index route WITH a trailing slash) normalizes to
+// "/events", which IS known -- it must not be treated as a
 // workshop-detail route with an empty slug. Kept separate from
-// TestIsKnownRoute_Miss's "/workshops//" (double slash, still a miss) so the
+// TestIsKnownRoute_Miss's "/events//" (double slash, still a miss) so the
 // single-slash/double-slash distinction is unambiguous in the test names.
 func TestIsKnownRoute_WorkshopsIndexTrailingSlash(t *testing.T) {
-	if !isKnownRoute("/workshops/") {
-		t.Error(`isKnownRoute("/workshops/") = false, want true (normalizes to "/workshops")`)
+	if !isKnownRoute("/events/") {
+		t.Error(`isKnownRoute("/events/") = false, want true (normalizes to "/events")`)
 	}
 }
 
@@ -111,7 +111,7 @@ func TestIsKnownRoute_ExportedWrapperAgrees(t *testing.T) {
 // mutating the result can't corrupt the package-level table).
 func TestStaticRoutes_ContainsMarketingPaths(t *testing.T) {
 	routes := StaticRoutes()
-	want := []string{"/", "/about", "/subscribe", "/workshops"}
+	want := []string{"/", "/about", "/subscribe", "/events"}
 	for _, w := range want {
 		found := false
 		for _, r := range routes {
@@ -137,20 +137,34 @@ func TestStaticRoutes_ContainsMarketingPaths(t *testing.T) {
 // #0020's workshop lookup both need: a hit returns the decoded slug, a miss
 // (including the workshops index path itself) returns ok=false.
 func TestWorkshopDetailSlug(t *testing.T) {
-	slug, ok := WorkshopDetailSlug("/workshops/solder-101")
+	slug, ok := WorkshopDetailSlug("/events/solder-101")
 	if !ok || slug != "solder-101" {
-		t.Errorf("WorkshopDetailSlug(/workshops/solder-101) = (%q, %v), want (solder-101, true)", slug, ok)
+		t.Errorf("WorkshopDetailSlug(/events/solder-101) = (%q, %v), want (solder-101, true)", slug, ok)
 	}
 
-	slug, ok = WorkshopDetailSlug("/workshops/solder-101/")
+	slug, ok = WorkshopDetailSlug("/events/solder-101/")
 	if !ok || slug != "solder-101" {
 		t.Errorf("WorkshopDetailSlug with trailing slash = (%q, %v), want (solder-101, true)", slug, ok)
 	}
 
-	if _, ok := WorkshopDetailSlug("/workshops"); ok {
-		t.Error("WorkshopDetailSlug(/workshops) = ok, want false (that's the index, not a detail slug)")
+	if _, ok := WorkshopDetailSlug("/events"); ok {
+		t.Error("WorkshopDetailSlug(/events) = ok, want false (that's the index, not a detail slug)")
 	}
 	if _, ok := WorkshopDetailSlug("/about"); ok {
 		t.Error("WorkshopDetailSlug(/about) = ok, want false")
+	}
+}
+
+// #0614: the old paths answer with a redirect, so neither is an SPA route.
+func TestIsKnownRouteDropsOldWorkshopPaths(t *testing.T) {
+	for _, path := range []string{"/workshops", "/workshops/solder-101"} {
+		if isKnownRoute(path) {
+			t.Errorf("isKnownRoute(%q) = true, want false", path)
+		}
+	}
+	for _, path := range []string{"/events", "/events/solder-101"} {
+		if !isKnownRoute(path) {
+			t.Errorf("isKnownRoute(%q) = false, want true", path)
+		}
 	}
 }

@@ -134,9 +134,10 @@ func (s *Site) FeedHandler() http.HandlerFunc {
 	}
 }
 
-// WorkshopCardHandler serves GET /workshops/{slug}/og.png (#0273): the
+// WorkshopCardHandler serves GET /events/{slug}/og.png and the older
+// GET /workshops/{slug}/og.png (#0273, #0614): the
 // generated per-workshop Open Graph card. handlers.workshopDetailPattern
-// (`^/workshops/[^/]+$`) does not match a path with a second segment, so
+// (`^/events/[^/]+$`) does not match a path with a second segment, so
 // this route needs no change to internal/handlers/routes.go -- it is
 // registered as its own, more specific pattern in
 // cmd/opencircuit/main.go's mountAndServe, which Go 1.22's ServeMux

@@ -188,27 +188,27 @@ func TestServePostgres_OneSEOSiteFlowsToEveryConsumer(t *testing.T) {
 			"each have one, and mountAndServe's own site *seo.Site parameter is a fourth")
 	}
 
-	// Sanity floor, not a hard-coded name list: as of #0338 there are FOUR
+	// Sanity floor, not a hard-coded name list: as of #0614 there are FIVE
 	// known consumers, measured by temporarily raising this constant far
 	// above the real count and reading the resulting failure's own
 	// enumeration (the same describeConsumers output the failure message
-	// below prints): NewAdminWorkshopsHandler param 1, newSendWorkerIfEnabled
-	// param 10, NewAdminCampaignArchiveHandler param 2, and mountAndServe
-	// param 34 (site) — mountAndServe's own site *seo.Site parameter counts
+	// below prints): NewAdminWorkshopsHandler param 1, NewAdminEventTypesHandler
+	// param 2, newSendWorkerIfEnabled param 10, NewAdminCampaignArchiveHandler
+	// param 2, and mountAndServe param 42 (site) — mountAndServe's own site *seo.Site parameter counts
 	// too (typeRequiresSEOSite's first case, a literal *seo.Site), which
 	// #0326's original count of three missed. This asserts a COUNT, which is
 	// allowed to grow (criterion 4 asks for OPEN-ended coverage of a fifth,
 	// not a ceiling) — it exists only to catch this guard's own resolution
 	// silently starting to miss consumers it used to find: a degradation
-	// from 4 consumers to 3 must FAIL, which a floor of 3 (as #0326 first
+	// from 5 consumers to 4 must FAIL, which a floor of 3 (as #0326 first
 	// wrote it) could not catch. Re-measure this constant the same way
 	// (temporarily set it above the real count, read the failure's own
 	// enumeration) rather than incrementing it by hand, if servePostgres
 	// gains or loses a genuine consumer.
-	const knownConsumersAsOfWriting = 4
+	const knownConsumersAsOfWriting = 5
 	if len(consumers) < knownConsumersAsOfWriting {
 		t.Fatalf("found %d *seo.Site-shaped consumer parameters in servePostgres, want at least %d "+
-			"(the known count as of #0338) — this scan may have stopped resolving one of them: %s",
+			"(the known count as of #0614) — this scan may have stopped resolving one of them: %s",
 			len(consumers), knownConsumersAsOfWriting, describeConsumers(fset, consumers))
 	}
 

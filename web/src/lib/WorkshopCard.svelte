@@ -6,7 +6,7 @@
   // fallback) is a call into lib/workshops.ts, per AGENTS.md's "SPA logic goes
   // in plain TypeScript modules ... Svelte components stay thin."
   //
-  // The title links to /workshops/{slug} -- WorkshopDetail.svelte (#0054).
+  // The title links to /events/{slug} -- WorkshopDetail.svelte (#0054).
   // The History API router (#0014) resolves that path to the
   // 'workshop-detail' route name, which App.svelte routes to that view.
   import Panel from './Panel.svelte';
@@ -26,9 +26,10 @@
 
 <Panel noPadding>
   <article class="workshop-card">
+    <p class="workshop-card-type">{workshop.event_type.name}</p>
     <header class="workshop-card-header">
       <h3 class="workshop-card-title">
-        <a href="/workshops/{workshop.slug}">{workshop.title}</a>
+        <a href="/events/{workshop.slug}">{workshop.title}</a>
       </h3>
       {#if badge}
         <span class="badge badge-danger">{badge}</span>
@@ -61,6 +62,12 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
+  }
+
+  .workshop-card-type {
+    margin: 0;
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
   }
 
   .workshop-card-header {

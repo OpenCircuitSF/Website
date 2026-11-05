@@ -59,12 +59,12 @@ describe('mastodonLinkCard', () => {
   it('uses the cover, else the workshop og image, and the og:site_name byline', () => {
     const body = 'Sign up: https://go.example/m #tag';
     expect(mastodonLinkCard({ workshop: workshop() }, body)).toMatchObject({ image: '/media/cover.png', host: 'Open Circuit SF' });
-    expect(mastodonLinkCard({ workshop: workshop({ cover_image: null }) }, body)?.image).toBe('/workshops/solder-101/og.png');
+    expect(mastodonLinkCard({ workshop: workshop({ cover_image: null }) }, body)?.image).toBe('/events/solder-101/og.png');
   });
   it('keeps an absolute cover as og:image does, and drops an unsafe one', () => {
     const body = 'https://go.example/m';
     expect(mastodonLinkCard({ workshop: workshop({ cover_image: 'https://cdn.test/c.jpg' }) }, body)?.image).toBe('https://cdn.test/c.jpg');
-    expect(mastodonLinkCard({ workshop: workshop({ cover_image: 'javascript:alert(1)' }) }, body)?.image).toBe('/workshops/solder-101/og.png');
+    expect(mastodonLinkCard({ workshop: workshop({ cover_image: 'javascript:alert(1)' }) }, body)?.image).toBe('/events/solder-101/og.png');
   });
 });
 

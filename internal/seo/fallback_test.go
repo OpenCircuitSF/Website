@@ -20,7 +20,7 @@ import (
 // publicFallbackRoutes is every route this issue's plan gives real fallback
 // content: the six static/index routes, plus a published workshop and a
 // published archive entry set up per-test below.
-var publicStaticRoutes = []string{"/", "/about", "/privacy", "/subscribe", "/workshops", "/archive"}
+var publicStaticRoutes = []string{"/", "/about", "/privacy", "/subscribe", "/events", "/archive"}
 
 // TestRender_PublicRoutesServeExactlyOneH1 is acceptance criterion 1: every
 // public route serves exactly one <h1>, and a static route's <h1> text
@@ -48,7 +48,7 @@ func TestRender_PublicRoutesServeExactlyOneH1(t *testing.T) {
 		}
 	}
 
-	for _, p := range []string{"/workshops/solder-101", "/archive/sept-recap"} {
+	for _, p := range []string{"/events/solder-101", "/archive/sept-recap"} {
 		body := string(r.Render(p))
 		if got := strings.Count(body, "<h1"); got != 1 {
 			t.Errorf("path %q: <h1> count = %d, want 1: %s", p, got, body)
@@ -72,7 +72,7 @@ func TestRender_PrivateAndUnknownRoutesInjectNothing(t *testing.T) {
 	routes := []string{
 		"/confirm", "/preferences", "/unsubscribe", "/subscribe/thanks",
 		"/login", "/account", "/admin", "/register/verify", "/recover/verify",
-		"/nonexistent", "/workshops/secret-draft", "/archive/withheld-campaign",
+		"/nonexistent", "/events/secret-draft", "/archive/withheld-campaign",
 	}
 	for _, p := range routes {
 		body := string(r.Render(p))
@@ -116,7 +116,7 @@ func TestRender_WorkshopDetailServesTitleDateVenueAndBody(t *testing.T) {
 	}
 	source := fakeWorkshopSource{"solder-night": w}
 	r := newTestRenderer(source)
-	body := string(r.Render("/workshops/solder-night"))
+	body := string(r.Render("/events/solder-night"))
 
 	if got := strings.Count(body, "<h1"); got != 1 {
 		t.Fatalf("want exactly one <h1>, got %d: %s", got, body)
@@ -140,7 +140,7 @@ func TestRender_WorkshopDetailServesTitleDateVenueAndBody(t *testing.T) {
 	if !strings.Contains(body, want) {
 		t.Errorf("body does not contain the exact RenderMarkdownPageHTML output %q: %s", want, body)
 	}
-	if !strings.Contains(body, `<a href="/workshops">`) {
+	if !strings.Contains(body, `<a href="/events">`) {
 		t.Errorf("missing 'see all workshops' link: %s", body)
 	}
 }
@@ -156,7 +156,7 @@ func TestRender_WorkshopDetailBodyHeadingDoesNotBecomeSecondH1(t *testing.T) {
 	}
 	source := fakeWorkshopSource{"heading-body": w}
 	r := newTestRenderer(source)
-	body := string(r.Render("/workshops/heading-body"))
+	body := string(r.Render("/events/heading-body"))
 
 	if got := strings.Count(body, "<h1"); got != 1 {
 		t.Fatalf("want exactly one <h1>, got %d: %s", got, body)
@@ -173,9 +173,9 @@ func TestRender_CanceledWorkshopDetailSaysCanceled(t *testing.T) {
 	w := fullWorkshop("canceled-night", WorkshopCanceled)
 	source := fakeWorkshopSource{"canceled-night": w}
 	r := newTestRenderer(source)
-	body := string(r.Render("/workshops/canceled-night"))
+	body := string(r.Render("/events/canceled-night"))
 
-	if !strings.Contains(body, "This workshop has been canceled.") {
+	if !strings.Contains(body, "This event has been canceled.") {
 		t.Errorf("canceled notice missing: %s", body)
 	}
 }
@@ -199,7 +199,7 @@ func TestRender_WorkshopsIndexMirrorsListVisible(t *testing.T) {
 	}
 	r := newTestRenderer(source)
 	r.now = func() time.Time { return now }
-	body := string(r.Render("/workshops"))
+	body := string(r.Render("/events"))
 
 	for _, absent := range []string{"Draft Workshop", "Unpublished Workshop", "Never Published Canceled"} {
 		if strings.Contains(body, absent) {
@@ -235,7 +235,7 @@ func TestRender_WorkshopsIndexMirrorsListVisible(t *testing.T) {
 
 	t.Run("empty state when nothing is visible", func(t *testing.T) {
 		r := newTestRenderer(nil)
-		body := string(r.Render("/workshops"))
+		body := string(r.Render("/events"))
 		// html.EscapeString because html/template escapes the apostrophe in
 		// "we'll" to "&#39;" in text context -- the rendered body carries the
 		// escaped form, not the Go constant's literal bytes.
@@ -454,7 +454,7 @@ func TestRender_FallbackEscapesAdminInput(t *testing.T) {
 	}
 	r := NewRenderer([]byte(testTemplate), testBaseURL, workshopSource, archiveSource)
 
-	for _, path := range []string{"/workshops/xss-workshop", "/archive/xss-archive"} {
+	for _, path := range []string{"/events/xss-workshop", "/archive/xss-archive"} {
 		body := string(r.Render(path))
 		if strings.Contains(body, "<script>alert(1)") {
 			t.Errorf("path %q: unescaped <script> reached the page: %s", path, body)
@@ -464,7 +464,7 @@ func TestRender_FallbackEscapesAdminInput(t *testing.T) {
 		}
 	}
 
-	workshopBody := string(r.Render("/workshops/xss-workshop"))
+	workshopBody := string(r.Render("/events/xss-workshop"))
 	if !strings.Contains(workshopBody, "&lt;script&gt;") {
 		t.Errorf("expected the workshop title/summary to be HTML-escaped: %s", workshopBody)
 	}
@@ -495,9 +495,9 @@ func TestRender_FallbackAddsNoScriptElement(t *testing.T) {
 	}{
 		// "/" carries one: #0530's Organization + WebSite JSON-LD block.
 		{"/", 1}, {"/about", 0}, {"/privacy", 0}, {"/subscribe", 0},
-		{"/workshops", 0}, {"/archive", 0},
-		{"/workshops/plain-workshop", 0},
-		{"/workshops/json-ld-workshop", 1},
+		{"/events", 0}, {"/archive", 0},
+		{"/events/plain-workshop", 0},
+		{"/events/json-ld-workshop", 1},
 		// No archived_at, so no #0530 Article block: only the fallback body.
 		{"/archive/an-entry", 0},
 		{"/archive/an-article", 1},
@@ -545,7 +545,7 @@ func TestRender_ListSourceErrorRendersHeadingAndSkipsCache(t *testing.T) {
 	clock := &fakeClock{t: time.Unix(0, 0)}
 	r.now = clock.now
 
-	first := string(r.Render("/workshops"))
+	first := string(r.Render("/events"))
 	if got := strings.Count(first, "<h1"); got != 1 {
 		t.Fatalf("expected exactly one <h1> even on a source error, got %d: %s", got, first)
 	}
@@ -554,7 +554,7 @@ func TestRender_ListSourceErrorRendersHeadingAndSkipsCache(t *testing.T) {
 	}
 
 	clock.advance(1 * time.Second) // still well within the TTL, no Invalidate
-	second := string(r.Render("/workshops"))
+	second := string(r.Render("/events"))
 	if !strings.Contains(second, "Soon Workshop") {
 		t.Errorf("expected the recovered source's list on the next render (the error render must not have been cached): %s", second)
 	}
@@ -594,9 +594,9 @@ func TestHomeNextUpMatchesNextWorkshops(t *testing.T) {
 		t.Errorf("invisible workshop leaked into the home page's Next up list: %s", body)
 	}
 	nextUp := idx(homeNextUpH2)
-	soon := idx(`<a href="/workshops/soon">Soon Workshop</a>`)
-	mid := idx(`<a href="/workshops/mid">Canceled Upcoming</a>`)
-	later := idx(`<a href="/workshops/later">Later Workshop</a>`)
+	soon := idx(`<a href="/events/soon">Soon Workshop</a>`)
+	mid := idx(`<a href="/events/mid">Canceled Upcoming</a>`)
+	later := idx(`<a href="/events/later">Later Workshop</a>`)
 	if !(nextUp < soon && soon < mid) {
 		t.Errorf("Next up order wrong (want soon before canceled-upcoming): %s", body)
 	}
@@ -641,7 +641,7 @@ func TestHomeNextUpEmptyStateAndNoteLine(t *testing.T) {
 	if !strings.Contains(body, html.EscapeString(homeNextUpEmpty)) {
 		t.Errorf("missing the Next up empty state: %s", body)
 	}
-	if !strings.Contains(body, `<a href="/workshops">`+homeSeeAll+`</a>`) || !strings.Contains(body, `<a href="/archive">`+homeReadArchive+`</a>`) {
+	if !strings.Contains(body, `<a href="/events">`+homeSeeAll+`</a>`) || !strings.Contains(body, `<a href="/archive">`+homeReadArchive+`</a>`) {
 		t.Errorf("missing the note line's links: %s", body)
 	}
 }
@@ -685,5 +685,36 @@ func TestHomeNextUpCopyMatchesSvelteView(t *testing.T) {
 		if !strings.Contains(normalizeSourceForCopyGuard(string(home), extractAppName(t)), s) {
 			t.Errorf("Home.svelte no longer contains %q -- the home page's server fallback has drifted from the SPA view", s)
 		}
+	}
+}
+
+func TestFallbackListShowsTypeName(t *testing.T) {
+	source := fakeWorkshopSource{
+		"hack": {Slug: "hack", Title: "Hack", Status: WorkshopPublished, Published: true, StartsAt: "2099-01-02T18:00:00Z", EventTypeName: "Hack Night"},
+		"gone": {Slug: "gone", Title: "Gone", Status: WorkshopCanceled, Published: true, StartsAt: "2099-01-03T18:00:00Z", EventTypeName: "Hack Night"},
+		"none": {Slug: "none", Title: "None", Status: WorkshopPublished, Published: true, StartsAt: "2099-01-04T18:00:00Z"},
+	}
+	body := string(newTestRenderer(source).Render("/events"))
+	if !strings.Contains(body, "<br>Hack Night · ") {
+		t.Errorf("list row does not lead with its type name: %s", body)
+	}
+	if !strings.Contains(body, "<br>Canceled · Hack Night · ") {
+		t.Errorf("canceled row does not read Canceled, then the type: %s", body)
+	}
+	if strings.Contains(body, "/workshops") {
+		t.Errorf("list still links to an old path: %s", body)
+	}
+}
+
+func TestFallbackDetailShowsTypeName(t *testing.T) {
+	w := Workshop{Slug: "hack", Title: "Hack", Status: WorkshopPublished, Published: true, StartsAt: "2099-01-02T18:00:00Z", EventTypeName: "Hack Night"}
+	body := string(newTestRenderer(fakeWorkshopSource{"hack": w}).Render("/events/hack"))
+	if !strings.Contains(body, "<p>Hack Night</p>") {
+		t.Errorf("detail page has no type line: %s", body)
+	}
+	w.EventTypeName = ""
+	body = string(newTestRenderer(fakeWorkshopSource{"hack": w}).Render("/events/hack"))
+	if strings.Contains(body, "<p></p>") {
+		t.Errorf("an empty type rendered an empty line: %s", body)
 	}
 }

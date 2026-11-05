@@ -58,7 +58,7 @@ catch-all: it buffers the SPA handler's response, and if the response was
 HTML, replaces the body with `Renderer.Render(path)`'s output at whatever
 status the SPA handler chose (200 for a known route, 404 for a miss, and —
 since `#0522` — 410 for a withheld archive campaign and 404 for an
-unknown/draft/unsent slug on both `/archive/{slug}` and `/workshops/{slug}`,
+unknown/draft/unsent slug on both `/archive/{slug}` and `/events/{slug}`,
 decided by the handlers' own `SPAStatus` deep-link resolvers so the HTML
 route and the JSON API can never disagree;
 `#0022`'s behavior is preserved structurally, not by convention, since
@@ -70,9 +70,9 @@ those.
 Resolution order (`Renderer.resolve`), in priority:
 
 1. An exact match in the compiled-in static route table — `/`, `/about`,
-   `/privacy`, `/workshops`, `/subscribe`, `/archive` — each with its own
+   `/privacy`, `/events`, `/subscribe`, `/archive` — each with its own
    title, description, and OG fields.
-2. A `/workshops/{slug}` match, resolved against the configured
+2. A `/events/{slug}` match, resolved against the configured
    `WorkshopSource`.
 3. An `/archive/{slug}` match, resolved against the configured
    `ArchiveSource` (`#0123`).
@@ -116,7 +116,7 @@ when `Published` (`archive_status == 'published'`, `#0123`/PRD §6.8).
 ## Event JSON-LD (`#0055`)
 
 `internal/seo/jsonld.go` builds a schema.org `Event` block for a
-`/workshops/{slug}` page — structured data for Google Rich Results,
+`/events/{slug}` page — structured data for Google Rich Results,
 independent of the Open Graph card. A block is only emitted when the
 workshop is published-or-canceled-and-published (the same gate above)
 **and** has both a start date and a location (name or address). Missing
@@ -148,7 +148,7 @@ canceled/draft/unknown slug shares.
 post-deploy step that `scripts/check.sh` cannot perform. Paste a workshop
 detail URL into https://search.google.com/test/rich-results and record
 errors *and* warnings, not just errors. The first run, on 2026-09-12
-against `/workshops/programming-leds`, reported only two missing optional
+against `/events/programming-leds`, reported only two missing optional
 properties, `offers` and `performer`; both are deliberately not emitted.
 Repeat the run after any change to `jsonld.go`, and include a canceled
 workshop next time — `EventCancelled` has not yet been through the tool.
@@ -156,14 +156,14 @@ workshop next time — `EventCancelled` has not yet been through the tool.
 ## Sitemap and `robots.txt`
 
 `GET /sitemap.xml` (`internal/seo/sitemap.go`) lists the curated marketing
-routes (`/`, `/about`, `/privacy`, `/workshops`, `/subscribe`, `/archive`
+routes (`/`, `/about`, `/privacy`, `/events`, `/subscribe`, `/archive`
 — deliberately not `handlers.StaticRoutes()`, which also holds the Phase 1
 auth/account/token routes that must never be indexed), every workshop with
 `Status == WorkshopPublished` (draft, unpublished, **and canceled** are all
 excluded — canceled workshops are absent from the sitemap on purpose, see
 below), and every archive entry with `Published == true` (excludes pending
 and withheld, per PRD §6.8). `<lastmod>` is data-derived (`#0533`):
-`/workshops` from the newest published workshop's `UpdatedAt`, `/archive`
+`/events` from the newest published workshop's `UpdatedAt`, `/archive`
 from the newest published entry's, `/` from whichever source changed most
 recently — and the static copy pages (`/about`, `/privacy`, `/subscribe`)
 omit it entirely, since no truthful date exists for copy that never
@@ -299,10 +299,10 @@ become a spurious focus target even if it somehow survived past mount.
 **Where the content lives:** `internal/seo/fallback.go`. `staticPageCopy`
 holds the `/`, `/about`, `/privacy`, and `/subscribe` copy — a deliberate
 first-slice cut for `/about` and `/privacy` (the intro paragraph and a
-couple of sections, not the whole page) — plus the `/workshops` and
+couple of sections, not the whole page) — plus the `/events` and
 `/archive` index headings/ledes/empty-state strings, all copied verbatim
 from the corresponding `.svelte` view with `{APP_NAME}` expanded and inline
-`<strong>` dropped. `/workshops` and `/archive` build their lists from the
+`<strong>` dropped. `/events` and `/archive` build their lists from the
 same `WorkshopSource`/`ArchiveSource` this package already reads for meta
 tags, mirroring `internal/workshops/store.go`'s `ListVisible` exactly for
 filtering and order. A workshop or archive detail page's body goes through
@@ -334,7 +334,7 @@ clears it on the exact call that already clears the sitemap. A withheld
 immediately, without waiting for `Invalidate`: `resolve` re-runs on every
 request, and once the entry no longer qualifies, the request moves to the
 shared fallback bucket, whose page content is the zero value. An *index*
-page (`/workshops`, `/archive`) is cached under its one static key, so a
+page (`/events`, `/archive`) is cached under its one static key, so a
 mutation there needs the ordinary `Invalidate` call (or the 60s TTL) to be
 reflected — the same bound the sitemap already has.
 
@@ -365,7 +365,8 @@ generic `og-default.png` — every such workshop looked identical when
 shared. `Site.WorkshopCardHandler` now generates a distinct 1200×630 PNG
 per eligible workshop, server-side, at request time.
 
-- **Route**: `GET /workshops/{slug}/og.png`, registered in
+- **Route**: `GET /events/{slug}/og.png` and, for posts already published,
+  `GET /workshops/{slug}/og.png` (same handler and cache), registered in
   `cmd/opencircuit/main.go`'s `mountAndServe` as its own pattern, more
   specific than the `GET /` SPA catch-all — no change to
   `internal/handlers/routes.go`'s workshop-detail pattern was needed,
@@ -532,7 +533,7 @@ What the removed comments said, now recorded once here:
 | `WorkshopSource`/`Workshop` shape | `internal/seo/workshop.go` |
 | `ArchiveSource`/`ArchiveEntry` shape | `internal/seo/archive.go` |
 | Card asset regeneration scripts | `assets/og/build-card-fonts.py`, `assets/og/build-card-base.py` |
-| Route wiring (`GET /sitemap.xml`, `/robots.txt`, `/workshops/{slug}/og.png`, `GET /`) | `cmd/opencircuit/main.go`'s `mountAndServe` |
+| Route wiring (`GET /sitemap.xml`, `/robots.txt`, `/events/{slug}/og.png`, `GET /`) | `cmd/opencircuit/main.go`'s `mountAndServe` |
 | Plain SPA catch-all `Site.Middleware` wraps | `internal/handlers/static.go` (`SPAHandler`) |
 | `%%OC_*%%` placeholder markers | `web/index.html` |
 | `IsKnownRoute`/`WorkshopDetailSlug`/`ArchiveDetailSlug` | `internal/handlers/routes.go` |
@@ -563,3 +564,14 @@ than assumed from this file:
 full — it can drift again as the subsystem changes further, so treat this
 file as the fuller reference and re-verify both against `internal/seo`
 itself rather than against each other.
+
+## Old `/workshops` URLs (`#0614`)
+
+`/workshops` and `/workshops/{slug}` are permanent redirects, because they are
+already in sent email, flyers, short links and published posts.
+`internal/handlers/legacy_workshop_redirects.go` sends `/workshops` to
+`/events?type=workshop` and `/workshops/{slug}` to `/events/{slug}`, keeping the
+query string. It does no store lookup, so it cannot reveal whether a draft
+exists. `web/src/lib/router.ts`'s `legacyRedirectTarget` does the same for
+client-side navigation. The filter query is client-side only, so a filtered
+URL's canonical is `/events` and none goes in the sitemap.

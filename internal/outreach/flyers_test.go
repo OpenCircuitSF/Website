@@ -15,7 +15,7 @@ import (
 
 func TestFlyerDestinationURL(t *testing.T) {
 	got := FlyerDestinationURL("https://www.opencircuitsf.com/", "soldering-101", "mission-1")
-	want := "https://www.opencircuitsf.com/workshops/soldering-101?utm_campaign=soldering-101&utm_content=mission-1&utm_medium=print&utm_source=flyer"
+	want := "https://www.opencircuitsf.com/events/soldering-101?utm_campaign=soldering-101&utm_content=mission-1&utm_medium=print&utm_source=flyer"
 	if got != want {
 		t.Errorf("got %q\nwant %q", got, want)
 	}

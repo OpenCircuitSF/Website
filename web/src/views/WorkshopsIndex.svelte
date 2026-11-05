@@ -1,6 +1,6 @@
 <script lang="ts">
-  // WorkshopsIndex — /workshops (#0053, PRD §5.1/§7.3). Upcoming workshops in
-  // chronological order, past workshops in reverse chronological order — both
+  // WorkshopsIndex — /events (#0053, PRD §5.1/§7.3). Upcoming events in
+  // chronological order, past events in reverse chronological order — both
   // orderings come straight from GET /api/workshops
   // (workshops.Store.ListVisible, #0051/#0135); this view does no re-sorting
   // of its own. The index includes canceled workshops alongside published
@@ -24,7 +24,8 @@
   import WorkshopCard from '../lib/WorkshopCard.svelte';
   import SubscribeForm from '../lib/SubscribeForm.svelte';
   import { listPublicWorkshops } from '../lib/api';
-  import { hasNoUpcoming } from '../lib/workshops';
+  import { currentRoute } from '../lib/router';
+  import { hasNoUpcoming, typeFilterOptions, selectedTypeSlug, filterListByType, isUnknownType } from '../lib/workshops';
   import type { WorkshopsListResponse } from '../lib/types';
 
   type Status = 'loading' | 'loaded' | 'error';
@@ -42,31 +43,53 @@
         status = 'error';
       });
   });
+
+  // #0614: the filter is read from the URL, so it survives a reload, and a
+  // change to it re-derives from the list already fetched.
+  const options = $derived(list ? typeFilterOptions(list) : []);
+  const selected = $derived(selectedTypeSlug($currentRoute.query));
+  const unknownType = $derived(isUnknownType(options, selected));
+  const visible = $derived(list ? filterListByType(list, selected) : null);
 </script>
 
 <main id="main-content" class="app-shell workshops-shell">
-  <TerminalPanel title="workshops // open_circuit_sf">
-    <Prompt text="ls workshops/" />
-    <h1 class="headline" tabindex="-1">Workshops</h1>
+  <TerminalPanel title="events // open_circuit_sf">
+    <Prompt text="ls events/" />
+    <h1 class="headline" tabindex="-1">Events</h1>
   </TerminalPanel>
 
   <TraceDivider />
 
   {#if status === 'loading'}
-    <p class="text-muted">Loading workshops…</p>
+    <p class="text-muted">Loading events…</p>
   {:else if status === 'error'}
-    <p class="text-error">Couldn't load workshops right now. Try refreshing the page.</p>
-  {:else if list}
+    <p class="text-error">Couldn't load events right now. Try refreshing the page.</p>
+  {:else if visible}
+    {#if options.length > 0}
+      <nav class="type-filter" aria-label="Filter by type">
+        <a href="/events" aria-current={selected === null ? 'true' : undefined}>All</a>
+        {#each options as option (option.slug)}
+          <a
+            href="/events?type={encodeURIComponent(option.slug)}"
+            aria-current={selected === option.slug ? 'true' : undefined}
+          >{option.name}</a>
+        {/each}
+      </nav>
+    {/if}
+
+    {#if unknownType}
+    <p>No events of that type. <a href="/events">See all events</a></p>
+    {:else}
     <section class="upcoming" aria-labelledby="upcoming-h">
       <h2 id="upcoming-h">Upcoming</h2>
-      {#if hasNoUpcoming(list)}
+      {#if hasNoUpcoming(visible)}
         <Panel>
-          <p>Nothing scheduled yet — subscribe and we'll email you the moment a new workshop is announced.</p>
+          <p>Nothing scheduled yet — subscribe and we'll email you the moment a new event is announced.</p>
           <SubscribeForm />
         </Panel>
       {:else}
         <div class="workshop-cards">
-          {#each list.upcoming as w (w.slug)}
+          {#each visible.upcoming as w (w.slug)}
             <WorkshopCard workshop={w} />
           {/each}
         </div>
@@ -76,17 +99,18 @@
     <TraceDivider />
 
     <section class="past" aria-labelledby="past-h">
-      <h2 id="past-h">Past workshops</h2>
-      {#if list.past.length === 0}
-        <p class="text-muted">No past workshops yet — this group is just getting started.</p>
+      <h2 id="past-h">Past events</h2>
+      {#if visible.past.length === 0}
+        <p class="text-muted">{selected === null ? 'No past events yet — this group is just getting started.' : 'No past events of this type.'}</p>
       {:else}
         <div class="workshop-cards">
-          {#each list.past as w (w.slug)}
+          {#each visible.past as w (w.slug)}
             <WorkshopCard workshop={w} />
           {/each}
         </div>
       {/if}
     </section>
+    {/if}
   {/if}
 </main>
 
@@ -104,6 +128,16 @@
     text-transform: uppercase;
     letter-spacing: 0.01em;
     font-size: clamp(24px, 6vw, 36px);
+    color: var(--text);
+  }
+
+  .type-filter {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+  .type-filter a[aria-current='true'] {
+    font-weight: 700;
     color: var(--text);
   }
 

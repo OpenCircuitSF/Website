@@ -139,7 +139,7 @@ func (h *PublicWorkshopsHandler) toPublicView(ctx context.Context, w workshops.W
 		CoverImage:      w.CoverImage,
 		Status:          w.Status,
 		Interests:       h.resolveInterests(ctx, w.InterestIDs),
-		EventType:       eventTypeRefView{Slug: w.EventTypeSlug, Name: w.EventTypeName},
+		EventType:       eventTypeRefView{Slug: w.EventTypeSlug, Name: w.EventTypeName, SortOrder: w.EventTypeSortOrder},
 	}
 }
 
@@ -239,7 +239,7 @@ func workshopPageStatus(wk workshops.Workshop) int {
 }
 
 // PageStatus is the HTML route's twin of GetBySlug's status decision
-// (#0522): GET /workshops/{slug} serves the SPA shell at the SAME status
+// (#0522): GET /events/{slug} serves the SPA shell at the SAME status
 // the JSON API answers with — 404 for an unknown, draft, or never-published
 // workshop instead of a soft-404 200. This is #0522 criterion 4's decision,
 // recorded here and in the issue file: the same defect the archive HTML
@@ -265,7 +265,7 @@ func (h *PublicWorkshopsHandler) PageStatus(ctx context.Context, slug string) in
 }
 
 // SPAStatus satisfies the SPAHandler deep-link resolver seam (static.go,
-// #0522): /workshops/{slug} paths get the status workshopPageStatus maps
+// #0522): /events/{slug} paths get the status workshopPageStatus maps
 // the workshop to, everything else reports not-mine. Trailing-slash
 // normalization is WorkshopDetailSlug's own, the same one isKnownRoute and
 // SPAHandler apply.

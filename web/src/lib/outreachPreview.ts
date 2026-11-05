@@ -78,7 +78,7 @@ export function mastodonLinkCard(view: CardView, body: string): LinkCard | null 
   return {
     title: view.workshop.title,
     description: (view.workshop.summary ?? '').trim(),
-    image: cover && isSafeLinkHref(cover) && /^(\/|https?:)/i.test(cover) ? cover : `/workshops/${view.workshop.slug}/og.png`,
+    image: cover && isSafeLinkHref(cover) && /^(\/|https?:)/i.test(cover) ? cover : `/events/${view.workshop.slug}/og.png`,
     host: APP_NAME,
   };
 }

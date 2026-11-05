@@ -45,7 +45,7 @@ func DestinationURL(siteBaseURL string, f Facts, ch Channel, w Wave) string {
 	q.Set("utm_medium", ch.UTMMedium)
 	q.Set("utm_campaign", f.Slug)
 	q.Set("utm_content", w.Name)
-	return strings.TrimRight(siteBaseURL, "/") + "/workshops/" + f.Slug + "?" + q.Encode()
+	return strings.TrimRight(siteBaseURL, "/") + "/events/" + f.Slug + "?" + q.Encode()
 }
 
 // SiteURL is the public site, named in the description blocks drafted for the

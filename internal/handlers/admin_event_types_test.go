@@ -21,7 +21,11 @@ import (
 )
 
 func adminEventTypesMux(pool *pgxpool.Pool) http.Handler {
-	h := NewAdminEventTypesHandler(eventtypes.NewStore(pool), audit.New(pool))
+	return adminEventTypesMuxWith(pool, nil)
+}
+
+func adminEventTypesMuxWith(pool *pgxpool.Pool, invalidator seoCacheInvalidator) http.Handler {
+	h := NewAdminEventTypesHandler(eventtypes.NewStore(pool), audit.New(pool), invalidator)
 	requireSession := middleware.RequireSession(auth.NewStore(pool))
 	guard := func(f http.HandlerFunc) http.Handler { return requireSession(middleware.RequireAdmin(f)) }
 	mux := http.NewServeMux()
@@ -316,5 +320,77 @@ func TestAdminEventTypes_DeleteUnusedAudits(t *testing.T) {
 	actions := eventTypeAuditActions(t, pool, et.ID)
 	if len(actions) != 1 || actions[0] != audit.ActionEventTypeDeleted {
 		t.Errorf("actions = %v", actions)
+	}
+}
+
+// invalidatingEventTypeServer is eventTypeServer with a counting invalidator.
+func invalidatingEventTypeServer(t *testing.T, label string) (*pgxpool.Pool, *countingCacheInvalidator, func(method, path, body string) (int, string)) {
+	t.Helper()
+	pool := interestsTestPool(t)
+	inv := &countingCacheInvalidator{}
+	srv := httptest.NewServer(adminEventTypesMuxWith(pool, inv))
+	t.Cleanup(srv.Close)
+	token := "event-types-inv-token-" + label
+	seedSession(t, pool, seedAdmin(t, pool, "event-types-inv-"+label+"@example.com"), token)
+	return pool, inv, func(method, path, body string) (int, string) {
+		resp := doJSON(t, srv.Client(), method, srv.URL+path, token, body)
+		return resp.StatusCode, string(readBody(t, resp))
+	}
+}
+
+func TestAdminEventTypes_MutationsInvalidateSEOCache(t *testing.T) {
+	pool, inv, do := invalidatingEventTypeServer(t, "ok")
+	t.Cleanup(func() {
+		ctx := context.Background()
+		_, _ = pool.Exec(ctx, `UPDATE event_types SET is_default = FALSE WHERE is_default`)
+		_, _ = pool.Exec(ctx, `UPDATE event_types SET is_default = TRUE WHERE slug = 'workshop'`)
+	})
+	et := seedEventTypeRow(t, pool)
+	spare := seedEventTypeRow(t, pool)
+
+	createSlug := testEventTypeSlug(t, pool)
+	steps := []struct {
+		name, method, path, body string
+		want                     int
+	}{
+		{"create", http.MethodPost, "/admin/event-types", fmt.Sprintf(`{"slug":%q,"name":"Zz new","sort_order":901}`, createSlug), http.StatusCreated},
+		{"rename", http.MethodPatch, typePath(et.ID), `{"name":"Zz renamed"}`, http.StatusOK},
+		{"disable", http.MethodPatch, typePath(et.ID), `{"enabled":false}`, http.StatusOK},
+		{"reorder", http.MethodPatch, typePath(et.ID), `{"sort_order":902}`, http.StatusOK},
+		{"set default", http.MethodPatch, typePath(spare.ID), `{"is_default":true}`, http.StatusOK},
+		{"delete", http.MethodDelete, typePath(et.ID), "", http.StatusOK},
+	}
+	for i, step := range steps {
+		code, body := do(step.method, step.path, step.body)
+		if code != step.want {
+			t.Fatalf("%s: status = %d, want %d (%s)", step.name, code, step.want, body)
+		}
+		if inv.calls != i+1 {
+			t.Errorf("%s: invalidator.calls = %d, want %d", step.name, inv.calls, i+1)
+		}
+	}
+}
+
+func TestAdminEventTypes_RefusedMutationDoesNotInvalidate(t *testing.T) {
+	pool, inv, do := invalidatingEventTypeServer(t, "refused")
+	et := seedEventTypeRow(t, pool)
+	w, err := workshops.NewStore(pool).Create(context.Background(), workshops.CreateInput{Title: fmt.Sprintf("zz-%d", testdb.Unique()), EventTypeID: &et.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupAdminWorkshop(t, pool, w.ID)
+
+	for _, step := range []struct{ method, path, body string }{
+		{http.MethodPost, "/admin/event-types", `{"slug":"Not A Slug","name":"X"}`},
+		{http.MethodPatch, typePath(et.ID), `{"slug":"changed"}`},
+		{http.MethodDelete, typePath(et.ID), ""},
+	} {
+		code, body := do(step.method, step.path, step.body)
+		if code < 400 {
+			t.Fatalf("%s %s: status = %d, want a refusal (%s)", step.method, step.path, code, body)
+		}
+	}
+	if inv.calls != 0 {
+		t.Errorf("invalidator.calls = %d after refused writes, want 0", inv.calls)
 	}
 }

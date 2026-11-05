@@ -113,7 +113,7 @@ type AdminWorkshopsHandler struct {
 	// same value AdminCampaignPreviewHandler and mailing.SendStore build
 	// unsubscribe/manage links from. An empty baseURL (test-only; every
 	// production call site passes cfg.BaseURL) produces a relative
-	// "/workshops/{slug}" link rather than panicking.
+	// "/events/{slug}" link rather than panicking.
 	baseURL string
 }
 
@@ -188,6 +188,8 @@ type workshopView struct {
 type eventTypeRefView struct {
 	Slug string `json:"slug"`
 	Name string `json:"name"`
+	// SortOrder lets the public filter honour the admin's order (#0614).
+	SortOrder int `json:"sort_order"`
 }
 
 func toWorkshopView(w workshops.Workshop) workshopView {
@@ -215,7 +217,7 @@ func toWorkshopView(w workshops.Workshop) workshopView {
 		CreatedAt:       w.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:       w.UpdatedAt.UTC().Format(time.RFC3339),
 		EventTypeID:     w.EventTypeID,
-		EventType:       eventTypeRefView{Slug: w.EventTypeSlug, Name: w.EventTypeName},
+		EventType:       eventTypeRefView{Slug: w.EventTypeSlug, Name: w.EventTypeName, SortOrder: w.EventTypeSortOrder},
 	}
 }
 

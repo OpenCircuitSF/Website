@@ -1146,7 +1146,7 @@ export function listPublicWorkshops(): Promise<WorkshopsListResponse> {
  * tells them nothing"); a draft, or a slug with no matching row, both throw
  * ApiError(404) with a byte-identical body, so WorkshopDetail.svelte cannot
  * distinguish "exists but unpublished" from "never existed" and renders one
- * neutral not-found state for both. The /workshops/{slug} path itself is
+ * neutral not-found state for both. The /events/{slug} path itself is
  * always a KNOWN route (handlers.WorkshopDetailSlug matches on shape alone),
  * so the SPA still serves 200 and this component's own not-found state is
  * what the visitor sees — this route never falls through to the generic

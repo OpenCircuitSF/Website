@@ -195,7 +195,7 @@ func TestSite_EmittedURLsShareConfiguredHost(t *testing.T) {
 	site := NewSite([]byte(testTemplate), configuredBaseURL, source, nil)
 
 	// og:url and og:image, for both a static route and a workshop-detail route.
-	for _, path := range []string{"/", "/about", "/workshops/solder-101"} {
+	for _, path := range []string{"/", "/about", "/events/solder-101"} {
 		body := string(site.renderer.Render(path))
 		ogURL := extractMetaContent(t, body, "og:url")
 		ogImage := extractMetaContent(t, body, "og:image")
@@ -272,7 +272,7 @@ func TestSite_InvalidateClearsBothCaches(t *testing.T) {
 	source := &mutatingWorkshopSource{title: "Original Title", updatedAt: "2026-01-01"}
 	site := NewSite([]byte(testTemplate), testBaseURL, source, nil)
 
-	_ = site.renderer.Render("/workshops/mutable")
+	_ = site.renderer.Render("/events/mutable")
 	firstSitemap, err := site.sitemap.Render()
 	if err != nil {
 		t.Fatalf("sitemap Render: %v", err)
@@ -285,7 +285,7 @@ func TestSite_InvalidateClearsBothCaches(t *testing.T) {
 	source.updatedAt = "2026-08-18"
 	site.Invalidate()
 
-	afterRenderer := string(site.renderer.Render("/workshops/mutable"))
+	afterRenderer := string(site.renderer.Render("/events/mutable"))
 	afterSitemap, err := site.sitemap.Render()
 	if err != nil {
 		t.Fatalf("sitemap Render: %v", err)

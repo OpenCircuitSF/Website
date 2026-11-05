@@ -279,7 +279,6 @@ func servePostgres(cfg *config.Config) error {
 	adminInterestsH := handlers.NewAdminInterestsHandler(interestsStore, auditLogger)
 
 	// Admin-only event type CRUD (#0613).
-	adminEventTypesH := handlers.NewAdminEventTypesHandler(eventtypes.NewStore(pool), auditLogger)
 
 	// Campaign store, constructed here (ahead of the rest of the campaign
 	// wiring further below) so it can be handed to adminWorkshopsH just
@@ -300,7 +299,7 @@ func servePostgres(cfg *config.Config) error {
 	// workshopSEOSource (workshop_seo_source.go), that this handler mutates
 	// -- and the identical *seo.Site pointer is threaded into mountAndServe
 	// below, so AdminWorkshopsHandler.invalidate() and the SEO
-	// renderer/sitemap GET /workshops/{slug} and GET /sitemap.xml read from
+	// renderer/sitemap GET /events/{slug} and GET /sitemap.xml read from
 	// are provably the same instance, not two independently-constructed
 	// ones (see cmd/opencircuit/seo_wiring_test.go).
 	//
@@ -314,6 +313,9 @@ func servePostgres(cfg *config.Config) error {
 		return err
 	}
 	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, site, campaignsStore, auditLogger, cfg.BaseURL)
+	// #0614: type names appear in server-rendered pages, so a type change
+	// invalidates the same *seo.Site a listing change does.
+	adminEventTypesH := handlers.NewAdminEventTypesHandler(eventtypes.NewStore(pool), auditLogger, site)
 	publicWorkshopsH := handlers.NewPublicWorkshopsHandler(workshopsStore, interestsStore)
 	// #0274: aggregate list counts for the home page's live CRT screen.
 	// subscribersStore now also backs #0393's per-interest active-subscriber
@@ -1068,7 +1070,7 @@ func serveDevMode(cfg *config.Config) error {
 	// workshopsStore to adapt (internal/devstore has no workshops-table
 	// backing -- see adminWorkshopsH/publicWorkshopsH's own nil comments
 	// below), so the WorkshopSource stays nil here, same as before #0054 --
-	// /workshops/{slug} and the sitemap's workshop portion fall back to
+	// /events/{slug} and the sitemap's workshop portion fall back to
 	// their documented generic defaults (seo.WorkshopSource's doc comment).
 	// The ArchiveSource argument (#0123) is nil for the identical reason --
 	// internal/devstore has no email_campaigns-table backing either.
@@ -1958,10 +1960,10 @@ func mountAndServe(
 	// the Postgres path it is the SAME *seo.Site instance already handed to
 	// AdminWorkshopsHandler as its cache invalidator (#0054, carried in
 	// from #0051's review Ruling 1), so a workshop mutation and the
-	// GET /workshops/{slug} / GET /sitemap.xml routes mounted below read
+	// GET /events/{slug} / GET /sitemap.xml routes mounted below read
 	// from one shared cache rather than two independently-constructed ones.
 	// On the dev-mode path (STORAGE=json) its WorkshopSource is nil --
-	// /workshops/{slug} and the sitemap's workshop portion fall back to
+	// /events/{slug} and the sitemap's workshop portion fall back to
 	// their documented generic defaults (seo.WorkshopSource's doc comment).
 	mux.Handle("GET /sitemap.xml", site.SitemapHandler())
 	mux.Handle("GET /robots.txt", site.RobotsHandler())
@@ -1979,7 +1981,12 @@ func mountAndServe(
 	// internal/handlers/routes.go's workshopDetailPattern (which does not
 	// match a path with a second segment). See Site.WorkshopCardHandler's
 	// doc comment (internal/seo/site.go) for the 404-vs-fallback rules.
+	mux.Handle("GET /events/{slug}/og.png", site.WorkshopCardHandler())
+	// #0614: posts already published carry the old card URL, so it keeps
+	// serving through the same handler rather than redirecting. The other old
+	// /workshops paths are permanent redirects, so old links keep working.
 	mux.Handle("GET /workshops/{slug}/og.png", site.WorkshopCardHandler())
+	handlers.MountLegacyWorkshopRedirects(mux)
 
 	// Per-newsletter Open Graph card (#0532) -- the archive twin of the
 	// route above, sharing its rendering, cache, and invalidation. The
@@ -1995,7 +2002,7 @@ func mountAndServe(
 	// (200 known route / 404 miss, #0022) the SPA handler chose.
 	//
 	// #0522 wires the two public read handlers in as deep-link status
-	// resolvers, so GET /archive/{slug} and GET /workshops/{slug} answer with
+	// resolvers, so GET /archive/{slug} and GET /events/{slug} answer with
 	// the SAME status their JSON APIs answer with (410 withheld / 404
 	// unknown-draft-unsent / 200 published) instead of a soft-404 200. Both
 	// handlers are nil in dev mode (STORAGE=json has no workshops- or

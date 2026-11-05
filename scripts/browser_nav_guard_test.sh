@@ -24,7 +24,7 @@
 # history.state.scrollY across all three navigation paths a route change can
 # come from: a real <a> click (router.ts's click-interception path), a
 # programmatic navigate() call from a <button onclick> (WorkshopDetail.svelte's
-# "See all workshops", which is NOT an <a> and so does not exercise
+# "See all events", which is NOT an <a> and so does not exercise
 # interception at all), and a popstate (Back).
 #
 # It is COMPLEMENTARY to, not a replacement for,
@@ -452,12 +452,12 @@ assert_nav_snapshot "popstate (Back) -> /privacy" \
   "Privacy Policy" "H1" "Privacy Policy" "1200" "1200"
 
 step "Path 3/3 -- programmatic navigate() (a <button onclick>, NOT an <a> -- does not touch click-interception)"
-wd_nav "http://127.0.0.1:$GUEST_SERVER_PORT/workshops/$NOTFOUND_SLUG"
+wd_nav "http://127.0.0.1:$GUEST_SERVER_PORT/events/$NOTFOUND_SLUG"
 sleep 0.5
 CLICK_BUTTON_JS="$(cat <<'JS'
 var btns = document.querySelectorAll('button');
 for (var i = 0; i < btns.length; i++) {
-  if (btns[i].textContent.indexOf('See all workshops') !== -1) {
+  if (btns[i].textContent.indexOf('See all events') !== -1) {
     btns[i].click();
     return true;
   }
@@ -467,11 +467,21 @@ JS
 )"
 CLICKED2="$(wd_exec "$CLICK_BUTTON_JS" | jq -r '.value')"
 if [ "$CLICKED2" != "true" ]; then
-  fail "programmatic navigate(): could not find the 'See all workshops' button on the not-found workshop view"
+  fail "programmatic navigate(): could not find the 'See all events' button on the not-found workshop view"
 else
   sleep 0.3
-  assert_nav_snapshot "navigate() -> /workshops" \
-    "Workshops" "H1" "Workshops" "0" "0"
+  assert_nav_snapshot "navigate() -> /events" \
+    "Events" "H1" "Events" "0" "0"
+fi
+
+step "Old URL -- a hard load of /workshops/{slug} lands on /events/{slug} with its query (#0614)"
+wd_nav "http://127.0.0.1:$GUEST_SERVER_PORT/workshops/$NOTFOUND_SLUG?utm_source=x"
+sleep 0.5
+LEGACY_LOCATION="$(wd_exec "return location.pathname + location.search;" | jq -r '.value')"
+if [ "$LEGACY_LOCATION" != "/events/$NOTFOUND_SLUG?utm_source=x" ]; then
+  fail "old URL: landed on '$LEGACY_LOCATION', want /events/$NOTFOUND_SLUG?utm_source=x"
+else
+  echo "PASS: old URL landed on $LEGACY_LOCATION"
 fi
 
 # --- verdict ---

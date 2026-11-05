@@ -165,16 +165,16 @@ func TestSPAPrivacyRouteReturns200(t *testing.T) {
 }
 
 // TestSPAWorkshopDetailFallsBackToIndexWith200 is the same check for the one
-// dynamic route the SPA supports (/workshops/:slug).
+// dynamic route the SPA supports (/events/:slug).
 func TestSPAWorkshopDetailFallsBackToIndexWith200(t *testing.T) {
 	fsys := distFS(map[string]string{
 		"index.html": "<!doctype html><title>Open Circuit SF</title><div id=\"app\"></div>",
 	})
 
-	rec := serveSPA(fsys, "/workshops/solder-101")
+	rec := serveSPA(fsys, "/events/solder-101")
 
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /workshops/solder-101: status = %d, want 200", rec.Code)
+		t.Fatalf("GET /events/solder-101: status = %d, want 200", rec.Code)
 	}
 }
 

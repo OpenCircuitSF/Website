@@ -53,7 +53,7 @@ function types(): EventType[] {
 }
 
 async function mounted(typeId: number, typeName: string): Promise<HTMLSelectElement> {
-  const w = { ...base, event_type_id: typeId, event_type: { slug: 'x', name: typeName } } as AdminWorkshop;
+  const w = { ...base, event_type_id: typeId, event_type: { slug: 'x', name: typeName, sort_order: 10 } } as AdminWorkshop;
   getAdminWorkshop.mockResolvedValue(w);
   listInterests.mockResolvedValue({ interests: [] });
   listEventTypes.mockResolvedValue({ event_types: types() });

@@ -2,7 +2,7 @@
   // NotFound view (#0022): what the router falls through to for any
   // unmatched path (web/src/lib/router.ts's parsePath returns the
   // 'not-found' route name for anything not in its static table or matching
-  // /workshops/:slug). Styled as a terminal error rather than a browser
+  // /events/:slug). Styled as a terminal error rather than a browser
   // default, per the acceptance criteria.
   //
   // The Go SPA handler (internal/handlers/static.go, this same issue) returns
@@ -26,7 +26,7 @@
     <p class="links">
       <a href="/">Home</a>
       <span aria-hidden="true"> · </span>
-      <a href="/workshops">Workshops</a>
+      <a href="/events">Events</a>
     </p>
   </TerminalPanel>
 </main>

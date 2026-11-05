@@ -8,7 +8,7 @@ import (
 )
 
 // marketingRoutes is the sitemap's curated static-route portion (#0020's
-// acceptance criteria: "/", "/about", "/workshops", "/subscribe"; "/privacy"
+// acceptance criteria: "/", "/about", "/events", "/subscribe"; "/privacy"
 // added at #0070 for the same reason -- a real, indexable public page;
 // "/archive" added at #0123 (PRD §6.8) for the same reason: the archive
 // index is the site's only recurring indexable page). This is
@@ -23,7 +23,7 @@ import (
 // client router would 404.
 //
 // <lastmod> per entry (#0533): only entries whose content is derived from
-// data carry one, and it is derived from that same data -- "/workshops" from
+// data carry one, and it is derived from that same data -- "/events" from
 // the newest published workshop's UpdatedAt, "/archive" from the newest
 // published archive entry's UpdatedAt, and "/" from whichever of those two
 // sources changed most recently (Home renders from both). The purely static
@@ -36,7 +36,7 @@ import (
 // rows, its derived entries are omitted too. No entry's date is ever taken
 // from the clock: #0533 removed the construction-time stamp that made every
 // deploy claim every static page changed.
-var marketingRoutes = []string{"/", "/about", "/privacy", "/workshops", "/subscribe", "/archive"}
+var marketingRoutes = []string{"/", "/about", "/privacy", "/events", "/subscribe", "/archive"}
 
 // urlset / sitemapURL model the sitemaps.org XML schema (only the two
 // elements #0020 requires: loc and lastmod).
@@ -93,7 +93,7 @@ func NewSitemap(baseURL string, source WorkshopSource, archive ArchiveSource) *S
 //
 // The static entries' <lastmod> values are data-derived (#0533, see
 // marketingRoutes' doc comment): both source lists are fetched first, the
-// newest published UpdatedAt of each becomes "/workshops" and "/archive"'s
+// newest published UpdatedAt of each becomes "/events" and "/archive"'s
 // lastmod, and the later of the two becomes "/"'s. The three purely static
 // copy pages carry no lastmod at all. A source error aborts the whole
 // build, as before -- a half-populated sitemap must never be served.
@@ -141,7 +141,7 @@ func (s *Sitemap) Build() ([]byte, error) {
 		"/":          laterRFC3339Date(workshopsMax, archiveMax),
 		"/about":     "",
 		"/privacy":   "",
-		"/workshops": workshopsMax,
+		"/events":    workshopsMax,
 		"/subscribe": "",
 		"/archive":   archiveMax,
 	}
@@ -154,7 +154,7 @@ func (s *Sitemap) Build() ([]byte, error) {
 
 	for _, w := range publishedWorkshops {
 		set.URLs = append(set.URLs, sitemapURL{
-			Loc:     s.baseURL + "/workshops/" + w.Slug,
+			Loc:     s.baseURL + "/events/" + w.Slug,
 			LastMod: w.UpdatedAt,
 		})
 	}

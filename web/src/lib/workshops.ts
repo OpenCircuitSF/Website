@@ -13,7 +13,7 @@
 // # The canceled badge is live (#0135)
 //
 // This issue's own acceptance criteria say "canceled workshops shown with a
-// clear canceled badge" for the /workshops index. At the time this file was
+// clear canceled badge" for the /events index. At the time this file was
 // first written, `internal/handlers/public_workshops.go`'s `List` handler
 // called `workshops.Store.ListPublished`, which returned only
 // `status='published'` rows, so a canceled workshop never reached
@@ -27,7 +27,7 @@
 // `workshopBadgeLabel` are unchanged — they were already correct — and now
 // render for real.
 
-import type { PublicWorkshop, WorkshopsListResponse } from './types';
+import type { EventTypeRef, PublicWorkshop, WorkshopsListResponse } from './types';
 
 // ── Date/time formatting (site's local timezone, PRD §5.1) ──────────────────
 
@@ -116,4 +116,44 @@ export function nextWorkshops(
   limit: number = NEXT_UP_LIMIT,
 ): PublicWorkshop[] {
   return list.upcoming.slice(0, Math.max(0, limit));
+}
+
+// ── Type filter (#0614) ─────────────────────────────────────────────────────
+
+type VisibleLists = Pick<WorkshopsListResponse, 'upcoming' | 'past'>;
+
+/**
+ * The types worth offering as a filter: those with a visible listing, so an
+ * unused type is never an empty choice and a disabled type with a listing
+ * still appears. Admin sort order first, then name.
+ */
+export function typeFilterOptions(list: VisibleLists): EventTypeRef[] {
+  const bySlug = new Map<string, EventTypeRef>();
+  for (const w of [...list.upcoming, ...list.past]) {
+    if (!bySlug.has(w.event_type.slug)) bySlug.set(w.event_type.slug, w.event_type);
+  }
+  return [...bySlug.values()].sort(
+    (a, b) => a.sort_order - b.sort_order || a.name.localeCompare(b.name),
+  );
+}
+
+/** The `type` query value, trimmed. Empty or absent means no filter. */
+export function selectedTypeSlug(query: URLSearchParams): string | null {
+  const slug = query.get('type')?.trim();
+  return slug ? slug : null;
+}
+
+/** Both lists narrowed to one type; a null slug leaves them whole. */
+export function filterListByType<T extends VisibleLists>(list: T, slug: string | null): T {
+  if (slug === null) return list;
+  return {
+    ...list,
+    upcoming: list.upcoming.filter((w) => w.event_type.slug === slug),
+    past: list.past.filter((w) => w.event_type.slug === slug),
+  };
+}
+
+/** Whether the URL names a type that no visible listing has. */
+export function isUnknownType(options: readonly EventTypeRef[], slug: string | null): boolean {
+  return slug !== null && !options.some((o) => o.slug === slug);
 }

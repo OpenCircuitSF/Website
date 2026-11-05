@@ -141,7 +141,7 @@ func parseStaticRoutesFromRouterTS(src string) (map[string]bool, error) {
 // workshopDetailLineRe captures the pattern source between WORKSHOP_DETAIL's
 // `= /` and the line-final `/;` -- i.e. the same text that appears between
 // the slashes of a JS regex literal, with no flags. router.ts declares it
-// with no flags today (`/^\/workshops\/([^/]+)$/`); a future `/gi` etc. would
+// with no flags today (`/^\/events\/([^/]+)$/`); a future `/gi` etc. would
 // need this regex extended, which is exactly the kind of format-sensitivity
 // the file doc comment calls out.
 var workshopDetailLineRe = regexp.MustCompile(`(?m)^const WORKSHOP_DETAIL = /(.*)/;\s*$`)
@@ -245,16 +245,16 @@ func TestStaticRoutesBlockAnchorIsUnambiguous(t *testing.T) {
 // *regexes* -- the part that is not otherwise cross-checked -- accept and
 // reject the same normalized paths.
 var workshopDetailPatternParityCases = []string{
-	"/workshops/solder-101",
-	"/workshops/solder-101/", // trailing slash, single-segment slug
-	"/workshops/x",
-	"/workshops/kicad-night-2026",
-	"/workshops",   // the index, not a detail slug
-	"/workshops/",  // index with trailing slash
-	"/workshops//", // double slash: normalizes to "/workshops/", still a miss
+	"/events/solder-101",
+	"/events/solder-101/", // trailing slash, single-segment slug
+	"/events/x",
+	"/events/kicad-night-2026",
+	"/events",   // the index, not a detail slug
+	"/events/",  // index with trailing slash
+	"/events//", // double slash: normalizes to "/events/", still a miss
 	"/about",
 	"/about/",
-	"/workshops/a/b", // two segments after "workshops": not the detail pattern
+	"/events/a/b", // two segments after "workshops": not the detail pattern
 	"/",
 }
 

@@ -68,7 +68,7 @@ export interface Route {
  * by the `export` keyword preceding it. */
 export const STATIC_ROUTES: Readonly<Record<string, RouteName>> = {
   '/': 'home',
-  '/workshops': 'workshops',
+  '/events': 'workshops',
   '/archive': 'archive',
   '/about': 'about',
   '/privacy': 'privacy',
@@ -92,8 +92,37 @@ export const STATIC_ROUTES: Readonly<Record<string, RouteName>> = {
 
 /** The two dynamic path parameters the router supports (PRD §7.2, widened
  * by #0123 for the campaign archive). */
-const WORKSHOP_DETAIL = /^\/workshops\/([^/]+)$/;
+const WORKSHOP_DETAIL = /^\/events\/([^/]+)$/;
 const ARCHIVE_DETAIL = /^\/archive\/([^/]+)$/;
+const LEGACY_WORKSHOP_DETAIL = /^\/workshops\/([^/]+)$/;
+
+/**
+ * The /events URL an old /workshops path now lives at (#0614), or null for
+ * every other path. Mirrors internal/handlers/legacy_workshop_redirects.go:
+ * the server answers a hard load with a 301, and this covers client-side
+ * navigation and static dev servers. The index's own type comes first, so a
+ * stray `type=` in an old link cannot override it.
+ */
+export function legacyRedirectTarget(pathname: string, search = ''): string | null {
+  const path = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+  const query = search.startsWith('?') ? search.slice(1) : search;
+  if (path === '/workshops') {
+    return query ? `/events?type=workshop&${query}` : '/events?type=workshop';
+  }
+  const match = LEGACY_WORKSHOP_DETAIL.exec(path);
+  if (match) {
+    return query ? `/events/${match[1]}?${query}` : `/events/${match[1]}`;
+  }
+  return null;
+}
+
+/** parsePath, after resolving an old /workshops path to its target. */
+function parseLocation(pathname: string, search: string): Route {
+  const legacy = legacyRedirectTarget(pathname, search);
+  if (legacy === null) return parsePath(pathname, search);
+  const url = new URL(legacy, 'http://localhost');
+  return parsePath(url.pathname, url.search);
+}
 
 /** #0521: the routes whose first render genuinely depends on GET /api/me
  * (the admin and account views gate their contents on currentUser) or on
@@ -217,7 +246,7 @@ export function shouldIntercept(c: InterceptCandidate): boolean {
  * both write to this; every view reads it reactively as `$currentRoute`. */
 export const currentRoute = writable<Route>(
   typeof window !== 'undefined'
-    ? parsePath(window.location.pathname, window.location.search)
+    ? parseLocation(window.location.pathname, window.location.search)
     : parsePath('/', ''),
 );
 
@@ -259,7 +288,9 @@ let lastPathSearch: string =
  * navigate() never runs at all.
  */
 export function navigate(path: string, { replace = false }: NavigateOptions = {}): void {
-  const url = new URL(path, window.location.origin);
+  const requested = new URL(path, window.location.origin);
+  const legacy = legacyRedirectTarget(requested.pathname, requested.search);
+  const url = legacy === null ? requested : new URL(legacy, window.location.origin);
   const route = parsePath(url.pathname, url.search);
   const target = url.pathname + url.search;
 
@@ -525,6 +556,14 @@ export function initRouter(): void {
   // initializer covers the common case; this re-reads in case anything moved
   // between import and mount).
   lastPathSearch = window.location.pathname + window.location.search;
+
+  // #0614: only a static server reaches here on an old path, since Go has
+  // already answered it with a 301. Replacing adds no history entry.
+  const legacy = legacyRedirectTarget(window.location.pathname, window.location.search);
+  if (legacy !== null) {
+    window.history.replaceState(window.history.state, '', legacy);
+    lastPathSearch = legacy;
+  }
 
   if ('scrollRestoration' in window.history) {
     window.history.scrollRestoration = 'manual';

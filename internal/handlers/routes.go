@@ -25,7 +25,7 @@ import (
 // and STATIC_ROUTES disagree in either direction -- by convention, enforced.
 var knownStaticRoutes = map[string]bool{
 	"/":                 true,
-	"/workshops":        true,
+	"/events":           true,
 	"/archive":          true,
 	"/about":            true,
 	"/privacy":          true,
@@ -42,8 +42,8 @@ var knownStaticRoutes = map[string]bool{
 }
 
 // workshopDetailPattern is one of the two dynamic paths the router supports
-// (/workshops/:slug), mirroring router.ts's WORKSHOP_DETAIL regex.
-var workshopDetailPattern = regexp.MustCompile(`^/workshops/[^/]+$`)
+// (/events/:slug), mirroring router.ts's WORKSHOP_DETAIL regex.
+var workshopDetailPattern = regexp.MustCompile(`^/events/[^/]+$`)
 
 // archiveDetailPattern is the other dynamic path (/archive/:slug, #0123),
 // mirroring router.ts's ARCHIVE_DETAIL regex.
@@ -51,7 +51,7 @@ var archiveDetailPattern = regexp.MustCompile(`^/archive/[^/]+$`)
 
 // isKnownRoute reports whether path matches an entry in the SPA's route
 // table -- either a static path or the single dynamic pattern
-// (/workshops/{slug}). A trailing slash on a multi-segment path is treated
+// (/events/{slug}). A trailing slash on a multi-segment path is treated
 // as equivalent to the path without it, matching router.ts's parsePath
 // normalization, so "/about/" and "/about" are both known.
 func isKnownRoute(path string) bool {
@@ -91,10 +91,10 @@ func StaticRoutes() []string {
 	return out
 }
 
-// WorkshopDetailSlug reports whether path matches the /workshops/{slug}
+// WorkshopDetailSlug reports whether path matches the /events/{slug}
 // dynamic pattern and, if so, returns the decoded slug. Mirrors the trailing
-// slash normalization isKnownRoute applies, so "/workshops/solder-101/" and
-// "/workshops/solder-101" agree.
+// slash normalization isKnownRoute applies, so "/events/solder-101/" and
+// "/events/solder-101" agree.
 func WorkshopDetailSlug(path string) (slug string, ok bool) {
 	if len(path) > 1 && path[len(path)-1] == '/' {
 		path = path[:len(path)-1]
@@ -102,7 +102,7 @@ func WorkshopDetailSlug(path string) (slug string, ok bool) {
 	if !workshopDetailPattern.MatchString(path) {
 		return "", false
 	}
-	return strings.TrimPrefix(path, "/workshops/"), true
+	return strings.TrimPrefix(path, "/events/"), true
 }
 
 // ArchiveDetailSlug reports whether path matches the /archive/{slug}

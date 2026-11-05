@@ -357,8 +357,10 @@ every size, a real `favicon.svg`, and `currentColor` tinting without the mask.
 | Path | View | Purpose |
 |---|---|---|
 | `/` | Home | Hero terminal block, what Open Circuit SF is, next 3 workshops, inline subscribe form |
-| `/workshops` | WorkshopsIndex | Upcoming (chronological) + past (reverse chronological) |
-| `/workshops/{slug}` | WorkshopDetail | Full description, date/time, location, what to bring, subscribe CTA |
+| `/events` | WorkshopsIndex | Upcoming (chronological) + past (reverse chronological), every type, with a filter by type (`?type={slug}`) |
+| `/events/{slug}` | WorkshopDetail | Full description, type, date/time, location, what to bring, subscribe CTA |
+| `/workshops` | Redirect | 301 to `/events?type=workshop`, query preserved |
+| `/workshops/{slug}` | Redirect | 301 to `/events/{slug}`, query preserved |
 | `/archive` | ArchiveIndex | Every sent campaign, reverse chronological. Linked from Home. |
 | `/archive/{slug}` | ArchiveEntry | One campaign as a permanent web page. Indexable, public, no token. |
 | `/about` | About | Who we are, philosophy, venues, Discord link, contact |
@@ -1399,7 +1401,7 @@ Add `web/src/lib/router.ts` — roughly 60 lines, no library:
 - Intercept clicks on same-origin `<a>` elements, `pushState`, update a
   `currentRoute` store.
 - Handle `popstate`.
-- Support one path parameter (`/workshops/:slug`).
+- Support one path parameter (`/events/:slug`).
 - Fall through to a `NotFound` view.
 
 This replaces ShortLinks' `currentView` store as the navigation mechanism. The
@@ -1434,7 +1436,7 @@ inside it, and rewrites its HTML response before serving:
    at substitution time, not independent fields), and a schema.org `Event`
    JSON-LD block (`#0055`).
 2. Resolve the request path, in priority order: the static route table, a
-   `/workshops/{slug}` lookup, an `/archive/{slug}` lookup against
+   `/events/{slug}` lookup, an `/archive/{slug}` lookup against
    `ArchiveSource` (`#0123`), a generic fallback for other known routes, and
    a distinct not-found default.
 3. Substitute and serve; HTML-escape every value except the JSON-LD block,
@@ -1447,7 +1449,7 @@ inside it, and rewrites its HTML response before serving:
 
 Also serve: `GET /sitemap.xml`, `GET /robots.txt`, per-workshop JSON-LD
 `Event` data, and (`#0273`) a generated per-workshop Open Graph card at
-`GET /workshops/{slug}/og.png` for a published workshop, used as its
+`GET /events/{slug}/og.png` for a published workshop, used as its
 `og:image` when it has no `cover_image`. `GET /favicon.svg` is a plain
 static asset served by `handlers.SPAHandler`, not by this subsystem —
 corrected 2026-09-04 (`#0422`); see `docs/seo.md` for the full current account.

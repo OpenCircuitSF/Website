@@ -2,7 +2,8 @@
 // Choosing the default is a PATCH field, never a sub-route:
 // cmd/opencircuit/admin_wiring_test.go sends every admin route an empty body
 // with an admin session, and a bodyless POST would really move the default.
-// No SEO cache is invalidated: nothing server-rendered contains a type yet.
+// Every successful write invalidates the SEO cache, since server-rendered
+// pages carry type names (#0614).
 package handlers
 
 import (
@@ -41,12 +42,20 @@ type eventTypeStore interface {
 type AdminEventTypesHandler struct {
 	store   eventTypeStore
 	auditor *audit.Logger
+	// invalidator is the shared *seo.Site; nil disables invalidation (tests).
+	invalidator seoCacheInvalidator
 }
 
 // NewAdminEventTypesHandler constructs the handler. A nil auditor disables
-// audit writes.
-func NewAdminEventTypesHandler(store eventTypeStore, auditor *audit.Logger) *AdminEventTypesHandler {
-	return &AdminEventTypesHandler{store: store, auditor: auditor}
+// audit writes, and a nil invalidator disables cache invalidation.
+func NewAdminEventTypesHandler(store eventTypeStore, auditor *audit.Logger, invalidator seoCacheInvalidator) *AdminEventTypesHandler {
+	return &AdminEventTypesHandler{store: store, auditor: auditor, invalidator: invalidator}
+}
+
+func (h *AdminEventTypesHandler) invalidate() {
+	if h.invalidator != nil {
+		h.invalidator.Invalidate()
+	}
 }
 
 type eventTypeView struct {
@@ -150,6 +159,7 @@ func (h *AdminEventTypesHandler) Create(w http.ResponseWriter, r *http.Request) 
 			IP:         clientIP(r),
 		})
 	}
+	h.invalidate()
 	writeJSON(w, http.StatusCreated, toEventTypeView(created, map[int64]int64{}))
 }
 
@@ -303,6 +313,7 @@ func (h *AdminEventTypesHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	h.invalidate()
 	counts, err := h.store.UsageCounts(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
@@ -360,6 +371,7 @@ func (h *AdminEventTypesHandler) Delete(w http.ResponseWriter, r *http.Request) 
 			IP:         clientIP(r),
 		})
 	}
+	h.invalidate()
 	writeJSON(w, http.StatusOK, map[string]string{"message": "event type deleted"})
 }
 

@@ -187,8 +187,8 @@ func announceSubject(wk workshops.Workshop) string {
 // date/location — it does not ask for a link at all. But a body with no
 // link is not something an admin would send unedited (this file's binding
 // goal, stated in the package doc comment), so the body always closes with
-// a link to the workshop's own public page at baseURL+"/workshops/{slug}"
-// (the same "/workshops/"+slug shape internal/seo's sitemap, OG tags, and
+// a link to the workshop's own public page at baseURL+"/events/{slug}"
+// (the same "/events/"+slug shape internal/seo's sitemap, OG tags, and
 // JSON-LD already build canonical URLs from — see internal/seo/seo.go,
 // sitemap.go, jsonld.go). When the workshop also has an external
 // signup_url, that link is emitted FIRST as "Sign up" — it stays the
@@ -231,9 +231,9 @@ func announceBodyMD(wk workshops.Workshop, baseURL string) string {
 
 // announceWorkshopURL builds the workshop's own public page URL the same
 // way internal/seo builds canonical/OG/sitemap URLs for it: baseURL (no
-// trailing slash, per config.normalizeBaseURL) + "/workshops/" + slug.
+// trailing slash, per config.normalizeBaseURL) + "/events/" + slug.
 func announceWorkshopURL(baseURL, slug string) string {
-	return strings.TrimRight(baseURL, "/") + "/workshops/" + slug
+	return strings.TrimRight(baseURL, "/") + "/events/" + slug
 }
 
 // announceLocation is the timezone the announce body renders workshop

@@ -40,7 +40,7 @@
   // already in chronological order; lib/workshops.ts's nextWorkshops caps
   // that list at three, per this view's original acceptance criteria, and
   // WorkshopCard is the same card component WorkshopsIndex.svelte uses so
-  // Home and /workshops render a next-up workshop identically.
+  // Home and /events render a next-up workshop identically.
   import { onMount } from 'svelte';
   import {
     CRT_SRC_W,
@@ -323,7 +323,7 @@
     {#if upcomingStatus === 'loading'}
       <p class="text-muted">Loading…</p>
     {:else if upcomingStatus === 'error'}
-      <p class="text-error">Couldn't load upcoming workshops right now.</p>
+      <p class="text-error">Couldn't load upcoming events right now.</p>
     {:else if upcoming.length === 0}
       <p class="text-muted">Nothing scheduled yet — check back soon, or subscribe below.</p>
     {:else}
@@ -334,7 +334,7 @@
       </div>
     {/if}
     <p class="text-muted next-up-note">
-      <a href="/workshops">See all workshops</a>
+      <a href="/events">See all events</a>
       <span aria-hidden="true"> · </span>
       <a href="/archive">Read the archive</a>
     </p>

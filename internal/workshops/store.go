@@ -166,27 +166,28 @@ func slugify(title string) string {
 // loaded as a side query (never part of the base SELECT — see interestIDs),
 // mirroring mailing.Campaign's InterestIDs convention.
 type Workshop struct {
-	ID              int64
-	Slug            string
-	Title           string
-	Summary         *string
-	BodyMD          *string
-	StartsAt        *time.Time
-	EndsAt          *time.Time
-	LocationName    *string
-	LocationAddress *string
-	LocationNote    *string
-	Capacity        *int
-	SignupURL       *string
-	CoverImage      *string
-	Status          string
-	PublishedAt     *time.Time
-	EventTypeID     int64
-	EventTypeSlug   string
-	EventTypeName   string
-	InterestIDs     []int64
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID                 int64
+	Slug               string
+	Title              string
+	Summary            *string
+	BodyMD             *string
+	StartsAt           *time.Time
+	EndsAt             *time.Time
+	LocationName       *string
+	LocationAddress    *string
+	LocationNote       *string
+	Capacity           *int
+	SignupURL          *string
+	CoverImage         *string
+	Status             string
+	PublishedAt        *time.Time
+	EventTypeID        int64
+	EventTypeSlug      string
+	EventTypeName      string
+	EventTypeSortOrder int
+	InterestIDs        []int64
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // CreateInput is the payload for Create. Status is deliberately absent —
@@ -252,7 +253,8 @@ const workshopColumns = `id, slug, title, summary, body_md, starts_at, ends_at,
 	location_name, location_address, location_note, capacity, signup_url,
 	cover_image, status, published_at, created_at, updated_at, event_type_id,
 	(SELECT slug FROM event_types et WHERE et.id = workshops.event_type_id),
-	(SELECT name FROM event_types et WHERE et.id = workshops.event_type_id)`
+	(SELECT name FROM event_types et WHERE et.id = workshops.event_type_id),
+	(SELECT sort_order FROM event_types et WHERE et.id = workshops.event_type_id)`
 
 func scanWorkshop(row pgx.Row) (Workshop, error) {
 	var w Workshop
@@ -260,7 +262,7 @@ func scanWorkshop(row pgx.Row) (Workshop, error) {
 		&w.ID, &w.Slug, &w.Title, &w.Summary, &w.BodyMD, &w.StartsAt, &w.EndsAt,
 		&w.LocationName, &w.LocationAddress, &w.LocationNote, &w.Capacity, &w.SignupURL,
 		&w.CoverImage, &w.Status, &w.PublishedAt, &w.CreatedAt, &w.UpdatedAt,
-		&w.EventTypeID, &w.EventTypeSlug, &w.EventTypeName,
+		&w.EventTypeID, &w.EventTypeSlug, &w.EventTypeName, &w.EventTypeSortOrder,
 	); err != nil {
 		return Workshop{}, err
 	}

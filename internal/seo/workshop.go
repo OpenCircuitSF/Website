@@ -33,7 +33,9 @@ type Workshop struct {
 	// produce a real, indexable structured-data block, the same leak #0171
 	// closed on the JSON API routes.
 	Published bool
-	UpdatedAt string // RFC 3339 date (YYYY-MM-DD is sufficient for <lastmod>); "" omits <lastmod>
+	// EventTypeName is the listing's type name (#0614); "" renders no type.
+	EventTypeName string
+	UpdatedAt     string // RFC 3339 date (YYYY-MM-DD is sufficient for <lastmod>); "" omits <lastmod>
 
 	// StartsAt / EndsAt back #0055's JSON-LD startDate/endDate. Full RFC 3339
 	// timestamps WITH a UTC offset (Go's time.RFC3339, e.g.

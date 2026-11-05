@@ -75,11 +75,11 @@ const STATIC_HEADING: Record<RouteName, string> = {
   // guarded — web/src/views/Home.svelte
   home: 'Hands-on electronics workshops',
   // guarded — web/src/views/WorkshopsIndex.svelte
-  workshops: 'Workshops',
+  workshops: 'Events',
   // fallback — web/src/views/WorkshopDetail.svelte's <h1> only exists once
   // the workshop has loaded (status === 'loaded'); this is what a fresh
   // navigation shows in the meantime.
-  'workshop-detail': 'Workshop',
+  'workshop-detail': 'Event',
   // guarded — web/src/views/ArchiveIndex.svelte
   archive: 'Archive',
   // fallback — web/src/views/ArchiveEntry.svelte's <h1> only exists once
