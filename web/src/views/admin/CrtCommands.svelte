@@ -505,4 +505,9 @@
   .crt-width-hint {
     margin-top: var(--space-1);
   }
+  .mono {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    overflow-wrap: anywhere;
+  }
 </style>

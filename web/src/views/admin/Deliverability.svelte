@@ -217,4 +217,9 @@
     width: 100%;
     margin-top: var(--space-2);
   }
+  .mono {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    overflow-wrap: anywhere;
+  }
 </style>
