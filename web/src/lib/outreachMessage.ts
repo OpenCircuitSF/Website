@@ -167,10 +167,10 @@ export function waveRowStatus(view: View, wave: string, now: Date = new Date()):
   const left = onChannels(view).filter((c) => !sendsItself(c) && !handPosted.some((p) => p.channel === c.name)).length;
   const hand = left > 0 ? ` · ${left} left to post by hand` : '';
   const newestOf = (ps: OutreachPost[]) => ps.map((p) => p.posted_at).filter((t): t is string => t !== null).sort().pop();
-  if (!view.channels.some(sendsItself)) {
+  if (auto.length === 0 && !onChannels(view).some(sendsItself)) {
     if (left > 0) return { text: `Drafted${hand}${ahead}`, action: 'open' };
     const t = newestOf(handPosted);
-    return { text: t ? `Posted ${weekdayTime(t)}` : `Posted ${handPosted.length} of ${handChannels.length}`, action: 'open' };
+    return { text: t ? `Posted ${weekdayTime(t)}` : `Posted ${handPosted.length} of ${handPosted.length + left}`, action: 'open' };
   }
   const postedPosts = auto.filter((p) => p.status === 'posted');
   const posted = postedPosts.length;

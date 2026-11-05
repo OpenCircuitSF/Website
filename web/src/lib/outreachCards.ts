@@ -141,7 +141,8 @@ export function boardCell(post: OutreachPost | null, channel: OutreachChannel, o
 export function notScheduledNote(view: Pick<WorkshopOutreach, 'channels' | 'posts' | 'off_channels'>, wave: string): string {
   const own = onChannels(view).filter(sendsItself).map((c) => view.posts.find((p) => p.channel === c.name && p.wave === wave) ?? null);
   const under = own.filter((p) => p === null || p.status === 'draft' || p.status === 'manual').length;
-  const started = own.some((p) => p !== null && (p.status === 'scheduled' || p.status === 'posted'));
+  // A post that has left drafting counts as started even on an off channel, since the strip reports it.
+  const started = view.channels.filter(sendsItself).some((c) => view.posts.some((p) => p.channel === c.name && p.wave === wave && (p.status === 'scheduled' || p.status === 'posted')));
   return under > 0 && started ? `${under} not scheduled` : '';
 }
 

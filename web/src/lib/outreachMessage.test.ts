@@ -333,4 +333,57 @@ describe('waveRowStatus with a switched-off channel', () => {
     expect(waveRowStatus(v, 'announce').text).toContain('2 left to post by hand');
     expect(waveRowStatus({ ...v, off_channels: [{ name: 'tiktok', label: 'tiktok', automatic: false }] }, 'announce').text).toContain('1 left to post by hand');
   });
+
+  const T = '2026-10-30T20:00:00Z';
+  const SUGGESTED = '2026-11-20T18:00:00Z';
+  const NOW = new Date('2026-11-01T00:00:00Z');
+  const off = (...names: string[]) => names.map((name) => ({ name, label: name, automatic: name === 'bluesky' || name === 'mastodon' }));
+  const handNames = ['instagram', 'tiktok', 'youtube'];
+  const wavesAhead: OutreachWave[] = [waves[0], { ...waves[1], suggested_at: SUGGESTED }];
+  // Bluesky and Mastodon are off, each with a posted Announce, so both keep their columns.
+  const bothAutoOff = (handStatus: OutreachPost['status']) => ({
+    channels: [...autoChannels, ...handNames.map((n) => ch(n, false, false))],
+    waves: wavesAhead,
+    off_channels: off('bluesky', 'mastodon'),
+    posts: [
+      post({ id: 1, channel: 'bluesky', status: 'posted', posted_at: T }),
+      post({ id: 2, channel: 'mastodon', status: 'posted', posted_at: T }),
+      ...handNames.map((n, i) => post({ id: 3 + i, channel: n, wave: 'reminder', status: handStatus, posted_at: handStatus === 'posted' ? T : null })),
+    ],
+  });
+
+  it('says Posted when only off automatic channels are missing (#0628)', () => {
+    const v = bothAutoOff('posted');
+    expect(waveRowStatus(v, 'reminder', NOW).text).toBe(`Posted ${weekdayTime(T)}`);
+    expect(sectionFullyPosted(v, 'reminder')).toBe(true);
+  });
+
+  it('does not say not scheduled when every automatic channel is off (#0628)', () => {
+    expect(waveRowStatus(bothAutoOff('manual'), 'reminder', NOW).text).toBe(`Drafted · 3 left to post by hand · suggested ${weekdayTime(SUGGESTED)}`);
+  });
+
+  it("keeps the not scheduled note when an off channel's post is scheduled (#0628)", () => {
+    const v = {
+      channels: autoChannels,
+      waves,
+      off_channels: off('mastodon'),
+      posts: [
+        post({ id: 1, channel: 'bluesky', wave: 'reminder', status: 'draft' }),
+        post({ id: 2, channel: 'mastodon', wave: 'reminder', status: 'scheduled', scheduled_at: T }),
+      ],
+    };
+    expect(waveRowStatus(v, 'reminder', NOW).text).toBe(`Posts automatically ${weekdayTime(T)} · 1 not scheduled`);
+    expect(boardRows(v).find((r) => r.wave === 'reminder')?.note).toBe('1 not scheduled');
+  });
+
+  it("keeps the not scheduled note when an off channel's post has gone out (#0628)", () => {
+    const v = {
+      channels: autoChannels,
+      waves,
+      off_channels: off('mastodon'),
+      posts: [post({ id: 2, channel: 'mastodon', wave: 'reminder', status: 'posted', posted_at: T })],
+    };
+    expect(waveRowStatus(v, 'reminder', NOW).text).toBe(`Posted ${weekdayTime(T)} · 1 not scheduled`);
+    expect(boardRows(v).find((r) => r.wave === 'reminder')?.note).toBe('1 not scheduled');
+  });
 });
