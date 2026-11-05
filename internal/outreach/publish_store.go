@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -145,6 +146,109 @@ func (s *Store) Unschedule(ctx context.Context, id int64) (Post, error) {
 		return Post{}, fmt.Errorf("outreach: unschedule: %w", err)
 	}
 	return p, nil
+}
+
+// PostRefusal says which post a many-post write refused and why (#0640).
+// Unwrap keeps errors.Is working against the sentinel it carries.
+type PostRefusal struct {
+	PostID int64
+	Err    error
+}
+
+func (e *PostRefusal) Error() string { return fmt.Sprintf("outreach: post %d: %v", e.PostID, e.Err) }
+func (e *PostRefusal) Unwrap() error { return e.Err }
+
+// ScheduleMany sets every post in ids to go out at `at`, in one transaction,
+// all or nothing (#0640): a section's Bluesky and Mastodon posts get one time
+// together or not at all. Each must pass Schedule's own gate (a prepared
+// draft, scheduled or failed post of a published workshop). When one does
+// not, nothing is written and the error is a *PostRefusal naming it with
+// classifySend's reason. Rows come back in id order.
+func (s *Store) ScheduleMany(ctx context.Context, ids []int64, at time.Time) ([]Post, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	posts, missing, err := s.updateMany(ctx, ids,
+		`UPDATE outreach_posts p SET status = 'scheduled', scheduled_at = $2, last_error = NULL, updated_at = now()
+		 WHERE p.id = ANY($1) AND p.status IN `+sendableStatuses+` AND p.short_url IS NOT NULL AND `+publishedWorkshop+`
+		 RETURNING `+qualifiedPostColumns, ids, at)
+	if err != nil {
+		return nil, fmt.Errorf("outreach: schedule many: %w", err)
+	}
+	if missing != 0 {
+		return nil, &PostRefusal{PostID: missing, Err: s.classifySend(ctx, missing)}
+	}
+	return posts, nil
+}
+
+// UnscheduleMany returns every post in ids from scheduled to draft, in one
+// transaction, all or nothing (#0640). A post that is not scheduled makes
+// the whole call fail with a *PostRefusal: ErrPostInFlight when it is
+// queued, ErrWrongStatus otherwise.
+func (s *Store) UnscheduleMany(ctx context.Context, ids []int64) ([]Post, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	posts, missing, err := s.updateMany(ctx, ids,
+		`UPDATE outreach_posts SET status = 'draft', scheduled_at = NULL, updated_at = now()
+		 WHERE id = ANY($1) AND status = 'scheduled' RETURNING `+postColumns, ids)
+	if err != nil {
+		return nil, fmt.Errorf("outreach: unschedule many: %w", err)
+	}
+	if missing != 0 {
+		cur, gerr := s.GetPost(ctx, missing)
+		if gerr != nil {
+			return nil, &PostRefusal{PostID: missing, Err: gerr}
+		}
+		if cur.Status == "queued" {
+			return nil, &PostRefusal{PostID: missing, Err: ErrPostInFlight}
+		}
+		return nil, &PostRefusal{PostID: missing, Err: ErrWrongStatus}
+	}
+	return posts, nil
+}
+
+// updateMany runs one UPDATE ... RETURNING over ids in a transaction and
+// commits only when every id came back. Otherwise it rolls back and returns
+// the first id (in the order given) that the statement did not touch.
+func (s *Store) updateMany(ctx context.Context, ids []int64, sql string, args ...any) ([]Post, int64, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	rows, err := tx.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, 0, err
+	}
+	var posts []Post
+	for rows.Next() {
+		p, err := scanPost(rows)
+		if err != nil {
+			rows.Close()
+			return nil, 0, err
+		}
+		posts = append(posts, p)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	got := make(map[int64]bool, len(posts))
+	for _, p := range posts {
+		got[p.ID] = true
+	}
+	for _, id := range ids {
+		if !got[id] {
+			_ = tx.Rollback(ctx)
+			return nil, id, nil
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, 0, err
+	}
+	sort.Slice(posts, func(i, j int) bool { return posts[i].ID < posts[j].ID })
+	return posts, 0, nil
 }
 
 // PromoteDue turns scheduled posts whose time has come into queued posts, one

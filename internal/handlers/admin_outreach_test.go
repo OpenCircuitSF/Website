@@ -221,6 +221,8 @@ func outreachMuxPosting(pool *pgxpool.Pool, links shortLinker, posting outreachP
 	mux.Handle("POST /admin/workshops/{id}/outreach/draft-all", requireAdmin(http.HandlerFunc(h.DraftAll)))
 	mux.Handle("POST /admin/workshops/{id}/outreach/hand-links", requireAdmin(http.HandlerFunc(h.EnsureHandLinks)))
 	mux.Handle("POST /admin/workshops/{id}/outreach/schedule-all", requireAdmin(http.HandlerFunc(h.ScheduleAll)))
+	mux.Handle("POST /admin/workshops/{id}/outreach/schedule", requireAdmin(http.HandlerFunc(h.ScheduleSection)))
+	mux.Handle("POST /admin/workshops/{id}/outreach/unschedule", requireAdmin(http.HandlerFunc(h.UnscheduleSection)))
 	mux.Handle("GET /admin/outreach-results", requireAdmin(http.HandlerFunc(h.ResultsSummary)))
 	mux.Handle("GET /admin/outreach-locations", requireAdmin(http.HandlerFunc(h.ListLocations)))
 	mux.Handle("POST /admin/outreach-locations", requireAdmin(http.HandlerFunc(h.CreateLocation)))

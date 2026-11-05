@@ -1621,6 +1621,9 @@ func adminRoutes(
 			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/draft-all", http.HandlerFunc(adminOutreachH.DraftAll)},
 			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/hand-links", http.HandlerFunc(adminOutreachH.EnsureHandLinks)},
 			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/schedule-all", http.HandlerFunc(adminOutreachH.ScheduleAll)},
+			// #0640: one section scheduled or unscheduled in one call.
+			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/schedule", http.HandlerFunc(adminOutreachH.ScheduleSection)},
+			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/unschedule", http.HandlerFunc(adminOutreachH.UnscheduleSection)},
 			adminRoute{http.MethodGet, "/admin/outreach-results", http.HandlerFunc(adminOutreachH.ResultsSummary)},
 			adminRoute{http.MethodGet, "/admin/outreach-locations", http.HandlerFunc(adminOutreachH.ListLocations)},
 			adminRoute{http.MethodPost, "/admin/outreach-locations", http.HandlerFunc(adminOutreachH.CreateLocation)},

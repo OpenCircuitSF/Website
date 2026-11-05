@@ -232,3 +232,75 @@ func TestPromoteDue(t *testing.T) {
 		t.Errorf("second pass duplicated the queue row: %d", n)
 	}
 }
+
+func TestScheduleManyAllOrNothing(t *testing.T) {
+	s := NewStore(testPool(t))
+	ctx := context.Background()
+	_, a := seedSendable(t, s)
+	_, b := seedSendable(t, s)
+	at := time.Now().Add(48 * time.Hour).Truncate(time.Second)
+	got, err := s.ScheduleMany(ctx, []int64{b.ID, a.ID}, at)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("schedule many: %+v %v", got, err)
+	}
+	if got[0].ID != a.ID || got[1].ID != b.ID {
+		t.Errorf("rows not in id order: %d, %d", got[0].ID, got[1].ID)
+	}
+	for _, p := range got {
+		if p.Status != "scheduled" || p.ScheduledAt == nil || !p.ScheduledAt.Equal(at) {
+			t.Errorf("post %d: %+v", p.ID, p)
+		}
+		if n, _, _ := queueRows(t, s, p.ID); n != 0 {
+			t.Errorf("post %d: scheduling must not enqueue, got %d rows", p.ID, n)
+		}
+	}
+
+	co, c := seedPost(t, s, "Unprepared {link}")
+	setWorkshopStatus(t, s.pool, co.ID, "published")
+	later := at.Add(time.Hour)
+	_, err = s.ScheduleMany(ctx, []int64{a.ID, c.ID}, later)
+	var pr *PostRefusal
+	if !errors.As(err, &pr) || pr.PostID != c.ID || !errors.Is(err, ErrNotPrepared) {
+		t.Fatalf("refusal = %v", err)
+	}
+	cur, err := s.GetPost(ctx, a.ID)
+	if err != nil || cur.ScheduledAt == nil || !cur.ScheduledAt.Equal(at) {
+		t.Errorf("post a moved despite the refusal: %+v %v", cur, err)
+	}
+
+	if got, err := s.ScheduleMany(ctx, nil, at); got != nil || err != nil {
+		t.Errorf("empty ids: %+v %v", got, err)
+	}
+}
+
+func TestUnscheduleManyAllOrNothing(t *testing.T) {
+	s := NewStore(testPool(t))
+	ctx := context.Background()
+	_, a := seedSendable(t, s)
+	_, b := seedSendable(t, s)
+	at := time.Now().Add(48 * time.Hour).Truncate(time.Second)
+	if _, err := s.ScheduleMany(ctx, []int64{a.ID, b.ID}, at); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.UnscheduleMany(ctx, []int64{a.ID, b.ID})
+	if err != nil || len(got) != 2 {
+		t.Fatalf("unschedule many: %+v %v", got, err)
+	}
+	for _, p := range got {
+		if p.Status != "draft" || p.ScheduledAt != nil {
+			t.Errorf("post %d: %+v", p.ID, p)
+		}
+	}
+
+	if _, err := s.Schedule(ctx, a.ID, at); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.UnscheduleMany(ctx, []int64{a.ID, b.ID})
+	var pr *PostRefusal
+	if !errors.As(err, &pr) || pr.PostID != b.ID || !errors.Is(err, ErrWrongStatus) {
+		t.Fatalf("refusal = %v", err)
+	}
+	if cur, err := s.GetPost(ctx, a.ID); err != nil || cur.Status != "scheduled" {
+		t.Errorf("post a changed despite the refusal: %+v %v", cur, err)
+	}
+}
