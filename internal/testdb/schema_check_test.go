@@ -231,9 +231,10 @@ ALTER TABLE widgets DROP COLUMN color;
 	}
 }
 
-// TestExpectedObjectsFromFiles_RefusesDropTableAndRename covers the other
-// two destructive shapes step 1c names, so DROP COLUMN is not the only one
-// exercised.
+// TestExpectedObjectsFromFiles_RefusesDropTableAndRename covers the destructive
+// shapes the census refuses, plus the five #0618's review found: a drop inside a
+// DO block, a function body, a block comment, a string literal or an escape
+// string is refused, and a drop then re-add in one file leaves the column expected.
 func TestExpectedObjectsFromFiles_RefusesDropTableAndRename(t *testing.T) {
 	cases := []struct {
 		name string
@@ -244,6 +245,11 @@ func TestExpectedObjectsFromFiles_RefusesDropTableAndRename(t *testing.T) {
 		{"drop column if exists", "ALTER TABLE widgets DROP COLUMN IF EXISTS color;"},
 		{"drop column cascade", "ALTER TABLE widgets DROP COLUMN color CASCADE;"},
 		{"two drops in one statement", "ALTER TABLE widgets DROP COLUMN color, DROP COLUMN size;"},
+		{"drop inside a DO block", `DO $$ BEGIN IF false THEN ALTER TABLE widgets DROP COLUMN color; END IF; END $$;`},
+		{"drop inside a function body", `CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN ALTER TABLE widgets DROP COLUMN color; END $fn$;`},
+		{"drop inside a block comment", `/* ALTER TABLE widgets DROP COLUMN color; */ SELECT 1;`},
+		{"drop inside a string literal", `SELECT 'it''s; ALTER TABLE widgets DROP COLUMN color; ok';`},
+		{"drop inside an escape string", `SELECT E'\'; ALTER TABLE widgets DROP COLUMN color; ';`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -262,6 +268,111 @@ CREATE TABLE widgets (
 				t.Fatalf("expected a refusal for %q, got nil error", tc.sql)
 			}
 		})
+	}
+
+	t.Run("drop then re-add in one file", func(t *testing.T) {
+		expected := func(t *testing.T, second string) map[string]string {
+			dir := t.TempDir()
+			writeFixture(t, dir, "000001_create_widgets.up.sql", `
+CREATE TABLE widgets (
+    id BIGSERIAL PRIMARY KEY,
+    color TEXT
+);
+`)
+			writeFixture(t, dir, "000002_destructive.up.sql", second)
+			files, err := loadMigrationFiles(dir)
+			if err != nil {
+				t.Fatalf("loadMigrationFiles: %v", err)
+			}
+			_, columns, err := expectedObjectsFromFiles(files, 2)
+			if err != nil {
+				t.Fatalf("expectedObjectsFromFiles: %v", err)
+			}
+			got := map[string]string{}
+			for _, c := range columns {
+				got[c.table+"."+c.column] = c.file
+			}
+			return got
+		}
+
+		got := expected(t, `ALTER TABLE widgets DROP COLUMN color; ALTER TABLE widgets ADD COLUMN color TEXT;`)
+		if f, ok := got["widgets.color"]; !ok || f != "000002_destructive.up.sql" {
+			t.Errorf("widgets.color after drop then re-add: got file %q (present %v), want 000002_destructive.up.sql", f, ok)
+		}
+
+		got = expected(t, `ALTER TABLE widgets ADD COLUMN size INT; ALTER TABLE widgets DROP COLUMN size;`)
+		if _, ok := got["widgets.size"]; ok {
+			t.Errorf("widgets.size added then dropped should not be expected")
+		}
+	})
+}
+
+// TestExpectedObjectsFromFiles_RetiresPlainDropAfterQuotedBodies is 000047's
+// shape: quoted bodies with inner semicolons, then a plain top-level drop. The
+// splitter must resume at top level after each one so the drop is retired.
+func TestExpectedObjectsFromFiles_RetiresPlainDropAfterQuotedBodies(t *testing.T) {
+	dir := t.TempDir()
+	writeFixture(t, dir, "000001_create_widgets.up.sql", `
+CREATE TABLE widgets (
+    id BIGSERIAL PRIMARY KEY,
+    color TEXT
+);
+`)
+	writeFixture(t, dir, "000002_drop_color.up.sql", `
+CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM 1;
+    PERFORM 2;
+END
+$$;
+DO $tag$ BEGIN PERFORM 1; END $tag$;
+INSERT INTO widgets (color) VALUES ('a;b');
+ALTER TABLE widgets DROP COLUMN color;
+`)
+	files, err := loadMigrationFiles(dir)
+	if err != nil {
+		t.Fatalf("loadMigrationFiles: %v", err)
+	}
+	_, columns, err := expectedObjectsFromFiles(files, 2)
+	if err != nil {
+		t.Fatalf("expectedObjectsFromFiles: %v", err)
+	}
+	for _, c := range columns {
+		if c.table == "widgets" && c.column == "color" {
+			t.Fatalf("widgets.color should be retired, still expected (from %s)", c.file)
+		}
+	}
+}
+
+// TestSplitStatements checks the splitter skips ';' inside each quoted region
+// and comment form, and treats an unterminated one as the rest of the body.
+func TestSplitStatements(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{`a; b`, []string{"a", "b"}},
+		{`SELECT ';'; b`, []string{`SELECT ';'`, "b"}},
+		{`SELECT 'x''; y'; b`, []string{`SELECT 'x''; y'`, "b"}},
+		{`SELECT E'\'; y'; b`, []string{`SELECT E'\'; y'`, "b"}},
+		{`SELECT "a;b"; c`, []string{`SELECT "a;b"`, "c"}},
+		{`DO $$ x; y $$; z`, []string{`DO $$ x; y $$`, "z"}},
+		{`AS $fn$ a $$ b; $fn$; z`, []string{`AS $fn$ a $$ b; $fn$`, "z"}},
+		{`/* a /* b; */ c; */ d; e`, []string{`/* a /* b; */ c; */ d`, "e"}},
+		{`SELECT $1; b`, []string{`SELECT $1`, "b"}},
+		{`DO $$ never closed; x`, []string{`DO $$ never closed; x`}},
+	}
+	for _, tc := range cases {
+		got := splitStatements(tc.in)
+		if len(got) != len(tc.want) {
+			t.Errorf("splitStatements(%q): got %d statements %q, want %d", tc.in, len(got), got, len(tc.want))
+			continue
+		}
+		for i := range got {
+			if strings.TrimSpace(got[i]) != tc.want[i] {
+				t.Errorf("splitStatements(%q)[%d] = %q, want %q", tc.in, i, strings.TrimSpace(got[i]), tc.want[i])
+			}
+		}
 	}
 }
 

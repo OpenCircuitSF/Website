@@ -143,8 +143,10 @@ func stripLineComments(sql string) string {
 // cumulative census: dropping a column or table removes an object an earlier
 // migration's expectations still name, and a RENAME changes an object's
 // identity out from under them. assertNoDestructiveDDL is what stops the census
-// from going stale silently. The one shape it understands is a statement
-// dropping a single column; see dropColumnStmtPattern.
+// from going stale silently. The one shape it understands is a top-level
+// statement dropping a single column; see dropColumnStmtPattern. A drop inside a
+// DO block, function body, block comment or string literal is never a top-level
+// statement, so it stays for this pattern to refuse.
 var destructiveDDLPattern = regexp.MustCompile(`(?i)\bDROP\s+COLUMN\b|\bDROP\s+TABLE\b|\bRENAME\b`)
 
 // dropColumnStmtPattern matches one whole statement that drops one column, the
@@ -154,17 +156,139 @@ var destructiveDDLPattern = regexp.MustCompile(`(?i)\bDROP\s+COLUMN\b|\bDROP\s+T
 // is still refused.
 var dropColumnStmtPattern = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+("?[a-z_][a-z0-9_]*"?)\s+DROP\s+COLUMN\s+("?[a-z_][a-z0-9_]*"?)\s*$`)
 
+// isIdentByte reports whether c can appear in an unquoted identifier or a
+// dollar-quote tag, which is what decides whether a following quote character
+// opens something.
+func isIdentByte(c byte) bool {
+	return c == '_' || c == '$' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+}
+
+// dollarTagPattern matches a dollar-quote opener at the start of its input: $$
+// or $tag$, where the tag cannot start with a digit (so $1 is not an opener).
+var dollarTagPattern = regexp.MustCompile(`^\$([A-Za-z_][A-Za-z0-9_]*)?\$`)
+
+// splitStatements splits body into its top-level statements on ';', skipping
+// any ';' inside a single-quoted string (with ” escapes, and backslash escapes
+// in an E” string), a double-quoted identifier, a nested block comment, a line
+// comment, or a dollar-quoted body ($$ or $tag$). The quoted text stays in the
+// statement that holds it. A region never closed ends the scan, and the rest of
+// body is one final statement.
+func splitStatements(body string) []string {
+	var stmts []string
+	start := 0
+	i := 0
+scan:
+	for i < len(body) {
+		c := body[i]
+		switch {
+		case c == ';':
+			stmts = append(stmts, body[start:i])
+			start = i + 1
+			i++
+		case c == '\'':
+			escape := i >= 1 && (body[i-1] == 'E' || body[i-1] == 'e') && (i < 2 || !isIdentByte(body[i-2]))
+			j := i + 1
+			for {
+				if j >= len(body) {
+					break scan
+				}
+				if escape && body[j] == '\\' {
+					j += 2
+					continue
+				}
+				if body[j] == '\'' {
+					if j+1 < len(body) && body[j+1] == '\'' {
+						j += 2
+						continue
+					}
+					break
+				}
+				j++
+			}
+			i = j + 1
+		case c == '"':
+			j := i + 1
+			for {
+				if j >= len(body) {
+					break scan
+				}
+				if body[j] == '"' {
+					if j+1 < len(body) && body[j+1] == '"' {
+						j += 2
+						continue
+					}
+					break
+				}
+				j++
+			}
+			i = j + 1
+		case c == '/' && i+1 < len(body) && body[i+1] == '*':
+			depth := 1
+			j := i + 2
+			for depth > 0 {
+				if j+1 >= len(body) {
+					break scan
+				}
+				switch {
+				case body[j] == '/' && body[j+1] == '*':
+					depth++
+					j += 2
+				case body[j] == '*' && body[j+1] == '/':
+					depth--
+					j += 2
+				default:
+					j++
+				}
+			}
+			i = j
+		case c == '-' && i+1 < len(body) && body[i+1] == '-':
+			nl := strings.IndexByte(body[i:], '\n')
+			if nl < 0 {
+				break scan
+			}
+			i += nl + 1
+		case c == '$' && (i == 0 || !isIdentByte(body[i-1])):
+			tag := dollarTagPattern.FindString(body[i:])
+			if tag == "" {
+				i++
+				continue
+			}
+			end := strings.Index(body[i+len(tag):], tag)
+			if end < 0 {
+				break scan
+			}
+			i += len(tag) + end + len(tag)
+		default:
+			i++
+		}
+	}
+	return append(stmts, body[start:])
+}
+
+// matchDropColumn reports the column stmt drops when stmt is one whole plain
+// single-column drop (dropColumnStmtPattern). parseDroppedColumns and
+// expectedObjectsFromFiles both use it, so the two cannot disagree.
+func matchDropColumn(fileName, stmt string) (expectedColumn, bool) {
+	m := dropColumnStmtPattern.FindStringSubmatch(stmt)
+	if m == nil {
+		return expectedColumn{}, false
+	}
+	return expectedColumn{table: unquoteIdent(m[1]), column: unquoteIdent(m[2]), file: fileName}, true
+}
+
 // parseDroppedColumns returns the columns body's plain drop statements remove,
-// and body with those statements taken out.
+// and body with those statements taken out. Only a whole top-level statement
+// counts (see splitStatements): a drop inside a dollar-quoted body, block
+// comment or string literal stays in rest, where destructiveDDLPattern refuses it.
 func parseDroppedColumns(fileName, body string) (dropped []expectedColumn, rest string) {
 	var kept []string
-	for _, stmt := range strings.Split(body, ";") {
-		m := dropColumnStmtPattern.FindStringSubmatch(stmt)
-		if m == nil {
+	for _, stmt := range splitStatements(body) {
+		d, ok := matchDropColumn(fileName, stmt)
+		if !ok {
 			kept = append(kept, stmt)
 			continue
 		}
-		dropped = append(dropped, expectedColumn{table: unquoteIdent(m[1]), column: unquoteIdent(m[2]), file: fileName})
+		dropped = append(dropped, d)
 	}
 	return dropped, strings.Join(kept, ";")
 }
@@ -172,7 +296,7 @@ func parseDroppedColumns(fileName, body string) (dropped []expectedColumn, rest 
 // assertNoDestructiveDDL fails closed — rather than let the census start
 // silently emitting false positives — the moment any scanned migration
 // contains DROP TABLE, RENAME, or a DROP COLUMN other than dropColumnStmtPattern's
-// plain statement. f.body has already had its comments stripped, so a match
+// plain top-level statement, including one inside a quoted body or comment. f.body has already had its comments stripped, so a match
 // here is real DDL, not prose describing it.
 // The error string deliberately does not cite an issue number: it can
 // surface to whoever is running the tests, not only a developer who can
@@ -180,10 +304,12 @@ func parseDroppedColumns(fileName, body string) (dropped []expectedColumn, rest 
 func assertNoDestructiveDDL(f migrationFile) error {
 	_, rest := parseDroppedColumns(f.name, f.body)
 	if loc := destructiveDDLPattern.FindString(rest); loc != "" {
-		return fmt.Errorf("testdb: %s contains %q — the cumulative schema census "+
-			"assumes migrations/ never drops, renames, or removes a column, table, or "+
-			"relation an earlier migration declared; that assumption no longer holds "+
-			"and this census needs revisiting before it can be trusted", f.name, loc)
+		return fmt.Errorf("testdb: %s contains %q — the cumulative schema census can "+
+			"account for one destructive shape only, a top-level statement that drops "+
+			"one column with ALTER TABLE <table> DROP COLUMN <column> and nothing else. "+
+			"Any other drop, any rename, or a drop inside a DO block, function body, "+
+			"comment or string literal would leave it expecting an object that is gone, "+
+			"so the census needs extending before it can be trusted", f.name, loc)
 	}
 	return nil
 }
@@ -377,8 +503,9 @@ func parseAlterTableAddColumns(fileName, body string) []expectedColumn {
 // column those migrations declare, each tagged with the migration file
 // that owns it — the diagnosis a failure names, per #0360's plan step 1e.
 // A table or column declared more than once (there are none today) keeps
-// only its first-seen owner. A column a later migration drops is no longer
-// expected.
+// only its first-seen owner. Each file's statements apply in order (see
+// splitStatements): a column a later statement drops is no longer expected, and
+// one added again after that is.
 //
 // assertNoDestructiveDDL runs over every scanned file first, so a drop this
 // census cannot account for stops it rather than skewing it.
@@ -396,33 +523,36 @@ func expectedObjectsFromFiles(files []migrationFile, maxVersion int) ([]expected
 			return nil, nil, err
 		}
 
-		fTables, fColumns, err := parseCreateTables(f.name, f.body)
-		if err != nil {
-			return nil, nil, err
-		}
-		fColumns = append(fColumns, parseAlterTableAddColumns(f.name, f.body)...)
+		for _, stmt := range splitStatements(f.body) {
+			if d, ok := matchDropColumn(f.name, stmt); ok {
+				delete(seenColumn, d.table+"."+d.column)
+				columns = slices.DeleteFunc(columns, func(c expectedColumn) bool {
+					return c.table == d.table && c.column == d.column
+				})
+				continue
+			}
 
-		for _, t := range fTables {
-			if seenTable[t.name] {
-				continue
+			fTables, fColumns, err := parseCreateTables(f.name, stmt)
+			if err != nil {
+				return nil, nil, err
 			}
-			seenTable[t.name] = true
-			tables = append(tables, t)
-		}
-		for _, c := range fColumns {
-			key := c.table + "." + c.column
-			if seenColumn[key] {
-				continue
+			fColumns = append(fColumns, parseAlterTableAddColumns(f.name, stmt)...)
+
+			for _, t := range fTables {
+				if seenTable[t.name] {
+					continue
+				}
+				seenTable[t.name] = true
+				tables = append(tables, t)
 			}
-			seenColumn[key] = true
-			columns = append(columns, c)
-		}
-		dropped, _ := parseDroppedColumns(f.name, f.body)
-		for _, d := range dropped {
-			delete(seenColumn, d.table+"."+d.column)
-			columns = slices.DeleteFunc(columns, func(c expectedColumn) bool {
-				return c.table == d.table && c.column == d.column
-			})
+			for _, c := range fColumns {
+				key := c.table + "." + c.column
+				if seenColumn[key] {
+					continue
+				}
+				seenColumn[key] = true
+				columns = append(columns, c)
+			}
 		}
 	}
 	return tables, columns, nil
