@@ -245,9 +245,9 @@ func TestExpectedObjectsFromFiles_RefusesDropTableAndRename(t *testing.T) {
 		{"drop column if exists", "ALTER TABLE widgets DROP COLUMN IF EXISTS color;"},
 		{"drop column cascade", "ALTER TABLE widgets DROP COLUMN color CASCADE;"},
 		{"two drops in one statement", "ALTER TABLE widgets DROP COLUMN color, DROP COLUMN size;"},
-		{"drop inside a DO block", `DO $$ BEGIN IF false THEN ALTER TABLE widgets DROP COLUMN color; END IF; END $$;`},
-		{"drop inside a function body", `CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN ALTER TABLE widgets DROP COLUMN color; END $fn$;`},
-		{"drop inside a block comment", `/* ALTER TABLE widgets DROP COLUMN color; */ SELECT 1;`},
+		{"drop inside a DO block", `DO $$ BEGIN PERFORM 1; ALTER TABLE widgets DROP COLUMN color; END $$;`},
+		{"drop inside a function body", `CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $fn$ BEGIN PERFORM 1; ALTER TABLE widgets DROP COLUMN color; END $fn$;`},
+		{"drop inside a block comment", `/* note; ALTER TABLE widgets DROP COLUMN color; */ SELECT 1;`},
 		{"drop inside a string literal", `SELECT 'it''s; ALTER TABLE widgets DROP COLUMN color; ok';`},
 		{"drop inside an escape string", `SELECT E'\'; ALTER TABLE widgets DROP COLUMN color; ';`},
 	}
