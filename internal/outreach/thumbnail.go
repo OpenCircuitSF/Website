@@ -21,7 +21,7 @@ import (
 // Why a card goes out without a picture. Each is short, plain text the admin
 // preview shows as is (#0601).
 const (
-	ThumbReasonNoCover     = "No picture: this workshop has no cover image."
+	ThumbReasonNoCover     = "No picture: this event has no cover image."
 	ThumbReasonNotUploaded = "No picture: the cover is not an uploaded image, so the card cannot use it."
 	ThumbReasonNoStorage   = "No picture: this server has no image folder set up."
 	ThumbReasonMissing     = "No picture: the cover file was not found on the server."

@@ -91,7 +91,7 @@ func (h *AdminWorkshopsHandler) Announce(w http.ResponseWriter, r *http.Request)
 	switch {
 	case err == nil:
 	case errors.Is(err, workshops.ErrNotFound):
-		writeError(w, http.StatusNotFound, "workshop not found")
+		writeError(w, http.StatusNotFound, "event not found")
 		return
 	default:
 		writeError(w, http.StatusInternalServerError, "internal server error")
@@ -167,12 +167,16 @@ func announceCampaignName(wk workshops.Workshop) string {
 	return fmt.Sprintf("Announce: %s", wk.Title)
 }
 
-// announceSubject builds the pre-filled email subject line from the
-// workshop's title alone — date and location go in the body, where there is
+// announceSubject builds the pre-filled email subject line from the listing's
+// type name, as the admin wrote it, and its title — date and location go in the body, where there is
 // room to present them clearly; a subject line packed with every field
 // would be unreadable in an inbox.
 func announceSubject(wk workshops.Workshop) string {
-	return fmt.Sprintf("New workshop: %s", wk.Title)
+	name := strings.TrimSpace(wk.EventTypeName)
+	if name == "" {
+		name = "event"
+	}
+	return fmt.Sprintf("New %s: %s", name, wk.Title)
 }
 
 // announceBodyMD builds the pre-filled Markdown body from the workshop's
@@ -193,7 +197,7 @@ func announceSubject(wk workshops.Workshop) string {
 // sitemap.go, jsonld.go). When the workshop also has an external
 // signup_url, that link is emitted FIRST as "Sign up" — it stays the
 // primary action per #0145's acceptance criterion — and the site page is
-// offered second as "View this workshop" so the two never look like
+// offered second as "View this event" so the two never look like
 // duplicate CTAs. baseURL is config.Config.BaseURL (already trailing-slash
 // normalized by internal/config; see NewAdminWorkshopsHandler's doc
 // comment) — never a hardcoded host, so a local/staging deploy links to
@@ -221,9 +225,9 @@ func announceBodyMD(wk workshops.Workshop, baseURL string) string {
 	}
 	if signupURL != "" {
 		fmt.Fprintf(&b, "[Sign up](%s)\n\n", signupURL)
-		fmt.Fprintf(&b, "[View this workshop](%s)\n\n", announceWorkshopURL(baseURL, wk.Slug))
+		fmt.Fprintf(&b, "[View this event](%s)\n\n", announceWorkshopURL(baseURL, wk.Slug))
 	} else {
-		fmt.Fprintf(&b, "[View this workshop](%s)\n\n", announceWorkshopURL(baseURL, wk.Slug))
+		fmt.Fprintf(&b, "[View this event](%s)\n\n", announceWorkshopURL(baseURL, wk.Slug))
 	}
 
 	return strings.TrimRight(b.String(), "\n") + "\n"

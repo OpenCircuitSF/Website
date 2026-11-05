@@ -121,7 +121,7 @@
         outreachRows = [];
       }
     } catch (err) {
-      loadError = err instanceof ApiError ? err.message : 'Could not load workshops.';
+      loadError = err instanceof ApiError ? err.message : 'Could not load events.';
     } finally {
       loading = false;
     }
@@ -197,7 +197,7 @@
       // #0527: the created workshop's editor is a real URL now.
       onOpenWorkshop(created.id);
     } catch (err) {
-      createError = err instanceof ApiError ? err.message : 'Could not create this workshop.';
+      createError = err instanceof ApiError ? err.message : 'Could not create this event.';
     } finally {
       submittingCreate = false;
     }
@@ -214,14 +214,14 @@
     />
   {/key}
 {:else}
-  <Panel title="Workshops" noPadding={listPanelNoPadding}>
+  <Panel title="Events" noPadding={listPanelNoPadding}>
     {#if loading}
-      <p class="text-muted" role="status">Loading workshops…</p>
+      <p class="text-muted" role="status">Loading events…</p>
     {:else if loadError}
       <p class="text-error" role="alert">{loadError}</p>
       <Button variant="primary" onclick={load}>Retry</Button>
     {:else if noWorkshops}
-      <p class="text-muted">No workshops yet.</p>
+      <p class="text-muted">No events yet.</p>
     {:else}
       <div class="table-scroll">
         <table>
@@ -258,7 +258,7 @@
     {/if}
   </Panel>
 
-  <Button variant="primary" onclick={openCreate}>New workshop</Button>
+  <Button variant="primary" onclick={openCreate}>New event</Button>
 
   {#if creating}
     <div
@@ -273,7 +273,7 @@
         class="modal"
         role="dialog"
         aria-modal="true"
-        aria-label="New workshop"
+        aria-label="New event"
         tabindex="-1"
         bind:this={modalEl}
         onclick={(e) => e.stopPropagation()}
@@ -281,7 +281,7 @@
           if (e.key === 'Escape') closeCreate();
         }}
       >
-        <h2 class="modal-title">New workshop</h2>
+        <h2 class="modal-title">New event</h2>
         <form onsubmit={submitCreate}>
           <div class="field">
             <label for="new-workshop-title">Title</label>

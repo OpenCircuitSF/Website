@@ -158,7 +158,7 @@
   const regenerateStale = () =>
     guarded('Could not regenerate. Please try again.', async () => {
       for (const { post } of regenerable) onChange(await updateOutreachPost(post.id, { regenerate: true }));
-      status = `Regenerated ${names(regenerable.map((a) => a.channel.label))} from the current workshop details.`;
+      status = `Regenerated ${names(regenerable.map((a) => a.channel.label))} from the current event details.`;
     });
 
   function openPost(): void {
@@ -247,7 +247,7 @@
   {:else}
     {#if staleAutos.length > 0}
       <p class="text-warn">
-        The workshop's title, date or place changed since {names(staleAutos.map((a) => a.channel.label))} {staleAutos.length > 1 ? 'were' : 'was'} drafted.
+        The event's title, date or place changed since {names(staleAutos.map((a) => a.channel.label))} {staleAutos.length > 1 ? 'were' : 'was'} drafted.
         {#if regenerable.length > 0}
           <Button onclick={regenerateStale} disabled={busy}>Regenerate</Button>
         {:else}

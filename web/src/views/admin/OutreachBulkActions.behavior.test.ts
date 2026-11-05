@@ -127,7 +127,7 @@ describe('OutreachBulkActions', () => {
       view: wo({ workshop: { id: 5, slug: 'w', title: 'W', status: 'draft', starts_at: '2026-12-05T18:00:00Z' } }),
     });
     expect((screen.getByRole('button', { name: 'Schedule all' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByRole('link', { name: 'Open the workshop editor' }).getAttribute('href')).toBe('#/workshops/5');
+    expect(screen.getByRole('link', { name: 'Open the event editor' }).getAttribute('href')).toBe('#/workshops/5');
     expect(screen.queryByRole('link', { name: 'Open Settings' })).toBeNull();
   });
 

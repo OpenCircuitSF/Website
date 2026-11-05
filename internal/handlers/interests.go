@@ -386,7 +386,7 @@ func (h *AdminInterestsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, interests.ErrHasWorkshops):
 		writeError(w, http.StatusConflict,
-			"cannot delete an interest still tagged on a workshop; deactivate it instead")
+			"cannot delete an interest still tagged on an event; deactivate it instead")
 		return
 	default:
 		writeError(w, http.StatusInternalServerError, "internal server error")

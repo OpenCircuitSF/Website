@@ -568,7 +568,7 @@ func (h *AdminOutreachHandler) GenerateFlyer(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if wk.Status != "published" {
-		writeError(w, http.StatusConflict, "flyer links can only be generated for a published workshop")
+		writeError(w, http.StatusConflict, "flyer links can only be generated for a published event")
 		return
 	}
 	sel, err := h.flyers.ListFlyerSelection(r.Context(), id)

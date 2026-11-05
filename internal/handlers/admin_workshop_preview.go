@@ -77,7 +77,7 @@ func (h *AdminWorkshopsHandler) Preview(w http.ResponseWriter, r *http.Request) 
 	switch {
 	case err == nil:
 	case errors.Is(err, workshops.ErrNotFound):
-		writeError(w, http.StatusNotFound, "workshop not found")
+		writeError(w, http.StatusNotFound, "event not found")
 		return
 	default:
 		writeError(w, http.StatusInternalServerError, "internal server error")
@@ -86,7 +86,7 @@ func (h *AdminWorkshopsHandler) Preview(w http.ResponseWriter, r *http.Request) 
 
 	html, err := renderWorkshopBodyHTML(wk.BodyMD)
 	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "workshop body does not render: "+err.Error())
+		writeError(w, http.StatusUnprocessableEntity, "event body does not render: "+err.Error())
 		return
 	}
 

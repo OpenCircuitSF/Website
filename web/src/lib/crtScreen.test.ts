@@ -237,10 +237,17 @@ describe('crtInterestLines', () => {
 });
 
 describe('crtFallbackScript', () => {
-  it('tags workshops --next and subscribe --interests with their live sources', () => {
+  it('the fallback session says events, not workshops', () => {
+    for (const c of CRT_SESSION) {
+      expect(c.cmd).not.toMatch(/workshop/i);
+      for (const line of c.out) expect(line).not.toMatch(/workshop/i);
+    }
+  });
+
+  it('tags events --next and subscribe --interests with their live sources', () => {
     const script = crtFallbackScript();
     expect(script).toHaveLength(CRT_SESSION.length);
-    const workshops = script.find((s) => s.cmd === 'workshops --next');
+    const workshops = script.find((s) => s.cmd === 'events --next');
     const subscribe = script.find((s) => s.cmd === 'subscribe --interests');
     expect(workshops?.source).toBe('workshops');
     expect(subscribe?.source).toBe('list_stats');
@@ -248,7 +255,7 @@ describe('crtFallbackScript', () => {
 
   it('tags every other command static', () => {
     const script = crtFallbackScript();
-    const others = script.filter((s) => s.cmd !== 'workshops --next' && s.cmd !== 'subscribe --interests');
+    const others = script.filter((s) => s.cmd !== 'events --next' && s.cmd !== 'subscribe --interests');
     expect(others.length).toBeGreaterThan(0);
     for (const s of others) expect(s.source).toBe('static');
   });

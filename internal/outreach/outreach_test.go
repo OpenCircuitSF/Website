@@ -97,6 +97,20 @@ func ledsFacts() Facts {
 	}
 }
 
+// TestDraftNeverNamesAType (#0615): Facts has no type field, so a draft for a
+// Hack Night or any other type has no way to call itself a workshop.
+func TestDraftNeverNamesAType(t *testing.T) {
+	start := time.Date(2026, 11, 7, 19, 30, 0, 0, time.UTC)
+	f := Facts{Slug: "s", Title: "Solder Social", StartsAt: &start, LocationName: strp("The Shop")}
+	for _, ch := range Channels() {
+		for _, w := range Waves() {
+			if d := Draft(ch, w, f); strings.Contains(strings.ToLower(d), "workshop") {
+				t.Errorf("%s/%s draft says workshop: %q", ch.Name, w.Name, d)
+			}
+		}
+	}
+}
+
 func TestDraftGolden(t *testing.T) {
 	want := map[string]string{
 		"bluesky/announce":   "We're running Programming LEDs at Sequoia Fabrica on Monday, Oct 19.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\n#SanFrancisco #Electronics",

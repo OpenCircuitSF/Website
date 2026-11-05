@@ -108,7 +108,7 @@ var staticPageCopy = map[string]staticCopy{
 		Source: "web/src/views/Subscribe.svelte",
 		H1:     "Subscribe",
 		Blocks: []copyBlock{
-			{Text: `Get notified about new workshops. Pick the topics you care about — nothing else.`},
+			{Text: `Get notified about new events. Pick the topics you care about — nothing else.`},
 		},
 	},
 	"/events": {

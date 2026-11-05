@@ -93,13 +93,13 @@
     <p class="text-error">{loadError}</p>
     <Button variant="primary" onclick={load}>Retry</Button>
   {:else if upcoming.length === 0}
-    <p class="text-muted">No upcoming published workshops. Publish a workshop with a future date under Workshops to promote it here.</p>
+    <p class="text-muted">No upcoming published events. Publish an event with a future date under Events to promote it here.</p>
   {:else}
     <div class="table-scroll">
       <table>
         <thead>
           <tr>
-            <th>Workshop</th>
+            <th>Event</th>
             <th>Date</th>
             <th>Outreach</th>
             <th><span class="sr-only">Action</span></th>
@@ -123,12 +123,12 @@
 </Panel>
 {#if !loading && !loadError && past.length > 0}
   <Panel title="Past">
-    <p class="text-muted">Workshops that have happened and had outreach. Open one for its posts, or see how it did under Results.</p>
+    <p class="text-muted">Events that have happened and had outreach. Open one for its posts, or see how it did under Results.</p>
     <div class="table-scroll">
       <table>
         <thead>
           <tr>
-            <th>Workshop</th>
+            <th>Event</th>
             <th>Date</th>
             <th>Outreach</th>
             <th><span class="sr-only">Action</span></th>

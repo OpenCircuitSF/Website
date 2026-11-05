@@ -56,7 +56,7 @@ export function linksEmptyState(v: OutreachLinksView): { kind: LinksEmptyKind; m
     return { kind: 'not_connected', message: 'ShortLinks is not connected. Connect it in Settings to create links.' };
   }
   if (v.unavailable_reason === 'workshop_not_published') {
-    return { kind: 'not_published', message: 'This workshop is not published. Publish it in the workshop editor to create links.' };
+    return { kind: 'not_published', message: 'This event is not published. Publish it in the event editor to create links.' };
   }
   if (v.outreach && v.links.length > 0 && v.links.every((l) => l.short_url === null)) {
     return { kind: 'no_links', message: 'No links yet. Create links to make a short link for every channel, every post and every flyer location.' };
@@ -106,7 +106,7 @@ export function scheduleAllMessage(r: OutreachScheduleAllResult): string {
 /** Whether Schedule all can do anything at all, and if not, why. */
 export function canScheduleAll(view: WorkshopOutreach): { ok: boolean; reason: string | null } {
   if (view.workshop.status !== 'published') {
-    return { ok: false, reason: 'Publish this workshop in the editor to schedule posts.' };
+    return { ok: false, reason: 'Publish this event in the editor to schedule posts.' };
   }
   if (!view.channels.some((c) => c.automatic && c.configured)) {
     return { ok: false, reason: 'Bluesky and Mastodon are not connected. Connect one in Settings to schedule posts.' };

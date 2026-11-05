@@ -55,7 +55,7 @@ async function mounted() {
 }
 
 async function openNew(): Promise<HTMLSelectElement> {
-  await fireEvent.click(screen.getByRole('button', { name: 'New workshop' }));
+  await fireEvent.click(screen.getByRole('button', { name: 'New event' }));
   return (await screen.findByLabelText('Type')) as HTMLSelectElement;
 }
 

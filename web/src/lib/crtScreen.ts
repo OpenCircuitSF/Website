@@ -87,13 +87,13 @@ export function crtMatrix3d(stageW: number, stageH: number): string {
  *  not "fix" a difference between this array and the seeded/live rows by
  *  syncing them — that is not a bug. */
 export const CRT_SESSION: ReadonlyArray<{ cmd: string; out: readonly string[] }> = [
-  { cmd: 'workshops --next', out: ['soldering 101 ..... sat 12:30', 'kicad from scratch  sep 18', 'esp32 + sensors ... oct 02', '3 scheduled, 12 seats open'] },
+  { cmd: 'events --next', out: ['soldering 101 ..... sat 12:30', 'kicad from scratch  sep 18', 'esp32 + sensors ... oct 02', '3 scheduled, 12 seats open'] },
   { cmd: 'whoami', out: ['open circuit sf', 'a san francisco group that', 'builds things on tables.'] },
   { cmd: 'ls tools/', out: ['irons  multimeters  scopes', 'logic-analysers  hot-air', 'all provided. bring nothing.'] },
   { cmd: 'cat topics.txt', out: ['microcontrollers', 'soldering', 'homelab', 'home automation'] },
   { cmd: 'where --venues', out: ['makerspaces, co-working rooms,', "somebody's garage.", 'venue-independent by design.'] },
   { cmd: 'skill --required', out: ['none.', 'absolute beginners welcome.'] },
-  { cmd: 'subscribe --interests', out: ['pick only what you want:', '[x] workshops  [ ] digests', '[ ] announcements', 'double opt-in. leave anytime.'] },
+  { cmd: 'subscribe --interests', out: ['pick only what you want:', '[x] events  [ ] digests', '[ ] announcements', 'double opt-in. leave anytime.'] },
   { cmd: 'uptime', out: ['soldering irons hot since 2026', 'no analytics. no trackers.'] },
 ];
 
@@ -117,7 +117,7 @@ export type CrtSessionResponse = { commands: ReadonlyArray<{ cmd: string; out: r
 /** Builds a live-enrichable script from the compiled-in CRT_SESSION,
  *  tagging each step with the same `source` values
  *  migrations/000028_create_crt_commands.up.sql's seed uses for the two
- *  originally-live commands ('workshops --next' -> 'workshops',
+ *  originally-live commands ('events --next' -> 'workshops',
  *  'subscribe --interests' -> 'list_stats', everything else -> 'static') —
  *  so the fallback path live-enriches identically to the database-backed
  *  session. This is the STORAGE=json / pre-seed-deploy / crt-session-fetch-
@@ -126,7 +126,7 @@ export function crtFallbackScript(): CrtScriptStep[] {
   return CRT_SESSION.map((c) => ({
     cmd: c.cmd,
     out: [...c.out],
-    source: c.cmd === 'workshops --next' ? 'workshops' : c.cmd === 'subscribe --interests' ? 'list_stats' : 'static',
+    source: c.cmd === 'events --next' ? 'workshops' : c.cmd === 'subscribe --interests' ? 'list_stats' : 'static',
   }));
 }
 

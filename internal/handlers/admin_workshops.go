@@ -251,7 +251,7 @@ func (h *AdminWorkshopsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 	case errors.Is(err, workshops.ErrNotFound):
-		writeError(w, http.StatusNotFound, "workshop not found")
+		writeError(w, http.StatusNotFound, "event not found")
 		return
 	default:
 		writeError(w, http.StatusInternalServerError, "internal server error")
@@ -446,7 +446,7 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 	case errors.Is(err, workshops.ErrNotFound):
-		writeError(w, http.StatusNotFound, "workshop not found")
+		writeError(w, http.StatusNotFound, "event not found")
 		return
 	default:
 		writeError(w, http.StatusInternalServerError, "internal server error")
@@ -564,7 +564,7 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 	case errors.Is(err, workshops.ErrNotFound):
-		writeError(w, http.StatusNotFound, "workshop not found")
+		writeError(w, http.StatusNotFound, "event not found")
 		return
 	case errors.Is(err, workshops.ErrTitleRequired):
 		writeError(w, http.StatusBadRequest, "title cannot be empty")
@@ -648,7 +648,7 @@ func (h *AdminWorkshopsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 	case errors.Is(err, workshops.ErrNotFound):
-		writeError(w, http.StatusNotFound, "workshop not found")
+		writeError(w, http.StatusNotFound, "event not found")
 		return
 	default:
 		writeError(w, http.StatusInternalServerError, "internal server error")
@@ -659,11 +659,11 @@ func (h *AdminWorkshopsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 	case errors.Is(err, workshops.ErrNotFound):
-		writeError(w, http.StatusNotFound, "workshop not found")
+		writeError(w, http.StatusNotFound, "event not found")
 		return
 	case errors.Is(err, workshops.ErrHasCampaigns):
 		writeError(w, http.StatusConflict,
-			"cannot delete a workshop that an email campaign still references; cancel it instead")
+			"cannot delete an event that an email campaign still references; cancel it instead")
 		return
 	default:
 		writeError(w, http.StatusInternalServerError, "internal server error")
@@ -688,7 +688,7 @@ func (h *AdminWorkshopsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"message": "workshop deleted"})
+	writeJSON(w, http.StatusOK, map[string]string{"message": "event deleted"})
 }
 
 // ── shared helpers ────────────────────────────────────────────────────────────
@@ -699,7 +699,7 @@ func parseWorkshopID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	raw := r.PathValue("id")
 	id, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || id <= 0 {
-		writeError(w, http.StatusBadRequest, "invalid workshop id")
+		writeError(w, http.StatusBadRequest, "invalid event id")
 		return 0, false
 	}
 	return id, true

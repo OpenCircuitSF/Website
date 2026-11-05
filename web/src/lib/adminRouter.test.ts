@@ -215,7 +215,7 @@ describe('settings sections (#0584)', () => {
 
 describe('admin nav groups (#0599)', () => {
   it('orders Workshops, Newsletter, System with Campaigns first in Newsletter', () => {
-    expect(ADMIN_NAV_GROUPS.map((g) => g.label)).toEqual(['Workshops', 'Newsletter', 'System']);
+    expect(ADMIN_NAV_GROUPS.map((g) => g.label)).toEqual(['Events', 'Newsletter', 'System']);
     expect(ADMIN_NAV_GROUPS[1].sections[0]).toBe('campaigns');
   });
 
@@ -224,7 +224,7 @@ describe('admin nav groups (#0599)', () => {
   });
 
   it('sectionGroup returns the owning group, null for overview and not-found', () => {
-    expect(sectionGroup('outreach')?.label).toBe('Workshops');
+    expect(sectionGroup('outreach')?.label).toBe('Events');
     expect(sectionGroup('pending')?.label).toBe('Newsletter');
     expect(sectionGroup('crt')?.label).toBe('System');
     expect(sectionGroup('overview')).toBeNull();
@@ -244,7 +244,7 @@ describe('admin nav groups (#0599)', () => {
 describe('event types section (#0613)', () => {
   it('routes #/event-types and lists it in the Workshops group', () => {
     expect(parseAdminHash('#/event-types')?.section).toBe('event-types');
-    const group = ADMIN_NAV_GROUPS.find((g) => g.label === 'Workshops');
+    const group = ADMIN_NAV_GROUPS.find((g) => g.label === 'Events');
     expect(group?.sections).toContain('event-types');
     expect(ADMIN_SECTION_LABELS['event-types']).toBe('Event types');
   });

@@ -464,7 +464,7 @@ func (h *AdminOutreachHandler) CreateLinks(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if wk.Status != "published" {
-		writeError(w, http.StatusConflict, "outreach is only available for a published workshop")
+		writeError(w, http.StatusConflict, "outreach is only available for a published event")
 		return
 	}
 	report, err := h.ensureLinks(r, actor.ID, *o, wk)
@@ -669,7 +669,7 @@ func (h *AdminOutreachHandler) ScheduleAll(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if wk.Status != "published" {
-		writeError(w, http.StatusConflict, "outreach is only available for a published workshop")
+		writeError(w, http.StatusConflict, "outreach is only available for a published event")
 		return
 	}
 	var req scheduleAllRequest

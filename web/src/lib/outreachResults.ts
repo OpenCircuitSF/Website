@@ -211,9 +211,9 @@ export function resultsStatusMessage(status: OutreachResultsStatus): string | nu
     case 'rejected':
       return "ShortLinks rejected this server's API token — check it under Settings → Outreach connections.";
     case 'campaign_missing':
-      return "This workshop's links were not found in ShortLinks.";
+      return "This event's links were not found in ShortLinks.";
     case 'not_started':
-      return 'Outreach has not started for this workshop.';
+      return 'Outreach has not started for this event.';
   }
 }
 

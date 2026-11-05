@@ -30,7 +30,7 @@ func HeldNotPublishedMessage(status string) string {
 	if status == "canceled" {
 		what = "canceled"
 	}
-	return "Held: the workshop was " + what + " when this post was due. Reschedule to send it."
+	return "Held: the event was " + what + " when this post was due. Reschedule to send it."
 }
 
 // classifySend explains why a state-guarded send or schedule touched no row.

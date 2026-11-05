@@ -135,7 +135,7 @@ describe('OutreachResults, Flyers by location (#0549)', () => {
       results({ flyer_all_status: 'unreachable', flyer_locations: rows.map((r) => ({ ...r, clicks_all_workshops: null })) }),
     );
     render(OutreachResultsView, { workshopId: 5 });
-    await waitFor(() => expect(screen.getByText('Scans across all workshops are unavailable right now.')).toBeTruthy());
+    await waitFor(() => expect(screen.getByText('Scans across all events are unavailable right now.')).toBeTruthy());
     expect(screen.getByText('Mission Library').closest('tr')!.textContent).toContain('—');
   });
 
@@ -145,7 +145,7 @@ describe('OutreachResults, Flyers by location (#0549)', () => {
     );
     const { container } = render(OutreachResultsView, { workshopId: 5 });
     await waitFor(() => expect(screen.getByText('Flyers by location')).toBeTruthy());
-    expect(screen.queryByText('Scans all workshops')).toBeNull();
+    expect(screen.queryByText('Scans all events')).toBeNull();
     expect(screen.queryByText(/unavailable right now/)).toBeNull();
     const table = screen.getByText('Flyers by location').parentElement!.querySelector('table')!;
     expect(table.querySelectorAll('thead th').length).toBe(3);

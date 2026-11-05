@@ -138,7 +138,7 @@
   const regenerate = () =>
     run('regenerate', async () => {
       onChange(await updateOutreachPost(post.id, { regenerate: true }));
-      notice = 'Regenerated from the current workshop details.';
+      notice = 'Regenerated from the current event details.';
     });
   const prepare = () =>
     run('create the link', async () => {
@@ -171,7 +171,7 @@
 <div class="composer">
   {#if actions.canRegenerate}
     <p class="text-warn">
-      The workshop's title, date or place changed since this was drafted.
+      The event's title, date or place changed since this was drafted.
       <Button onclick={regenerate} disabled={busy}>Regenerate</Button>
     </p>
   {/if}
@@ -204,7 +204,7 @@
     <p class="text-muted">{channelNote}</p>
   {/if}
   {#if post.held}
-    <p class="text-warn">On hold — the workshop is not published, so this will not be sent.</p>
+    <p class="text-warn">On hold — the event is not published, so this will not be sent.</p>
   {/if}
   {#if post.status === 'queued'}
     <p class="text-notice">Queued to post. It is locked until it is sent{post.last_error ? ' or fails' : ''}.</p>

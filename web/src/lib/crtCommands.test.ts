@@ -135,7 +135,7 @@ describe('crtReorderSwap', () => {
 
 describe('crtSourceLabel', () => {
   it('returns the labelled source for a known value', () => {
-    expect(crtSourceLabel('workshops')).toContain('workshops');
+    expect(crtSourceLabel('workshops')).toContain('events');
   });
 
   it('falls back to the raw value for an unknown source', () => {

@@ -92,7 +92,7 @@
         <select {id} bind:value={draft[f.key]} disabled={saving}>
           <option value="">Not saved — using {sourceLabel(f)}: {f.value}</option>
           <option value="short">Short link (tracked)</option>
-          <option value="canonical">Workshop page (opencircuitsf.com)</option>
+          <option value="canonical">Event page (opencircuitsf.com)</option>
         </select>
       {:else if f.key === 'outreach_channels'}
         <!-- One checkbox per channel, over a comma list. Until something is

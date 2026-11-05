@@ -446,7 +446,7 @@
             <p><a href={adminOutreachHash('locations')}>Manage locations</a></p>
           {/if}
           <p class="text-muted">{draftSummary}</p>
-          <p class="text-muted">Each link is tagged <span class="mono">{utmSummary(view.flyer.workshop_slug)}</span> and is shared by every flyer for this workshop and location.</p>
+          <p class="text-muted">Each link is tagged <span class="mono">{utmSummary(view.flyer.workshop_slug)}</span> and is shared by every flyer for this event and location.</p>
         </section>
 
         <details class="more" bind:open={moreOpen}>
@@ -464,7 +464,7 @@
           <section>
             <h3><label for="fl-desc-input">Description</label></h3>
             <textarea id="fl-desc-input" rows="5" bind:value={description} placeholder={view.facts.description} aria-describedby="fl-desc-hint fl-desc-err"></textarea>
-            <p class="text-muted" id="fl-desc-hint">Leave empty to use the workshop summary.</p>
+            <p class="text-muted" id="fl-desc-hint">Leave empty to use the event summary.</p>
             <p class="text-muted">{[...description].length} of {MAX_FLYER_DESCRIPTION}</p>
             <p class="text-error" id="fl-desc-err">{descriptionError ?? ''}</p>
           </section>

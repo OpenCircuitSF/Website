@@ -25,12 +25,12 @@ afterEach(cleanup);
 describe('OutreachFlyers workshop preselect', () => {
   it('selects the named workshop, else the first', async () => {
     render(OutreachFlyers, { workshopId: 6 });
-    await waitFor(() => expect((screen.getByLabelText('Workshop') as HTMLSelectElement).value).toBe('12'));
+    await waitFor(() => expect((screen.getByLabelText('Event') as HTMLSelectElement).value).toBe('12'));
     cleanup();
     render(OutreachFlyers, { workshopId: 99 });
-    await waitFor(() => expect((screen.getByLabelText('Workshop') as HTMLSelectElement).value).toBe('11'));
+    await waitFor(() => expect((screen.getByLabelText('Event') as HTMLSelectElement).value).toBe('11'));
     cleanup();
     render(OutreachFlyers);
-    await waitFor(() => expect((screen.getByLabelText('Workshop') as HTMLSelectElement).value).toBe('11'));
+    await waitFor(() => expect((screen.getByLabelText('Event') as HTMLSelectElement).value).toBe('11'));
   });
 });

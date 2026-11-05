@@ -728,8 +728,8 @@ func TestAdminInterests_DeleteRefusedWithWorkshop(t *testing.T) {
 	if err := json.Unmarshal(body, &errBody); err != nil {
 		t.Fatalf("decode error body: %v (body=%s)", err, body)
 	}
-	if !strings.Contains(errBody.Error, "workshop") {
-		t.Fatalf("error message = %q, want it to name the workshop as the blocker", errBody.Error)
+	if !strings.Contains(errBody.Error, "event") {
+		t.Fatalf("error message = %q, want it to name the event as the blocker", errBody.Error)
 	}
 	if !strings.Contains(errBody.Error, "deactivate") {
 		t.Fatalf("error message = %q, want it to say deactivate instead", errBody.Error)

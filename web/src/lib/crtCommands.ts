@@ -41,7 +41,7 @@ export function isValidCrtSlug(slug: string): boolean {
  *  table. */
 export const CRT_SOURCES: ReadonlyArray<{ value: string; label: string }> = [
   { value: 'static', label: 'Static (stored text only)' },
-  { value: 'workshops', label: 'Live: upcoming workshops (fallback below)' },
+  { value: 'workshops', label: 'Live: upcoming events (fallback below)' },
   { value: 'list_stats', label: 'Live: subscriber counts (fallback below)' },
   { value: 'interests', label: 'Live: per-topic subscriber counts (fallback below)' },
 ];

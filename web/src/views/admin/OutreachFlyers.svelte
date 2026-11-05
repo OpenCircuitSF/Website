@@ -63,15 +63,15 @@
 
 <Panel title="Flyers">
   <p class="text-muted">
-    Printable flyers with one QR code per location. Start outreach for a workshop first, then design its flyer here.
+    Printable flyers with one QR code per location. Start outreach for an event first, then design its flyer here.
   </p>
   <p class="status" role="status">{status}</p>
 
   {#if loaded && workshops.length === 0}
-    <p class="text-muted">Start outreach for a workshop first.</p>
+    <p class="text-muted">Start outreach for an event first.</p>
   {:else if loaded}
     <form class="new" onsubmit={create}>
-      <label for="flyer-workshop">Workshop</label>
+      <label for="flyer-workshop">Event</label>
       <select id="flyer-workshop" bind:value={outreachId}>
         {#each workshops as w (w.outreach_id)}
           <option value={w.outreach_id}>{w.workshop_title}</option>
@@ -88,7 +88,7 @@
       <table>
         <thead>
           <tr>
-            <th>Workshop</th>
+            <th>Event</th>
             <th>Template</th>
             <th>Tagline</th>
             <th>Created</th>

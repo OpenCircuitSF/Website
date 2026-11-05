@@ -70,7 +70,7 @@ describe('OutreachWorkshop', () => {
     render(OutreachWorkshop, { workshopId: 5 });
     expect(await screen.findByRole('heading', { name: 'Soldering 101' })).toBeTruthy();
     expect(screen.getByText(/published/)).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Edit workshop' }).getAttribute('href')).toBe('#/workshops/5');
+    expect(screen.getByRole('link', { name: 'Edit event' }).getAttribute('href')).toBe('#/workshops/5');
     expect(screen.getByRole('link', { name: 'All outreach' }).getAttribute('href')).toBe('#/outreach');
   });
 
@@ -118,7 +118,7 @@ describe('OutreachWorkshop', () => {
   it('never starts outreach for an unavailable workshop (#0582)', async () => {
     getWorkshopOutreach.mockResolvedValue(view({ available: false, unavailable_reason: 'workshop_not_published', outreach: null }));
     render(OutreachWorkshop, { workshopId: 5 });
-    await screen.findByRole('link', { name: 'Open the workshop editor' });
+    await screen.findByRole('link', { name: 'Open the event editor' });
     expect(startOutreach).not.toHaveBeenCalled();
   });
 
@@ -164,7 +164,7 @@ describe('OutreachWorkshop', () => {
   it('points at the editor when the workshop is not published', async () => {
     getWorkshopOutreach.mockResolvedValue(view({ available: false, unavailable_reason: 'workshop_not_published', outreach: null }));
     render(OutreachWorkshop, { workshopId: 5 });
-    const link = await screen.findByRole('link', { name: 'Open the workshop editor' });
+    const link = await screen.findByRole('link', { name: 'Open the event editor' });
     expect(link.getAttribute('href')).toBe('#/workshops/5');
   });
 
@@ -272,11 +272,11 @@ describe('OutreachWorkshop', () => {
     const { ApiError } = await import('../../lib/api');
     getWorkshopOutreach.mockRejectedValue(new ApiError(404, 'workshop not found', null));
     render(OutreachWorkshop, { workshopId: 999 });
-    expect(await screen.findByRole('heading', { name: 'Workshop not found' })).toBeTruthy();
-    expect(screen.getByText('This workshop no longer exists.')).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'Event not found' })).toBeTruthy();
+    expect(screen.getByText('This event no longer exists.')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'All outreach' }).getAttribute('href')).toBe('#/outreach');
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'Edit workshop' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Edit event' })).toBeNull();
     expect(screen.queryByText('Loading…')).toBeNull();
     expect(screen.queryByText('workshop not found')).toBeNull();
   });

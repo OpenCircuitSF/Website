@@ -191,7 +191,7 @@ describe('announceTargetingDescription', () => {
 
   it('says the draft targets this workshop\'s interests when it has some', () => {
     const description = announceTargetingDescription([7]);
-    expect(description).toMatch(/this workshop's interests/i);
+    expect(description).toMatch(/this event's interests/i);
     expect(description).not.toMatch(/everyone/i);
   });
 

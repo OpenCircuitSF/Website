@@ -173,7 +173,7 @@ func TestAnnounceBodyMD_AlwaysLinksToWorkshopPage(t *testing.T) {
 		if !strings.Contains(body, "[Sign up](https://example.com/rsvp)") {
 			t.Errorf("body missing external Sign up link:\n%s", body)
 		}
-		if !strings.Contains(body, "[View this workshop]("+wantSiteURL+")") {
+		if !strings.Contains(body, "[View this event]("+wantSiteURL+")") {
 			t.Errorf("body missing site link %q:\n%s", wantSiteURL, body)
 		}
 		signupIdx := strings.Index(body, signup)
@@ -200,7 +200,7 @@ func TestAnnounceBodyMD_AlwaysLinksToWorkshopPage(t *testing.T) {
 		t.Logf("RENDERED BODY (no signup_url):\n%s", body)
 
 		wantSiteURL := "https://www.opencircuitsf.com/events/in-house-circuit-bending-night"
-		if !strings.Contains(body, "[View this workshop]("+wantSiteURL+")") {
+		if !strings.Contains(body, "[View this event]("+wantSiteURL+")") {
 			t.Errorf("body missing site link %q (this is the whole point of #0145):\n%s", wantSiteURL, body)
 		}
 		if strings.Contains(body, "[Sign up](") {
@@ -219,4 +219,18 @@ func TestAnnounceBodyMD_AlwaysLinksToWorkshopPage(t *testing.T) {
 			t.Errorf("body contains a double slash:\n%s", body)
 		}
 	})
+}
+
+// TestAnnounceSubject (#0615): the type name is used as the admin wrote it,
+// and an empty name falls back to the generic word.
+func TestAnnounceSubject(t *testing.T) {
+	for _, tc := range []struct{ name, want string }{
+		{"Hack Night", "New Hack Night: X"},
+		{"Workshop", "New Workshop: X"},
+		{"", "New event: X"},
+	} {
+		if got := announceSubject(workshops.Workshop{Title: "X", EventTypeName: tc.name}); got != tc.want {
+			t.Errorf("type %q: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
 }

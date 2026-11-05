@@ -68,7 +68,7 @@ func (h *AdminOutreachHandler) postingGate(w http.ResponseWriter, r *http.Reques
 	case !p.Prepared():
 		writeError(w, http.StatusConflict, "prepare the post before sending it")
 	case wk.Status != "published":
-		writeError(w, http.StatusConflict, "the workshop is not published")
+		writeError(w, http.StatusConflict, "the event is not published")
 	default:
 		if err := outreach.ValidateForSend(ch, p.Body); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -91,7 +91,7 @@ func writePostingStoreError(w http.ResponseWriter, err error) {
 	case errors.Is(err, outreach.ErrNotPrepared):
 		writeError(w, http.StatusConflict, "prepare the post before sending it")
 	case errors.Is(err, outreach.ErrWorkshopNotPublished):
-		writeError(w, http.StatusConflict, "the workshop is not published")
+		writeError(w, http.StatusConflict, "the event is not published")
 	case errors.Is(err, outreach.ErrWrongStatus):
 		writeError(w, http.StatusConflict, "post is not in a status that allows this")
 	default:

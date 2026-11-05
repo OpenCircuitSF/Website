@@ -170,7 +170,7 @@
     <p class="text-muted">Loading outreach…</p>
   {:else if notFound}
     <!-- The page around this panel says so when it passes onNotFound; there is nothing to retry. -->
-    {#if !onNotFound}<p class="text-muted">This workshop no longer exists.</p>{/if}
+    {#if !onNotFound}<p class="text-muted">This event no longer exists.</p>{/if}
   {:else if loadError}
     <p class="text-error">{loadError}</p>
     <Button onclick={load}>Retry</Button>
@@ -181,7 +181,7 @@
         {#if view.unavailable_reason === 'shortlinks_not_configured'}
           <a href={adminSettingsHash('outreach')}>Open Settings</a>
         {:else if view.unavailable_reason === 'workshop_not_published'}
-          <a href={adminWorkshopHash(workshopId)}>Open the workshop editor</a>
+          <a href={adminWorkshopHash(workshopId)}>Open the event editor</a>
         {/if}
       </p>
     {/if}

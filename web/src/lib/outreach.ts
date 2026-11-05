@@ -173,7 +173,7 @@ export function unavailableMessage(reason: string): string {
     case 'shortlinks_not_configured':
       return 'Outreach needs the ShortLinks connection, which is not configured. Set it up under Settings → Outreach connections.';
     case 'workshop_not_published':
-      return 'Publish this workshop to start outreach.';
+      return 'Publish this event to start outreach.';
     default:
       return 'Outreach is not available right now.';
   }

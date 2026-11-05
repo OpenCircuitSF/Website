@@ -210,14 +210,14 @@ func (h *PublicWorkshopsHandler) GetBySlug(w http.ResponseWriter, r *http.Reques
 	switch {
 	case err == nil:
 	case errors.Is(err, workshops.ErrNotFound):
-		writeError(w, http.StatusNotFound, "workshop not found")
+		writeError(w, http.StatusNotFound, "event not found")
 		return
 	default:
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	if workshopPageStatus(wk) != http.StatusOK {
-		writeError(w, http.StatusNotFound, "workshop not found")
+		writeError(w, http.StatusNotFound, "event not found")
 		return
 	}
 	writeJSON(w, http.StatusOK, h.toPublicView(r.Context(), wk))

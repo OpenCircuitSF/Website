@@ -503,7 +503,7 @@ func (p *Publisher) hold(row outbox.Row, job SendJob) {
 	ctx, cancel := context.WithTimeout(context.Background(), writeBudget)
 	defer cancel()
 	p.log.Warn("outreach: workshop not published, holding post", "post_id", job.ID, "workshop_status", job.WorkshopStatus)
-	if _, err := p.outbox.MarkSkipped(ctx, row.ID, "workshop not published"); err != nil {
+	if _, err := p.outbox.MarkSkipped(ctx, row.ID, "event not published"); err != nil {
 		p.log.Error("outreach: could not skip queue row", "id", row.ID, "err", err)
 	}
 	if _, err := p.store.HoldQueued(ctx, job.ID, HeldNotPublishedMessage(job.WorkshopStatus)); err != nil {

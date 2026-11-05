@@ -40,7 +40,7 @@
   const statusMessage = $derived(resultsStatusMessage(status));
   const folded = $derived(results ? foldedChannelsNote(results) : null);
   const flyerAllMessage = $derived(
-    results && results.flyer_all_status && results.flyer_all_status !== 'ok' ? 'Scans across all workshops are unavailable right now.' : null,
+    results && results.flyer_all_status && results.flyer_all_status !== 'ok' ? 'Scans across all events are unavailable right now.' : null,
   );
   const channelLabel = $derived(new Map((results?.channels ?? []).map((c) => [c.name, c.label])));
   const clickNote = $derived(results ? clickDefinitionNote(results) : null);
@@ -99,13 +99,13 @@
     <p class="text-error" role="alert">{loadError}</p>
   {:else if workshopId === null}
     {#if summary && summary.rows.length === 0}
-      <p class="text-muted">No workshop has outreach yet.</p>
+      <p class="text-muted">No event has outreach yet.</p>
     {:else if summary}
       <div class="table-scroll">
         <table>
           <thead>
             <tr>
-              <th>Workshop</th>
+              <th>Event</th>
               <th>Date</th>
               <th>Posts</th>
               <th>Clicks</th>
@@ -151,7 +151,7 @@
     {/if}
     {#if results.totals && results.totals.unmatched_clicks > 0}
       <p class="text-muted">
-        {formatClicks(results.totals.unmatched_clicks)} on other links for this workshop.
+        {formatClicks(results.totals.unmatched_clicks)} on other links for this event.
       </p>
     {/if}
     {#if results.channels.length > 0}
@@ -227,8 +227,8 @@
             <tr>
               <th>Location</th>
               <th>Put up</th>
-              <th>{showAll ? 'Scans this workshop' : 'Scans'}</th>
-              {#if showAll}<th>Scans all workshops</th>{/if}
+              <th>{showAll ? 'Scans this event' : 'Scans'}</th>
+              {#if showAll}<th>Scans all events</th>{/if}
             </tr>
           </thead>
           <tbody>
@@ -245,7 +245,7 @@
       </div>
     {/if}
     <OutreachMentions mentions={results.mentions} channelLabel={(n) => channelLabel.get(n) ?? n} />
-    <p><a href={adminOutreachResultsHash()}>All workshops</a> · <a href={adminOutreachHash('workshops')}>Back to Outreach</a></p>
+    <p><a href={adminOutreachResultsHash()}>All events</a> · <a href={adminOutreachHash('workshops')}>Back to Outreach</a></p>
   {/if}
 </Panel>
 </div>

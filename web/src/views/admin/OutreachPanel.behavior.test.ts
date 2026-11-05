@@ -118,7 +118,7 @@ describe('OutreachPanel', () => {
   it('links to the workshop editor when the workshop is not published, and does not start (#0582)', async () => {
     getWorkshopOutreach.mockResolvedValue(view({ available: false, unavailable_reason: 'workshop_not_published', outreach: null }));
     render(OutreachPanel, { workshopId: 5, autoStart: true, body });
-    const link = await screen.findByRole('link', { name: 'Open the workshop editor' });
+    const link = await screen.findByRole('link', { name: 'Open the event editor' });
     expect(link.getAttribute('href')).toBe('#/workshops/5');
     expect(startOutreach).not.toHaveBeenCalled();
   });

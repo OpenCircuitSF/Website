@@ -345,7 +345,7 @@
   <section class="subscribe-cta" aria-labelledby="subscribe-h">
     <h2 id="subscribe-h">Stay in the loop</h2>
     <Panel>
-      <p>Get notified about new workshops. Pick the topics you care about — nothing else.</p>
+      <p>Get notified about new events. Pick the topics you care about — nothing else.</p>
       <SubscribeForm />
     </Panel>
   </section>

@@ -40,7 +40,7 @@ describe('Admin nav rows', () => {
   it('row one has the four links in order with landing hrefs', () => {
     signIn('#/');
     const links = Array.from(rowOne().querySelectorAll('a'));
-    expect(links.map((a) => a.textContent)).toEqual(['Overview', 'Workshops', 'Newsletter', 'System']);
+    expect(links.map((a) => a.textContent)).toEqual(['Overview', 'Events', 'Newsletter', 'System']);
     expect(links.map((a) => a.getAttribute('href'))).toEqual(['#/', '#/workshops', '#/campaigns', '#/settings']);
   });
 
@@ -52,7 +52,7 @@ describe('Admin nav rows', () => {
     ]);
     const current = Array.from(row2.querySelectorAll('a[aria-current="page"]'));
     expect(current.map((a) => a.textContent)).toEqual(['Subscribers']);
-    expect(screen.queryByRole('navigation', { name: 'Workshops screens' })).toBeNull();
+    expect(screen.queryByRole('navigation', { name: 'Events screens' })).toBeNull();
   });
 
   it('System row two lists Settings, Home screen, Users, Audit log', () => {
@@ -70,8 +70,8 @@ describe('Admin nav rows', () => {
 
   it('#/outreach?view=results lights Workshops and Outreach', () => {
     signIn('#/outreach?view=results');
-    expect(rowOne().querySelector('a[aria-current]')?.textContent).toBe('Workshops');
-    const row2 = screen.getByRole('navigation', { name: 'Workshops screens' });
+    expect(rowOne().querySelector('a[aria-current]')?.textContent).toBe('Events');
+    const row2 = screen.getByRole('navigation', { name: 'Events screens' });
     expect(row2.querySelector('a[aria-current="page"]')?.textContent).toBe('Outreach');
   });
 

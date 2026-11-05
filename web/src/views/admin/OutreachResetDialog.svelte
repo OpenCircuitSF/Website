@@ -38,7 +38,7 @@
     onclick={(e) => e.stopPropagation()}
     onkeydown={handleKeydown}
   >
-    <h2 class="modal-title">Reset this workshop's outreach?</h2>
+    <h2 class="modal-title">Reset this event's outreach?</h2>
     <h3>Removed</h3>
     <ul>
       <li>Every drafted, scheduled or failed post, with its text.</li>

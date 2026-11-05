@@ -183,7 +183,7 @@ describe('utmChips, messages, url validation', () => {
   it('explains unavailability', () => {
     expect(unavailableMessage('shortlinks_not_configured')).toContain('Settings → Outreach connections');
     expect(unavailableMessage('shortlinks_not_configured')).not.toContain('SHORTLINKS_');
-    expect(unavailableMessage('workshop_not_published')).toBe('Publish this workshop to start outreach.');
+    expect(unavailableMessage('workshop_not_published')).toBe('Publish this event to start outreach.');
     expect(unavailableMessage('???')).toBe('Outreach is not available right now.');
   });
   it('validates a post URL', () => {

@@ -173,12 +173,12 @@ export function canCancel(status: string): boolean {
 
 /** Confirmation copy for publishing `title`. */
 export function publishConfirmMessage(title: string): string {
-  return `Publish "${title}"? It will appear on the public workshops page immediately.`;
+  return `Publish "${title}"? It will appear on the public events page immediately.`;
 }
 
 /** Confirmation copy for unpublishing `title`. */
 export function unpublishConfirmMessage(title: string): string {
-  return `Unpublish "${title}"? It will be removed from the public workshops page and reverts to draft.`;
+  return `Unpublish "${title}"? It will be removed from the public events page and reverts to draft.`;
 }
 
 /**
@@ -282,7 +282,7 @@ export function deleteConfirmMessage(title: string): string {
  */
 export function announceTargetingDescription(interestIds: number[]): string {
   return interestIds.length === 0
-    ? 'This workshop has no interests set, so the draft will target everyone on the list.'
+    ? 'This event has no interests set, so the draft will target everyone on the list.'
     : // #0170 (carried in from #0162/#0167's review): this used to read "It
       // will be targeted..." -- but by the time this sentence renders it
       // opens its own paragraph (#0162 split the panel into three separate
@@ -290,7 +290,7 @@ export function announceTargetingDescription(interestIds: number[]): string {
       // WorkshopEditor.svelte), so "It" pointed at an antecedent ("the
       // draft") two sentences back in a different paragraph. Naming the
       // subject again reads better than a pronoun with no local antecedent.
-      "The draft will be targeted at this workshop's interests.";
+      "The draft will be targeted at this event's interests.";
 }
 
 /**

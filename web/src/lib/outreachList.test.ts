@@ -61,7 +61,7 @@ describe('chip and button labels', () => {
     expect(outreachChip(sum(1, {})).label).toBe('Set up · no posts');
   });
   it('labels the editor link for both states', () => {
-    expect(editorOutreachLinkLabel(false, 0)).toBe('Promote this workshop');
+    expect(editorOutreachLinkLabel(false, 0)).toBe('Promote this event');
     expect(editorOutreachLinkLabel(true, 2)).toBe('Open outreach · 2 posted');
   });
 });
@@ -79,7 +79,7 @@ describe('needs attention', () => {
     );
     expect(items.map((i) => i.message)).toEqual([
       'Not connected: Bluesky, Mastodon. Connect in Settings → Outreach.',
-      '1 upcoming workshop not yet announced.',
+      '1 upcoming event not yet announced.',
     ]);
   });
   it('does not report a network switched off in Settings as disconnected (#0588)', () => {

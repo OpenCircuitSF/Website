@@ -33,7 +33,7 @@
             on {channelLabel(m.channel)}, {formatDateTime(m.created_at)}{m.wave ? `, ${m.wave} post` : ''}
           </span>
           {#if showWorkshop && m.workshop_id !== null}
-            · <a href={adminOutreachResultsHash(m.workshop_id)}>{m.workshop_title ?? 'Workshop results'}</a>
+            · <a href={adminOutreachResultsHash(m.workshop_id)}>{m.workshop_title ?? 'Event results'}</a>
           {/if}
           {#if href}
             · <a {href} target="_blank" rel="noopener noreferrer">Open</a>

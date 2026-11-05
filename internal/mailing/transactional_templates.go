@@ -260,7 +260,7 @@ func BuildWelcomeEmail(to, baseURL, listDomain, manageToken string, interestName
 	unsubscribeURL := baseURL + "/unsubscribe?token=" + manageToken
 	workshopsURL := baseURL + "/events"
 
-	interestLine := "You didn't pick any specific topics, so you'll get general announcements about upcoming workshops."
+	interestLine := "You didn't pick any specific topics, so you'll get general announcements about upcoming events."
 	if len(interestNames) > 0 {
 		interestLine = "You picked: " + joinWithAnd(interestNames) + "."
 	}
@@ -279,9 +279,9 @@ func BuildWelcomeEmail(to, baseURL, listDomain, manageToken string, interestName
 			// anywhere in this project's source (see web/src/views/About.svelte's
 			// identical flag on the same number) — replace this sentence if
 			// the group ever settles on a firmer answer.
-			"Expect an email roughly once a month when a new workshop goes up — we don't send more than that.",
+			"Expect an email roughly once a month when a new event goes up — we don't send more than that.",
 		},
-		ButtonText: "See upcoming workshops",
+		ButtonText: "See upcoming events",
 		ButtonURL:  workshopsURL,
 		NoteParagraphs: []string{
 			"Change what you get, or leave the list entirely, any time from the preference center below.",
@@ -381,7 +381,7 @@ func BuildImportInviteEmail(to, baseURL, listDomain, confirmToken, manageToken, 
 		Heading:   "Confirm to join the list",
 		IntroParagraphs: []string{
 			importInviteProvenanceSentence(importSource, sourceDetail, collectedAt),
-			"We're starting an email list for workshop announcements — click the {{cta}} below if you'd like to be on it.",
+			"We're starting an email list for event announcements — click the {{cta}} below if you'd like to be on it.",
 		},
 		ButtonText: "Confirm subscription",
 		ButtonURL:  confirmURL,

@@ -804,8 +804,8 @@ const KNOWN_LOADING_PLACEHOLDERS: AllowlistEntry[] = [
   { file: 'web/src/views/Admin.svelte', match: 'Loading…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
   { file: 'web/src/views/Admin.svelte', match: 'Loading suppressions…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
   { file: 'web/src/views/Account.svelte', match: 'Loading passkeys…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
-  { file: 'web/src/views/admin/Workshops.svelte', match: 'Loading workshops…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
-  { file: 'web/src/views/admin/WorkshopEditor.svelte', match: 'Loading workshop…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  { file: 'web/src/views/admin/Workshops.svelte', match: 'Loading events…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  { file: 'web/src/views/admin/WorkshopEditor.svelte', match: 'Loading event…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
   {
     file: 'web/src/views/admin/WorkshopEditor.svelte',
     match: 'Uploading…',

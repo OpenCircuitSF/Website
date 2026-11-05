@@ -307,9 +307,9 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 		},
 		"/subscribe": {
 			Title:         "Subscribe — Open Circuit SF",
-			Description:   "Get notified about new workshops and events at Open Circuit SF, San Francisco's hands-on electronics workshop space.",
+			Description:   "Get notified about new events at Open Circuit SF, San Francisco's hands-on electronics workshop space.",
 			OGTitle:       "Subscribe to Open Circuit SF",
-			OGDescription: "Get notified about new workshops and events.",
+			OGDescription: "Get notified about new events.",
 			OGImage:       image,
 			OGURL:         baseURL + "/subscribe",
 			Canonical:     baseURL + "/subscribe",
@@ -322,7 +322,7 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 		// the site will have," per that section's own reasoning.
 		"/archive": {
 			Title:         "Archive — Open Circuit SF",
-			Description:   "Past emails from Open Circuit SF: workshop announcements and updates from San Francisco's hands-on electronics workshop space.",
+			Description:   "Past emails from Open Circuit SF: event announcements and updates from San Francisco's hands-on electronics workshop space.",
 			OGTitle:       "Archive — Open Circuit SF",
 			OGDescription: "Past emails from Open Circuit SF.",
 			OGImage:       image,

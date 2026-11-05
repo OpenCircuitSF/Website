@@ -10,7 +10,7 @@
 <main id="main-content" class="app-shell subscribe-shell">
   <h1 tabindex="-1">Subscribe</h1>
   <p class="text-muted">
-    Get notified about new workshops. Pick the topics you care about — nothing else.
+    Get notified about new events. Pick the topics you care about — nothing else.
   </p>
   <TerminalPanel title="subscribe">
     <SubscribeForm />

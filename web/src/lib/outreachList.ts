@@ -68,9 +68,9 @@ export function pastWithOutreach(workshops: AdminWorkshop[], summaries: Outreach
     .sort((a, b) => Date.parse(b.starts_at as string) - Date.parse(a.starts_at as string) || a.id - b.id);
 }
 
-/** The workshop editor panel's link text: "Promote this workshop" or "Open outreach · N posted". */
+/** The workshop editor panel's link text: "Promote this event" or "Open outreach · N posted". */
 export function editorOutreachLinkLabel(started: boolean, posted: number): string {
-  return started ? `Open outreach · ${posted} posted` : 'Promote this workshop';
+  return started ? `Open outreach · ${posted} posted` : 'Promote this event';
 }
 
 /** Upcoming published workshops with nothing posted or scheduled yet. */
@@ -120,7 +120,7 @@ export function outreachAttentionItems(
   if (n > 0) {
     items.push({
       key: 'outreach-unannounced',
-      message: `${n} upcoming workshop${n === 1 ? '' : 's'} not yet announced.`,
+      message: `${n} upcoming event${n === 1 ? '' : 's'} not yet announced.`,
       href: '#/outreach',
     });
   }

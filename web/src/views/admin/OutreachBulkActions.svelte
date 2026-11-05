@@ -78,7 +78,7 @@
     <p class="text-muted">
       {gate.reason}
       {#if view.workshop.status !== 'published'}
-        <a href={adminWorkshopHash(workshopId)}>Open the workshop editor</a>
+        <a href={adminWorkshopHash(workshopId)}>Open the event editor</a>
       {:else}
         <a href={adminSettingsHash('outreach')}>Open Settings</a>
       {/if}

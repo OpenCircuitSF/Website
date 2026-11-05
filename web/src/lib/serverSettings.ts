@@ -50,7 +50,7 @@ export const FIELD_LABELS: Record<string, { label: string; placeholder: string; 
   bluesky_card_url: {
     label: 'Bluesky card link',
     placeholder: '',
-    help: 'Where the link card on a Bluesky post points. Short link: tracked by ShortLinks, but the card footer shows go.opencircuitsf.com. Workshop page: the card footer shows opencircuitsf.com, but clicks are not tracked.',
+    help: 'Where the link card on a Bluesky post points. Short link: tracked by ShortLinks, but the card footer shows go.opencircuitsf.com. Event page: the card footer shows opencircuitsf.com, but clicks are not tracked.',
   },
   outreach_hashtags: {
     label: 'Outreach hashtags',

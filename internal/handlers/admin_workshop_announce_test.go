@@ -305,3 +305,65 @@ func TestAdminWorkshopAnnounce_NonAdminForbidden(t *testing.T) {
 		t.Errorf("POST .../announce as non-admin status = %d, want 403", resp.StatusCode)
 	}
 }
+
+// announceListing creates a listing, announces it through the real route and
+// returns the draft.
+func announceListing(t *testing.T, input workshops.CreateInput, token, email string) decodedAnnouncedCampaign {
+	t.Helper()
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopAnnounceMux(pool))
+	defer srv.Close()
+	admin := seedAdmin(t, pool, email)
+	seedSession(t, pool, admin, token)
+	wk, err := workshops.NewStore(pool).Create(context.Background(), input)
+	if err != nil {
+		t.Fatalf("seed listing: %v", err)
+	}
+	cleanupAdminWorkshop(t, pool, wk.ID)
+	resp := doJSON(t, srv.Client(), http.MethodPost,
+		fmt.Sprintf("%s/admin/workshops/%d/announce", srv.URL, wk.ID), token, "")
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("POST .../announce status = %d, want 201 (body=%s)", resp.StatusCode, body)
+	}
+	created := decodeAnnouncedCampaign(t, body)
+	cleanupAnnouncedCampaign(t, pool, created.ID)
+	return created
+}
+
+// TestAdminWorkshopAnnounce_HackNightNeverSaysWorkshop is #0615's end-to-end
+// check. The title deliberately avoids the word, so the check means something.
+func TestAdminWorkshopAnnounce_HackNightNeverSaysWorkshop(t *testing.T) {
+	pool := interestsTestPool(t)
+	typeID := seededEventType(t, pool, "hack-night")
+	title := fmt.Sprintf("Solder Social %d", testdb.Unique())
+	summary := "Bring a project and build it with us."
+	created := announceListing(t, workshops.CreateInput{Title: title, Summary: &summary, EventTypeID: &typeID},
+		"announce-hack-night-token", "admin-announce-hack-night@example.com")
+
+	if want := "New Hack Night: " + title; created.Subject != want {
+		t.Errorf("Subject = %q, want %q", created.Subject, want)
+	}
+	if strings.Contains(strings.ToLower(created.Subject), "workshop") {
+		t.Errorf("Subject says workshop: %q", created.Subject)
+	}
+	if strings.Contains(strings.ToLower(created.BodyMD), "workshop") {
+		t.Errorf("body says workshop: %q", created.BodyMD)
+	}
+}
+
+// TestAdminWorkshopAnnounce_WorkshopSubjectReadsNaturally: the default type
+// names itself in the subject, and the link stays generic.
+func TestAdminWorkshopAnnounce_WorkshopSubjectReadsNaturally(t *testing.T) {
+	title := fmt.Sprintf("Intro to Soldering %d", testdb.Unique())
+	created := announceListing(t, workshops.CreateInput{Title: title},
+		"announce-workshop-token", "admin-announce-workshop@example.com")
+
+	if want := "New Workshop: " + title; created.Subject != want {
+		t.Errorf("Subject = %q, want %q", created.Subject, want)
+	}
+	if !strings.Contains(created.BodyMD, "[View this event](") {
+		t.Errorf("body lacks the generic link: %q", created.BodyMD)
+	}
+}

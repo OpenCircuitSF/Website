@@ -627,7 +627,7 @@ func (h *AdminOutreachHandler) loadWorkshop(w http.ResponseWriter, r *http.Reque
 	case err == nil:
 		return wk, true
 	case errors.Is(err, workshops.ErrNotFound):
-		writeError(w, http.StatusNotFound, "workshop not found")
+		writeError(w, http.StatusNotFound, "event not found")
 	default:
 		writeError(w, http.StatusInternalServerError, "internal server error")
 	}
@@ -686,7 +686,7 @@ func (h *AdminOutreachHandler) Start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if wk.Status != "published" {
-		writeError(w, http.StatusConflict, "outreach can only start for a published workshop")
+		writeError(w, http.StatusConflict, "outreach can only start for a published event")
 		return
 	}
 	if existing, err := h.store.GetByWorkshop(r.Context(), id); err == nil {
@@ -994,7 +994,7 @@ func (h *AdminOutreachHandler) Prepare(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if wk.Status != "published" {
-		writeError(w, http.StatusConflict, "outreach is only available for a published workshop")
+		writeError(w, http.StatusConflict, "outreach is only available for a published event")
 		return
 	}
 	o, err := h.store.GetByID(r.Context(), p.OutreachID)
@@ -1339,7 +1339,7 @@ func (h *AdminOutreachHandler) Reset(w http.ResponseWriter, r *http.Request) {
 	}
 	o, err := h.store.GetByWorkshop(r.Context(), id)
 	if errors.Is(err, outreach.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "outreach has not started for this workshop")
+		writeError(w, http.StatusNotFound, "outreach has not started for this event")
 		return
 	} else if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")

@@ -84,8 +84,8 @@
 
 {#if notFound}
 <Panel>
-  <h2 class="not-found">Workshop not found</h2>
-  <p>This workshop no longer exists.</p>
+  <h2 class="not-found">Event not found</h2>
+  <p>This event no longer exists.</p>
   <p><a href={adminOutreachHash('workshops')}>All outreach</a></p>
 </Panel>
 {:else}
@@ -96,7 +96,7 @@
     <h2 class="heading">Loading…</h2>
   {/if}
   <span class="row links-row">
-    <a href={adminWorkshopHash(workshopId)}>Edit workshop</a>
+    <a href={adminWorkshopHash(workshopId)}>Edit event</a>
     <a href={adminOutreachHash('workshops')}>All outreach</a>
   </span>
 </div>

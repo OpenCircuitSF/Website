@@ -323,10 +323,10 @@
   });
   let transitionHeading = $derived(
     transitionOpen === 'publish'
-      ? 'Publish this workshop?'
+      ? 'Publish this event?'
       : transitionOpen === 'unpublish'
-        ? 'Unpublish this workshop?'
-        : 'Cancel this workshop?',
+        ? 'Unpublish this event?'
+        : 'Cancel this event?',
   );
 
   let deleteMessage = $derived(workshop ? deleteConfirmMessage(workshop.title) : '');
@@ -352,7 +352,7 @@
       taxonomyInterests = interestsResp.interests;
       await refreshPreview();
     } catch (err) {
-      loadError = err instanceof ApiError ? err.message : 'Could not load this workshop.';
+      loadError = err instanceof ApiError ? err.message : 'Could not load this event.';
     } finally {
       loading = false;
     }
@@ -384,7 +384,7 @@
       saveNotice = 'Saved.';
       await refreshPreview();
     } catch (err) {
-      saveError = err instanceof ApiError ? err.message : 'Could not save this workshop.';
+      saveError = err instanceof ApiError ? err.message : 'Could not save this event.';
     } finally {
       saving = false;
     }
@@ -412,7 +412,7 @@
       workshop = await updateWorkshop(workshopId, { status });
       transitionOpen = null;
     } catch (err) {
-      transitionError = err instanceof ApiError ? err.message : 'Could not update this workshop.';
+      transitionError = err instanceof ApiError ? err.message : 'Could not update this event.';
     } finally {
       transitioning = false;
     }
@@ -444,7 +444,7 @@
         deleteConflict = true;
         deleteError = err.message;
       } else {
-        deleteError = err instanceof ApiError ? err.message : 'Could not delete this workshop.';
+        deleteError = err instanceof ApiError ? err.message : 'Could not delete this event.';
       }
     } finally {
       deleting = false;
@@ -494,7 +494,7 @@
       cloneOpen = false;
       onCloned(created.id);
     } catch (err) {
-      cloneError = err instanceof ApiError ? err.message : 'Could not clone this workshop.';
+      cloneError = err instanceof ApiError ? err.message : 'Could not clone this event.';
     } finally {
       cloning = false;
     }
@@ -520,10 +520,10 @@
   }
 </script>
 
-<Button onclick={onBack}>&larr; Back to workshops</Button>
+<Button onclick={onBack}>&larr; Back to events</Button>
 
 {#if loading}
-  <p class="text-muted" role="status">Loading workshop…</p>
+  <p class="text-muted" role="status">Loading event…</p>
 {:else if loadError}
   <p class="text-error" role="alert">{loadError}</p>
   <Button variant="primary" onclick={load}>Retry</Button>
@@ -769,7 +769,7 @@
         <Button onclick={() => openTransition('unpublish')}>Unpublish</Button>
       {/if}
       {#if cancelOffered}
-        <Button variant="danger" onclick={() => openTransition('cancel')}>Cancel workshop</Button>
+        <Button variant="danger" onclick={() => openTransition('cancel')}>Cancel event</Button>
       {/if}
       <Button onclick={openClone}>Clone with new date</Button>
       <Button variant="danger" onclick={openDelete}>Delete</Button>
@@ -814,7 +814,7 @@
   -->
   <Panel title="Announce">
     <p class="text-muted">
-      Create a draft campaign pre-filled from this workshop's title, summary, date, and location.
+      Create a draft campaign pre-filled from this event's title, summary, date, and location.
       Nothing is sent — review and send the draft from the Campaigns tab.
     </p>
     <p class={announceTargetingClass(workshop.interest_ids)}>
@@ -887,7 +887,7 @@
         class="modal"
         role="dialog"
         aria-modal="true"
-        aria-label="Clone workshop"
+        aria-label="Clone event"
         tabindex="-1"
         bind:this={cloneModalEl}
         onclick={(e) => e.stopPropagation()}
@@ -897,7 +897,7 @@
       >
         <h2 class="modal-title">Clone with a new date</h2>
         <p class="text-muted clone-hint">
-          Creates a new draft with this workshop's saved details, interests, and cover image.
+          Creates a new draft with this event's saved details, interests, and cover image.
           Unsaved edits above are not copied.
         </p>
         <form onsubmit={submitClone}>
@@ -948,7 +948,7 @@
         class="modal"
         role="dialog"
         aria-modal="true"
-        aria-label="Delete workshop"
+        aria-label="Delete event"
         tabindex="-1"
         bind:this={deleteModalEl}
         onclick={(e) => e.stopPropagation()}
@@ -957,19 +957,19 @@
         }}
       >
         {#if deleteConflict}
-          <h2 class="modal-title">Can't delete this workshop</h2>
+          <h2 class="modal-title">Can't delete this event</h2>
           <p class="text-error" role="alert">{deleteError}</p>
           <p>
-            An email campaign already announces this workshop, and deleting it would break that
-            campaign's record. Cancel the workshop instead — it stays visible on the public site,
+            An email campaign already announces this event, and deleting it would break that
+            campaign's record. Cancel the event instead — it stays visible on the public site,
             marked canceled.
           </p>
           <div class="row" style="margin-top: var(--space-3);">
-            <Button variant="primary" onclick={switchToCancel}>Cancel workshop instead</Button>
+            <Button variant="primary" onclick={switchToCancel}>Cancel event instead</Button>
             <Button onclick={closeDelete}>Close</Button>
           </div>
         {:else}
-          <h2 class="modal-title">Delete this workshop?</h2>
+          <h2 class="modal-title">Delete this event?</h2>
           <p>{deleteMessage}</p>
           {#if deleteError}
             <p class="text-error" role="alert">{deleteError}</p>
