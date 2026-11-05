@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { boardCell, boardRows, cardButtons, combinedPostResult, copyLabel, flyerLinkFor, groupByWave, notScheduledNote, showBioLink, pollDelay, postableAutomatic, postDialogCopy, statusLine, weekdayTime, summaryLine, visibleNotice } from './outreachCards';
+import { boardCell, boardRows, cardButtons, combinedPostResult, copyLabel, defaultOpenSection, flyerLinkFor, groupByWave, notScheduledNote, showBioLink, pollDelay, postableAutomatic, postDialogCopy, statusLine, weekdayTime, summaryLine, visibleNotice } from './outreachCards';
 import type { OutreachChannel, OutreachPost, OutreachResults } from './types';
 
 const auto: OutreachChannel = { name: 'bluesky', label: 'Bluesky', utm_source: 'b', utm_medium: 'social', char_limit: 300, automatic: true, configured: true, account: '' };
@@ -302,5 +302,37 @@ describe('notScheduledNote (#0624)', () => {
     for (const status of ['failed', 'queued'] as const) {
       expect(notScheduledNote({ channels, posts: [sched, post({ id: 2, channel: 'mastodon', status })] }, 'announce')).toBe('');
     }
+  });
+});
+
+describe('defaultOpenSection (#0625)', () => {
+  const mast: OutreachChannel = { ...auto, name: 'mastodon', label: 'Mastodon' };
+  const channels = [auto, mast];
+  const three = [...waves, { name: 'last-call', label: 'Final', suggested_at: null }];
+  const posted = (channel: string, wave: string) => post({ channel, wave, status: 'posted' });
+  const both = (wave: string) => [posted('bluesky', wave), posted('mastodon', wave)];
+
+  it('opens the first section when nothing is posted (#0625)', () => {
+    expect(defaultOpenSection({ channels, waves: three, posts: [] })).toBe('announce');
+  });
+  it('skips a section every channel has posted (#0625)', () => {
+    expect(defaultOpenSection({ channels, waves: three, posts: both('announce') })).toBe('reminder');
+  });
+  it('a hand-posted channel not marked posted keeps its section open (#0625)', () => {
+    const posts = [...both('announce'), post({ channel: 'reddit', wave: 'announce', status: 'manual' })];
+    expect(defaultOpenSection({ channels: [...channels, manual], waves: three, posts })).toBe('announce');
+  });
+  it('a channel with no post keeps its section open (#0625)', () => {
+    expect(defaultOpenSection({ channels, waves: three, posts: [posted('bluesky', 'announce')] })).toBe('announce');
+  });
+  it('opens the last section when every section is posted (#0625)', () => {
+    const posts = three.flatMap((w) => both(w.name));
+    expect(defaultOpenSection({ channels, waves: three, posts })).toBe('last-call');
+  });
+  it('opens the first section when there are no channels (#0625)', () => {
+    expect(defaultOpenSection({ channels: [], waves: three, posts: [] })).toBe('announce');
+  });
+  it('is empty when there are no sections (#0625)', () => {
+    expect(defaultOpenSection({ channels, waves: [], posts: [] })).toBe('');
   });
 });

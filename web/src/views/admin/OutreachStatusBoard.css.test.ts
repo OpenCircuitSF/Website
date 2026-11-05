@@ -32,4 +32,12 @@ describe('the status board styles (#0624)', () => {
     expect(statusRules.length).toBeGreaterThan(0);
     for (const m of statusRules) expect(m[2]).not.toMatch(/(^|[\s;])color:/);
   });
+  it('the whole row heading is the target (#0625)', () => {
+    expect(style).toMatch(/\.board-select::after\s*\{[^}]*inset:\s*0/);
+    expect(style).toMatch(/\.board-row-head\s*\{[^}]*position:\s*relative/);
+  });
+  it('hides the caption visually, not from screen readers, when stacked (#0625)', () => {
+    expect(narrow).toMatch(/\.board-caption\s*\{[^}]*clip-path/);
+    expect(style).not.toMatch(/\.board-caption\s*\{[^}]*display:\s*none/);
+  });
 });

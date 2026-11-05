@@ -624,4 +624,4 @@ tbody tr:last-child td { border-bottom: none; }
   padding: var(--space-2) 0;
   border-bottom: var(--border-w) solid var(--border);
 }
-.wave-section :is(a, button, input, textarea, summary) { scroll-margin-top: 4rem; }
+.wave-section :is(a, button, input, textarea, summary) { scroll-margin-top: 5.5rem; }

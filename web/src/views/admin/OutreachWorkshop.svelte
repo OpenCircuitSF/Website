@@ -1,7 +1,9 @@
 <!--
-  One workshop's outreach page (#0568, #0582): header, then the status board, the
-  Announcement (one message, how it will look, one post button), Reminder and
-  Final as collapsed rows, Schedule all, then "Post by hand", Flyers and
+  One workshop's outreach page (#0568, #0582, #0625): header, then the status
+  board, then one row per section (one message, how it will look, one post
+  button), of which exactly one is open. The default is picked once per workshop
+  and selecting from the board or a row goes through selectSection. Then
+  Schedule all, "Post by hand", Flyers and
   "Links and clicks" as collapsed rows with a status and one action each. The
   OutreachPanel stays self-loading (and starts outreach implicitly) and hands
   its view and results to the body snippet. The tracked-links table lives on
@@ -14,15 +16,14 @@
   import Panel from '../../lib/Panel.svelte';
   import OutreachPanel from './OutreachPanel.svelte';
   import OutreachStatusBoard from './OutreachStatusBoard.svelte';
-  import OutreachAnnouncement from './OutreachAnnouncement.svelte';
   import OutreachWaveRow from './OutreachWaveRow.svelte';
   import OutreachBulkActions from './OutreachBulkActions.svelte';
   import OutreachPostCards from './OutreachPostCards.svelte';
   import OutreachResetDialog from './OutreachResetDialog.svelte';
   import Button from '../../lib/Button.svelte';
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { resetOutreach, listOutreachFlyers, ApiError } from '../../lib/api';
-  import { flyerLinkFor, sendsItself } from '../../lib/outreachCards';
+  import { defaultOpenSection, flyerLinkFor, sectionHeadId, sectionRowId, sendsItself } from '../../lib/outreachCards';
   import { manualRowStatus } from '../../lib/outreachMessage';
   import { linkReportMessage } from '../../lib/outreachLinks';
   import { resultsSummaryLine } from '../../lib/outreachResults';
@@ -47,6 +48,21 @@
     }
   });
 
+  // Exactly one section is open (#0625). Picked once per workshop, so a reload
+  // never moves the screen while someone is working.
+  let openWave = $state<string | null>(null);
+  let openFor: number | null = null;
+  let unsavedWaves = $state<Record<string, boolean>>({});
+
+  // Safari has no scroll anchoring, so collapsing a long section above would
+  // otherwise leave the row off screen.
+  async function selectSection(name: string): Promise<void> {
+    openWave = name;
+    await tick();
+    document.getElementById(sectionRowId(name))?.scrollIntoView({ block: 'start' });
+    document.getElementById(sectionHeadId(name))?.focus({ preventScroll: true });
+  }
+
   let resetOpen = $state(false);
   let resetBusy = $state(false);
   let resetError = $state<string | null>(null);
@@ -57,6 +73,7 @@
     resetError = null;
     try {
       await resetOutreach(workshopId);
+      openFor = null;
       resetOpen = false;
       resetNote = 'Outreach was reset. Write the announcement to start again.';
       reloadKey++;
@@ -79,6 +96,10 @@
 
   function onLoaded(v: WorkshopOutreach): void {
     view = v;
+    if (openFor !== v.workshop.id || !v.waves.some((w) => w.name === openWave)) {
+      openFor = v.workshop.id;
+      openWave = defaultOpenSection(v);
+    }
     if (v.link_report) linkWarning = linkReportMessage(v.link_report);
   }
 </script>
@@ -107,14 +128,13 @@
   </p>
 {/if}
 
-<Panel title="Outreach" pinnable>
+<Panel pinnable>
   <OutreachPanel {workshopId} {reloadKey} {onLoaded} onNotFound={() => (notFound = true)} autoStart>
     {#snippet body({ view: v, results, onChange: panelChange })}
       {@const onChange = (p: OutreachPost) => { changed(); panelChange(p); }}
-      <OutreachStatusBoard view={v} />
-      <OutreachAnnouncement view={v} {results} wave="announce" {workshopId} {onChange} reload={reloadAfterChange} />
-      {#each v.waves.filter((w) => w.name !== 'announce') as w (w.name)}
-        <OutreachWaveRow view={v} {results} wave={w} {workshopId} {onChange} reload={reloadAfterChange} />
+      <OutreachStatusBoard view={v} {openWave} unsaved={unsavedWaves} onSelect={(w) => void selectSection(w)} />
+      {#each v.waves as w (w.name)}
+        <OutreachWaveRow view={v} {results} wave={w} {workshopId} open={openWave === w.name} onSelect={() => void selectSection(w.name)} onUnsavedChange={(u) => (unsavedWaves[w.name] = u)} {onChange} reload={reloadAfterChange} />
       {/each}
       <OutreachBulkActions {workshopId} view={v} onDone={reloadAfterChange} />
       <details class="row-details">

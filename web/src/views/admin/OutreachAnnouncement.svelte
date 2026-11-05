@@ -1,6 +1,6 @@
 <!--
-  One wave's message section on the workshop outreach page (#0582): the
-  Announcement, and the body of the Reminder and Final rows. One Message
+  One wave's message section on the workshop outreach page (#0582): the body
+  of each row. One Message
   field holds the text every automatic post shares; Save message writes it to
   each post that is not customized (lib/outreachMessage.ts decides what is
   written), "How it will look" shows each post as it will go out, and one
@@ -30,7 +30,7 @@
     toLocalInputValue,
   } from '../../lib/outreach';
   import { cardButtons, postableAutomatic, sendsItself, statusLine, visibleNotice, type CardNotice } from '../../lib/outreachCards';
-  import { composeBody, messageTargets, planSaveMessage, restoredTail, sharedMessage, waveStrip } from '../../lib/outreachMessage';
+  import { composeBody, messageTargets, planSaveMessage, restoredTail, sharedMessage } from '../../lib/outreachMessage';
   import { postAll } from '../../lib/outreachPostAll';
   import { identicalAutomaticBodies } from '../../lib/outreachPreview';
   import type { OutreachChannel, OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
@@ -38,7 +38,6 @@
   import OutreachComposer from './OutreachComposer.svelte';
   import OutreachPostDialog from './OutreachPostDialog.svelte';
   import OutreachPostPreview from './OutreachPostPreview.svelte';
-  import OutreachWaveStrip from './OutreachWaveStrip.svelte';
 
   interface Props {
     view: WorkshopOutreach;
@@ -48,8 +47,10 @@
     onChange: (post: OutreachPost) => void;
     /** Refetch the whole view (after drafting, or a post is deleted). */
     reload: () => void;
+    /** Whether this section holds typing not saved yet (#0625). */
+    onUnsavedChange?: (unsaved: boolean) => void;
   }
-  let { view, wave, workshopId, onChange, reload }: Props = $props();
+  let { view, wave, workshopId, onChange, reload, onUnsavedChange }: Props = $props();
 
   const waveInfo = $derived(view.waves.find((w) => w.name === wave) ?? null);
   const waveName = $derived(waveInfo?.label ?? wave);
@@ -75,6 +76,12 @@
   const trimmed = $derived(message.trim());
   const plan = $derived(planSaveMessage(view, wave, trimmed));
   const dirty = $derived(touched && trimmed !== shared);
+  let composerDirty = $state(false);
+  const unsaved = $derived((dirty && autos.length > 0) || composerDirty);
+  $effect(() => {
+    const u = unsaved;
+    untrack(() => onUnsavedChange?.(u));
+  });
   const anyOver = $derived(plan.some((i) => i.over));
   const canSave = $derived(dirty && plan.length > 0 && trimmed !== '' && !anyOver);
   const customizedLeft = $derived(autos.filter((a) => a.post.customized && a.post.status !== 'posted' && a.post.status !== 'queued'));
@@ -237,8 +244,6 @@
 </script>
 
 <section class="announcement wave-section" aria-label={waveInfo?.label ?? wave}>
-  {#if wave === 'announce'}<div class="wave-pin"><OutreachWaveStrip strip={waveStrip(view, wave)} /></div>{/if}
-
   {#if autos.length === 0}
     <p class="text-muted">No posts yet. Start with the {wave === 'announce' ? 'announcement' : `${waveName.toLowerCase()} post`}.</p>
     <p class="row">
@@ -295,6 +300,7 @@
               onDeleted={composerDeleted}
               onClose={closeComposer}
               markCustomized
+              onDirtyChange={(d) => (composerDirty = d)}
             />
           {/key}
         {:else}

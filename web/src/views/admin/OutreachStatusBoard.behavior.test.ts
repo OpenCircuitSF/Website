@@ -2,10 +2,10 @@
 //
 // #0624: mounts the status board under jsdom. jsdom is not a browser
 // (AGENTS.md §1): structure and words are real, layout is not.
-import { cleanup, render, screen, within } from '@testing-library/svelte';
-import { afterEach, describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import OutreachStatusBoard from './OutreachStatusBoard.svelte';
-import { weekdayTime } from '../../lib/outreachCards';
+import { sectionPanelId, weekdayTime } from '../../lib/outreachCards';
 import type { OutreachChannel, OutreachPost, WorkshopOutreach } from '../../lib/types';
 
 afterEach(cleanup);
@@ -39,50 +39,48 @@ function view(posts: OutreachPost[]): WorkshopOutreach {
 const cell = (c: HTMLElement, wave: string, channel: string) =>
   c.querySelector(`tr[data-wave="${wave}"] td[data-channel="${channel}"]`) as HTMLElement;
 
+const mount = (v: WorkshopOutreach, over: Record<string, unknown> = {}) =>
+  render(OutreachStatusBoard, { view: v, openWave: null, unsaved: {}, onSelect: vi.fn(), ...over });
+
 describe('OutreachStatusBoard (#0624)', () => {
   it('has a row for each section and a column for each channel', () => {
-    render(OutreachStatusBoard, { view: view([]) });
+    mount(view([]));
     const table = screen.getByRole('table', { name: 'Posts and when they go out' });
     expect(within(table).getAllByRole('rowheader')).toHaveLength(3);
     expect(within(table).getAllByRole('columnheader')).toHaveLength(6);
   });
   it("states each cell's channel, status and time in text", () => {
-    const { container } = render(OutreachStatusBoard, { view: view([post('bluesky', 'announce', { status: 'scheduled', scheduled_at: TIME })]) });
+    const { container } = mount(view([post('bluesky', 'announce', { status: 'scheduled', scheduled_at: TIME })]));
     const text = cell(container, 'announce', 'bluesky').textContent ?? '';
     expect(text).toContain('Bluesky');
     expect(text).toContain('Scheduled');
     expect(text).toContain(weekdayTime(TIME));
   });
   it('gives each hand-posted platform its own state', () => {
-    const { container } = render(OutreachStatusBoard, {
-      view: view([post('tiktok', 'announce', { status: 'posted', posted_at: TIME }), post('youtube_shorts', 'announce', { status: 'manual' })]),
-    });
+    const { container } = mount(view([post('tiktok', 'announce', { status: 'posted', posted_at: TIME }), post('youtube_shorts', 'announce', { status: 'manual' })]));
     expect(cell(container, 'announce', 'tiktok').querySelector('.board-status')?.textContent).toBe('Posted');
     expect(cell(container, 'announce', 'youtube_shorts').querySelector('.board-status')?.textContent).toBe('Post by hand');
   });
   it('says 1 not scheduled on a partly scheduled row and nothing on a fully scheduled one', () => {
     const sched = { status: 'scheduled', scheduled_at: TIME } as const;
-    const { container } = render(OutreachStatusBoard, {
-      view: view([post('bluesky', 'reminder', sched), post('mastodon', 'reminder'), post('bluesky', 'announce', sched), post('mastodon', 'announce', sched)]),
-    });
+    const { container } = mount(view([post('bluesky', 'reminder', sched), post('mastodon', 'reminder'), post('bluesky', 'announce', sched), post('mastodon', 'announce', sched)]));
     expect(container.querySelector('tr[data-wave="reminder"] .board-note')?.textContent).toBe('1 not scheduled');
     expect(container.querySelector('tr[data-wave="announce"] .board-note')).toBeNull();
   });
   it('labels the third row Final', () => {
-    const { container } = render(OutreachStatusBoard, { view: view([]) });
+    const { container } = mount(view([]));
     const row = container.querySelectorAll('tbody tr')[2];
     expect(row.querySelector('.board-ordinal')?.textContent).toBe('3');
     expect(row.querySelector('.board-label')?.textContent).toBe('Final');
   });
   it('changes when the view changes', async () => {
-    const { container, rerender } = render(OutreachStatusBoard, { view: view([]) });
+    const { container, rerender } = mount(view([]));
     expect(cell(container, 'announce', 'bluesky').querySelector('.board-status')?.textContent).toBe('Not written');
     await rerender({ view: view([post('bluesky', 'announce', { status: 'posted', posted_at: TIME })]) });
     expect(cell(container, 'announce', 'bluesky').querySelector('.board-status')?.textContent).toBe('Posted');
   });
   it('gives every cell a status in words, whatever its kind', () => {
-    const { container } = render(OutreachStatusBoard, {
-      view: view([
+    const { container } = mount(view([
         post('bluesky', 'announce', { status: 'posted', posted_at: TIME }),
         post('mastodon', 'announce', { status: 'scheduled', scheduled_at: TIME }),
         post('bluesky', 'reminder', { status: 'scheduled', scheduled_at: TIME, held: true }),
@@ -90,8 +88,7 @@ describe('OutreachStatusBoard (#0624)', () => {
         post('bluesky', 'last-call', { status: 'failed' }),
         post('mastodon', 'last-call', { status: 'queued' }),
         post('instagram', 'announce', { status: 'manual' }),
-      ]),
-    });
+      ]));
     const kinds = new Set<string>();
     const cells = container.querySelectorAll<HTMLElement>('td[data-kind]');
     expect(cells).toHaveLength(15);
@@ -100,5 +97,38 @@ describe('OutreachStatusBoard (#0624)', () => {
       expect(td.querySelector('.board-status')?.textContent?.trim()).toBeTruthy();
     }
     expect([...kinds].sort()).toEqual(['failed', 'manual', 'not_drafted', 'not_scheduled', 'on_hold', 'posted', 'queued', 'scheduled']);
+  });
+
+  it('each row head holds a native button named by its number and name only (#0625)', () => {
+    mount(view([post('bluesky', 'reminder', { body: 'Excerpt words here' })]));
+    const btn = screen.getByRole('button', { name: /Reminder/ });
+    expect(btn.tagName).toBe('BUTTON');
+    expect(btn.closest('th')).not.toBeNull();
+    expect(btn.textContent).not.toContain('Excerpt');
+    expect(btn.closest('th')?.textContent).toContain('Excerpt');
+  });
+  it('selecting a row reports that section (#0625)', async () => {
+    const onSelect = vi.fn();
+    mount(view([]), { onSelect });
+    await fireEvent.click(screen.getByRole('button', { name: /Final/ }));
+    expect(onSelect).toHaveBeenCalledWith('last-call');
+  });
+  it('marks only the open row with aria-current and the open marker (#0625)', () => {
+    const { container } = mount(view([]), { openWave: 'reminder' });
+    expect(container.querySelectorAll('[aria-current]')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: /Reminder/ }).getAttribute('aria-current')).toBe('true');
+    expect(container.querySelectorAll('tr.board-open')).toHaveLength(1);
+    expect(container.querySelector('tr.board-open')?.getAttribute('data-wave')).toBe('reminder');
+    expect(container.querySelector('tr[data-wave="reminder"] .board-chevron')?.textContent).toBe('▾');
+    expect(container.querySelector('tr[data-wave="announce"] .board-chevron')?.textContent).toBe('▸');
+  });
+  it('says Not saved yet on a row with unsaved changes (#0625)', () => {
+    const { container } = mount(view([]), { unsaved: { reminder: true, announce: false } });
+    expect(container.querySelector('tr[data-wave="reminder"] .board-row-head')?.textContent).toContain('Not saved yet');
+    expect(container.querySelector('tr[data-wave="announce"] .board-row-head')?.textContent).not.toContain('Not saved yet');
+  });
+  it('the row buttons control their section panels (#0625)', () => {
+    mount(view([]));
+    expect(screen.getByRole('button', { name: /Reminder/ }).getAttribute('aria-controls')).toBe(sectionPanelId('reminder'));
   });
 });

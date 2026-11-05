@@ -1,12 +1,17 @@
 <!--
-  A collapsed Reminder or Final row on the workshop outreach page (#0582):
-  the pinned strip with its number, label and status (#0622), with the full
-  message section (OutreachAnnouncement) inside once it is open. "Write it"
-  sits beside the disclosure, not inside its summary, so it works while the row
-  is collapsed: it drafts just this wave and then opens the row.
+  One section on the workshop outreach page (#0582, #0625): the pinned strip
+  with its number, label and status (#0622), and under it the full message
+  section (OutreachAnnouncement). The parent decides which one is open. A closed
+  panel stays mounted under the hidden attribute, so typed text survives
+  switching sections, and this row says in words when that text is not saved.
+  "Write it" sits beside the strip, not inside its button; it drafts just this
+  section and then selects it. The sticky strip is a direct child of the wrapper
+  that also holds the panel, so it pins for the panel's height. Neither may set
+  overflow or contain, which would stop the pin (#0622).
 -->
 <script lang="ts">
   import { draftAllOutreach, ApiError } from '../../lib/api';
+  import { sectionHeadId, sectionPanelId, sectionRowId } from '../../lib/outreachCards';
   import { waveStrip } from '../../lib/outreachMessage';
   import type { OutreachPost, OutreachResults, OutreachWave, WorkshopOutreach } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
@@ -18,16 +23,24 @@
     results: OutreachResults | null;
     wave: OutreachWave;
     workshopId: number;
+    open: boolean;
+    onSelect: () => void;
+    onUnsavedChange?: (unsaved: boolean) => void;
     onChange: (post: OutreachPost) => void;
     reload: () => void;
   }
-  let { view, results, wave, workshopId, onChange, reload }: Props = $props();
+  let { view, results, wave, workshopId, open, onSelect, onUnsavedChange, onChange, reload }: Props = $props();
 
-  let open = $state(false);
   let busy = $state(false);
   let errorText = $state('');
+  let unsaved = $state(false);
 
   const strip = $derived(waveStrip(view, wave.name));
+
+  function unsavedChanged(u: boolean): void {
+    unsaved = u;
+    onUnsavedChange?.(u);
+  }
 
   async function write(): Promise<void> {
     busy = true;
@@ -35,7 +48,7 @@
     try {
       await draftAllOutreach(workshopId, [wave.name]);
       reload();
-      open = true;
+      onSelect();
     } catch (err) {
       errorText = err instanceof ApiError ? err.message : 'Could not write the posts. Please try again.';
     } finally {
@@ -44,28 +57,25 @@
   }
 </script>
 
-<div class="wave-row">
-  <div class="row-head">
-    <details bind:open>
-      <summary class="wave-pin"><OutreachWaveStrip {strip} /></summary>
-      {#if strip.action === 'open'}
-        <OutreachAnnouncement {view} {results} wave={wave.name} {workshopId} {onChange} {reload} />
-      {:else}
-        <p class="text-muted">Nothing written for this one yet.</p>
-      {/if}
-    </details>
-    {#if strip.action === 'write'}
+<div class="wave-row" id={sectionRowId(wave.name)}>
+  <div class="wave-pin row-head">
+    <OutreachWaveStrip {strip} {open} headId={sectionHeadId(wave.name)} panelId={sectionPanelId(wave.name)} {onSelect} />
+    {#if strip.action === 'write' && wave.name !== 'announce'}
       <Button onclick={write} disabled={busy || !view.available}>Write it</Button>
     {/if}
   </div>
+  <div id={sectionPanelId(wave.name)} hidden={!open}>
+    {#if strip.action === 'open' || wave.name === 'announce'}
+      <OutreachAnnouncement {view} {results} wave={wave.name} {workshopId} {onChange} {reload} onUnsavedChange={unsavedChanged} />
+    {:else}
+      <p class="text-muted">Nothing written for this one yet.</p>
+    {/if}
+  </div>
+  <p class="text-warn unsaved-note" role="status">{!open && unsaved ? 'Your changes here are not saved yet. Open this section to save them.' : ''}</p>
   <p class="text-error" role="alert">{errorText}</p>
 </div>
 
 <style>
-  .wave-row {
-    border-top: var(--border-w) solid var(--border);
-    padding: var(--space-2) 0;
-  }
   .row-head {
     display: flex;
     flex-wrap: wrap;
@@ -73,9 +83,8 @@
     justify-content: space-between;
     gap: var(--space-2);
   }
-  details {
-    flex: 1 1 16rem;
-    min-width: 0;
+  .unsaved-note:empty {
+    display: none;
   }
   [role='alert']:empty {
     display: none;

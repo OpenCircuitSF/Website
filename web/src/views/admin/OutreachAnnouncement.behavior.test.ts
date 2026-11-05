@@ -54,7 +54,7 @@ function post(over: Partial<OutreachPost>): OutreachPost {
 const bPost = () => post({});
 const mPost = () => post({ id: 2, channel: 'mastodon', body: mast, short_url: MURL });
 
-function mountView(posts: OutreachPost[], wave = 'announce') {
+function mountView(posts: OutreachPost[], wave = 'announce', onUnsavedChange?: (unsaved: boolean) => void) {
   let current: WorkshopOutreach = {
     available: true, unavailable_reason: '',
     workshop: { id: 5, slug: 's', title: 'Soldering 101', status: 'published', starts_at: '2026-12-05T18:00:00Z' },
@@ -63,7 +63,7 @@ function mountView(posts: OutreachPost[], wave = 'announce') {
   };
   const reload = vi.fn();
   const r = render(OutreachAnnouncement, {
-    view: current, results: null, wave, workshopId: 5, reload,
+    view: current, results: null, wave, workshopId: 5, reload, onUnsavedChange,
     onChange: (p: OutreachPost) => {
       current = { ...current, posts: current.posts.map((x) => (x.id === p.id ? p : x)) };
       void r.rerender({ view: current });
@@ -88,17 +88,35 @@ describe('OutreachAnnouncement', () => {
     expect(screen.getByRole('article', { name: 'Bluesky Reminder preview' }).querySelector('h5')!.textContent).toContain('Bluesky · Reminder');
   });
 
-  it('shows the Announce strip with a status like the other sections', () => {
+  it('renders no pinned strip of its own in any section (#0625)', () => {
     mountView([bPost(), mPost()]);
-    const strip = screen.getByRole('heading', { name: /Announce/, level: 3 });
-    expect(strip.closest('.wave-pin')).not.toBeNull();
-    expect(strip.querySelector('.ordinal')!.textContent).toBe('1');
-    expect(strip.querySelector('.timing')!.textContent).toBe('Drafted · not scheduled');
-  });
-
-  it('shows no strip of its own inside a Reminder section', () => {
+    expect(document.querySelector('.wave-pin')).toBeNull();
+    cleanup();
     mountView([post({ wave: 'reminder' })], 'reminder');
     expect(document.querySelector('.wave-pin')).toBeNull();
+  });
+
+  it('reports unsaved typing and clears it after Save message (#0625)', async () => {
+    const onUnsavedChange = vi.fn();
+    updateOutreachPost.mockImplementation(async (id: number, b: { body: string }) => (id === 1 ? { ...bPost(), body: b.body } : { ...mPost(), body: b.body }));
+    mountView([bPost(), mPost()], 'announce', onUnsavedChange);
+    expect(onUnsavedChange).toHaveBeenLastCalledWith(false);
+    await type('New words');
+    expect(onUnsavedChange).toHaveBeenLastCalledWith(true);
+    await fireEvent.click(screen.getByRole('button', { name: 'Save message' }));
+    await waitFor(() => expect(onUnsavedChange).toHaveBeenLastCalledWith(false));
+  });
+
+  it('reports an unsaved Customize edit and clears it on Cancel (#0625)', async () => {
+    const onUnsavedChange = vi.fn();
+    mountView([bPost(), mPost()], 'announce', onUnsavedChange);
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Customize…' })[0]);
+    const article = screen.getByRole('article', { name: 'Bluesky Announce preview' });
+    await fireEvent.input(article.querySelector('textarea')!, { target: { value: 'Edited' } });
+    expect(onUnsavedChange).toHaveBeenLastCalledWith(true);
+    await fireEvent.click(within(article).getByRole('button', { name: 'Cancel' }));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Discard changes' }));
+    await waitFor(() => expect(onUnsavedChange).toHaveBeenLastCalledWith(false));
   });
 
   it('previews each network as its platform card and warns when both texts are identical (#0583)', async () => {

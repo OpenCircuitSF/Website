@@ -40,6 +40,10 @@ vi.mock('../../lib/api', () => ({
 
 const { default: OutreachWorkshop } = await import('./OutreachWorkshop.svelte');
 
+// jsdom has no scrollIntoView, and selecting a section calls it (#0625).
+const scrollSpy = vi.fn();
+Element.prototype.scrollIntoView = scrollSpy;
+
 afterEach(() => {
   cleanup();
   getWorkshopOutreach.mockReset();
@@ -50,6 +54,7 @@ afterEach(() => {
   scheduleAllOutreach.mockReset();
   takedownOutreachPost.mockReset();
   ensureOutreachHandLinks.mockReset();
+  scrollSpy.mockClear();
 });
 
 const channels = [
@@ -398,5 +403,117 @@ describe('OutreachWorkshop: Delete and redo (#0606)', () => {
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Delete and redo…' })).toHaveLength(1));
     const mas = screen.getByRole('article', { name: 'Mastodon Announce preview' });
     expect(within(mas).getByRole('button', { name: 'Delete and redo…' })).toBeTruthy();
+  });
+});
+
+describe('one open section (#0625)', () => {
+  const two = [...channels, { name: 'mastodon', label: 'Mastodon', utm_source: 'mastodon', utm_medium: 'social', char_limit: 500, automatic: true, configured: true, account: '' }];
+  let id = 100;
+  const post = (channel: string, wave: string, status: OutreachPost['status'] = 'draft'): OutreachPost => ({
+    id: id++, outreach_id: 9, channel, wave, body: `${wave} words`, status, prepared: true, stale: false, customized: false, held: false,
+    short_link_key: 'k', short_url: 'https://go.example/k', destination_url: 'https://x', utm: { source: '', medium: '', campaign: '', content: '' },
+    scheduled_at: null, posted_at: status === 'posted' ? '2026-10-18T17:00:00Z' : null, remote_url: null, last_error: null, created_at: '', updated_at: null,
+  });
+  const written = (posted: string[] = []) =>
+    allWaves.flatMap((w) => two.map((c) => post(c.name, w.name, posted.includes(w.name) ? 'posted' : 'draft')));
+  const noResults = { status: 'not_started', posts: [], totals: null } as unknown as OutreachResults;
+  const fullView = (posted: string[] = [], over: Partial<WorkshopOutreach> = {}) => view({ channels: two, waves: allWaves, posts: written(posted), ...over });
+  const panel = (w: string) => document.getElementById(`outreach-section-${w}-panel`) as HTMLElement;
+  const rowBtn = (w: string) => document.getElementById(`outreach-section-${w}-head`) as HTMLButtonElement;
+  const openNames = () => allWaves.map((w) => w.name).filter((w) => !panel(w).hidden);
+
+  async function mount(v: WorkshopOutreach): Promise<HTMLElement> {
+    getWorkshopOutreach.mockResolvedValue(v);
+    getWorkshopOutreachResults.mockResolvedValue(noResults);
+    render(OutreachWorkshop, { workshopId: 5 });
+    return screen.findByRole('table', { name: 'Posts and when they go out' });
+  }
+  const boardBtn = (board: HTMLElement, name: RegExp) => within(board).getByRole('button', { name });
+  const lastScrollWas = (w: string) => {
+    expect(scrollSpy.mock.contexts.at(-1)).toBe(document.getElementById(`outreach-section-${w}`));
+    expect(scrollSpy.mock.calls.at(-1)?.[0]).toEqual({ block: 'start' });
+  };
+
+  it('Announce is a row like the others (#0625)', async () => {
+    await mount(fullView());
+    const heads = screen.getAllByRole('heading', { level: 3 });
+    expect(heads).toHaveLength(3);
+    for (const h of heads) expect(h.querySelector('button')).not.toBeNull();
+  });
+
+  it('opens the first section not fully posted (#0625)', async () => {
+    await mount(fullView(['announce']));
+    expect(openNames()).toEqual(['reminder']);
+  });
+
+  it('exactly one section is open after each selection (#0625)', async () => {
+    const board = await mount(fullView());
+    await fireEvent.click(boardBtn(board, /Final/));
+    await waitFor(() => expect(openNames()).toEqual(['last-call']));
+    await fireEvent.click(rowBtn('reminder'));
+    await waitFor(() => expect(openNames()).toEqual(['reminder']));
+    await fireEvent.click(boardBtn(board, /Announce/));
+    await waitFor(() => expect(openNames()).toEqual(['announce']));
+  });
+
+  it('the open section does not move when a reload shows it fully posted (#0625)', async () => {
+    getWorkshopOutreach.mockResolvedValueOnce(fullView([], { hand_links_pending: true })).mockResolvedValue(fullView(['announce']));
+    getWorkshopOutreachResults.mockResolvedValue(noResults);
+    ensureOutreachHandLinks.mockResolvedValue({ created: 1, existing: 0, failed: [], stopped: false, drafted: 0 });
+    const { container } = render(OutreachWorkshop, { workshopId: 5 });
+    await waitFor(() => expect(container.querySelector('tr[data-wave="announce"] .board-status')?.textContent).toBe('Posted'));
+    expect(openNames()).toEqual(['announce']);
+  });
+
+  it('selecting a board row opens it, brings it into view and moves focus to its row button (#0625)', async () => {
+    const board = await mount(fullView());
+    await fireEvent.click(boardBtn(board, /Reminder/));
+    await waitFor(() => expect(document.activeElement).toBe(rowBtn('reminder')));
+    expect(openNames()).toEqual(['reminder']);
+    lastScrollWas('reminder');
+  });
+
+  it('selecting the board row of the open section still brings it into view (#0625)', async () => {
+    const board = await mount(fullView());
+    await fireEvent.click(boardBtn(board, /Announce/));
+    await waitFor(() => expect(scrollSpy).toHaveBeenCalledTimes(1));
+    expect(openNames()).toEqual(['announce']);
+    lastScrollWas('announce');
+  });
+
+  it('selecting a row button below the open section also brings it into view (#0625)', async () => {
+    await mount(fullView());
+    await fireEvent.click(rowBtn('last-call'));
+    await waitFor(() => expect(scrollSpy).toHaveBeenCalledTimes(1));
+    lastScrollWas('last-call');
+    expect(document.activeElement).toBe(rowBtn('last-call'));
+  });
+
+  it('typed text survives switching, and the row and board say it is not saved (#0625)', async () => {
+    const board = await mount(fullView());
+    const field = panel('announce').querySelector('textarea') as HTMLTextAreaElement;
+    await fireEvent.input(field, { target: { value: 'My unsaved words' } });
+    await fireEvent.click(boardBtn(board, /Final/));
+    await waitFor(() => expect(openNames()).toEqual(['last-call']));
+    const row = document.getElementById('outreach-section-announce') as HTMLElement;
+    expect(row.querySelector('.unsaved-note')?.textContent).toContain('not saved yet');
+    expect(board.querySelector('tr[data-wave="announce"] .board-row-head')?.textContent).toContain('Not saved yet');
+    await fireEvent.click(boardBtn(board, /Announce/));
+    await waitFor(() => expect(openNames()).toEqual(['announce']));
+    expect(panel('announce').querySelector('textarea')).toBe(field);
+    expect(field.value).toBe('My unsaved words');
+    expect(row.querySelector('.unsaved-note')?.textContent).toBe('');
+  });
+
+  it('Reset outreach goes back to the first section (#0625)', async () => {
+    const board = await mount(fullView([], { can_reset: true }));
+    resetOutreach.mockResolvedValue(fullView([], { can_reset: true }));
+    await fireEvent.click(boardBtn(board, /Final/));
+    await waitFor(() => expect(openNames()).toEqual(['last-call']));
+    await fireEvent.click(screen.getByRole('button', { name: 'Reset outreach' }));
+    const dialog = await screen.findByRole('dialog');
+    [...dialog.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Reset outreach')!.click();
+    await waitFor(() => expect(resetOutreach).toHaveBeenCalledWith(5));
+    await waitFor(() => expect(openNames()).toEqual(['announce']));
   });
 });

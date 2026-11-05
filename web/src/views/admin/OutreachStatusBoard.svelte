@@ -3,14 +3,21 @@
   in words what each post has done and when. It stacks at 860 px and below
   rather than scrolling sideways, because the Outreach panel clips overflow and
   a scrolling table would hide channels on a phone. Each cell carries its own
-  channel name for that stacked layout.
+  channel name for that stacked layout. Each row's name is a button that selects
+  that section, and its hit area covers the whole heading cell (#0625).
 -->
 <script lang="ts">
-  import { boardRows } from '../../lib/outreachCards';
+  import { boardRows, sectionPanelId } from '../../lib/outreachCards';
   import { waveExcerpt } from '../../lib/outreachMessage';
   import type { WorkshopOutreach } from '../../lib/types';
 
-  let { view }: { view: WorkshopOutreach } = $props();
+  interface Props {
+    view: WorkshopOutreach;
+    openWave: string | null;
+    unsaved: Record<string, boolean>;
+    onSelect: (wave: string) => void;
+  }
+  let { view, openWave, unsaved, onSelect }: Props = $props();
 
   const rows = $derived(boardRows(view));
 </script>
@@ -26,10 +33,13 @@
   <tbody>
     {#each rows as row (row.wave)}
       {@const excerpt = waveExcerpt(view, row.wave)}
-      <tr data-wave={row.wave}>
+      <tr data-wave={row.wave} class:board-open={row.wave === openWave}>
         <th scope="row" class="board-row-head">
-          <span class="board-name"><span class="board-ordinal">{row.ordinal}</span> <span class="board-label">{row.label}</span></span>
+          <button type="button" class="board-select" aria-controls={sectionPanelId(row.wave)} aria-current={row.wave === openWave ? 'true' : undefined} onclick={() => onSelect(row.wave)}>
+            <span class="board-name"><span class="board-chevron" aria-hidden="true">{row.wave === openWave ? '▾' : '▸'}</span> <span class="board-ordinal">{row.ordinal}</span> <span class="board-label">{row.label}</span></span>
+          </button>
           {#if row.note}<span class="board-note">{row.note}</span>{/if}
+          {#if unsaved[row.wave]}<span class="board-note">Not saved yet</span>{/if}
           {#if excerpt}<span class="board-excerpt text-muted">{excerpt}</span>{/if}
         </th>
         {#each row.cells as cell (cell.channel)}
@@ -51,11 +61,14 @@
   .board-caption { text-align: left; font-weight: 600; padding-bottom: var(--space-2); }
   .board-post-head { width: 11rem; }
   th, td { padding: var(--space-2); overflow-wrap: break-word; vertical-align: top; }
-  .board-row-head { text-align: left; font-weight: 400; border-bottom: var(--border-w) solid var(--border); }
+  .board-row-head { position: relative; text-align: left; font-weight: 400; border-bottom: var(--border-w) solid var(--border); }
+  .board-select { display: block; min-height: 0; margin: 0; padding: 0; border: none; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .board-select::after { content: ''; position: absolute; inset: 0; }
+  .board-open .board-row-head { box-shadow: inset 2px 0 0 var(--accent); }
   tbody tr:last-child .board-row-head { border-bottom: none; }
   .board-name, .board-note, .board-excerpt, .board-status, .board-detail { display: block; }
   .board-ordinal { font-family: var(--font-mono); font-weight: 600; border: var(--border-w) solid var(--border-strong); border-radius: var(--radius); padding: 0 var(--space-1); }
-  .board-label { font-weight: 600; text-transform: uppercase; }
+  .board-label { font-weight: 600; text-transform: uppercase; text-decoration: underline; }
   .board-note, .board-status { font-weight: 600; }
   .board-excerpt, .board-detail { font-size: var(--fs-sm); }
   .board-channel { display: none; }
@@ -64,9 +77,12 @@
     .status-board, .status-board caption, tbody, tr, .board-row-head { display: block; }
     thead { display: none; }
     tbody tr { padding: var(--space-2) 0; border-top: var(--border-w) solid var(--border); }
-    .board-row-head { padding: 0 0 var(--space-1); border-bottom: none; }
+    .board-caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; padding: 0; }
+    .board-row-head { padding: 0 0 var(--space-1) var(--space-2); border-bottom: none; }
     .board-excerpt { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    td { display: grid; grid-template-columns: 8rem minmax(0, 1fr); gap: var(--space-2); padding: var(--space-1) 0; border-bottom: none; }
+    td { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: var(--space-2); padding: var(--space-1) 0 var(--space-1) var(--space-2); border-bottom: none; }
     .board-channel { display: block; }
+    .board-status, .board-detail { display: inline; }
+    .board-status { margin-right: var(--space-1); }
   }
 </style>

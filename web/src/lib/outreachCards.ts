@@ -122,6 +122,22 @@ export function notScheduledNote(view: Pick<WorkshopOutreach, 'channels' | 'post
   return under > 0 && started ? `${under} not scheduled` : '';
 }
 
+export function sectionRowId(name: string): string { return `outreach-section-${name}`; }
+export function sectionHeadId(name: string): string { return `outreach-section-${name}-head`; }
+export function sectionPanelId(name: string): string { return `outreach-section-${name}-panel`; }
+
+/** True when every channel has a post in this section and all have gone out (#0625). */
+export function sectionFullyPosted(view: Pick<WorkshopOutreach, 'channels' | 'posts'>, section: string): boolean {
+  return view.channels.length > 0 && view.channels.every((c) =>
+    view.posts.some((p) => p.channel === c.name && p.wave === section && p.status === 'posted'));
+}
+
+/** The section open when the page loads: the first not fully posted, else the last (#0625). */
+export function defaultOpenSection(view: Pick<WorkshopOutreach, 'channels' | 'waves' | 'posts'>): string {
+  const first = view.waves.find((w) => !sectionFullyPosted(view, w.name));
+  return first?.name ?? view.waves[view.waves.length - 1]?.name ?? '';
+}
+
 /** The status board: one row per wave, one cell per channel, in the server's order. */
 export function boardRows(view: Pick<WorkshopOutreach, 'channels' | 'waves' | 'posts'>): BoardRow[] {
   return groupByWave(view).map(({ wave, cards }, i) => ({
