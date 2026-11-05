@@ -1,6 +1,6 @@
 <!--
   The Reset outreach confirmation (#0592): says exactly what is removed and
-  what is kept. Modelled on OutreachScheduleAllDialog.svelte: role="dialog"
+  what is kept. Modelled on OutreachConfirmDialog.svelte: role="dialog"
   aria-modal="true", the container takes focus, Escape closes it.
 -->
 <script lang="ts">

@@ -1,5 +1,5 @@
 // #0581: the outreach pages confirm in-app (OutreachConfirmDialog /
-// OutreachPostDialog / OutreachScheduleAllDialog), never with window.confirm,
+// OutreachPostDialog), never with window.confirm,
 // which is unstyled, unlabelled for assistive tech and untestable in jsdom.
 // Scans the raw source of every web/src/views/admin/Outreach*.svelte.
 import { describe, expect, it } from 'vitest';

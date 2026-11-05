@@ -933,31 +933,6 @@ export interface OutreachDraftAllResult {
   without_link: number;
 }
 
-export interface OutreachScheduleItem {
-  post_id: number;
-  channel: string;
-  channel_label: string;
-  wave: string;
-  wave_label: string;
-  scheduled_at: string;
-}
-
-export interface OutreachScheduleSkip {
-  post_id: number | null;
-  channel: string;
-  channel_label: string;
-  wave: string;
-  wave_label: string;
-  reason: string;
-  suggested_at: string | null;
-}
-
-export interface OutreachScheduleAllResult {
-  dry_run: boolean;
-  to_schedule: OutreachScheduleItem[];
-  skipped: OutreachScheduleSkip[];
-}
-
 export interface OutreachSummary {
   outreach_id: number;
   workshop_id: number;

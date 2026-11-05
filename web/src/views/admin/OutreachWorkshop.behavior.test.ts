@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // #0568, #0582: mounts OutreachWorkshop.svelte (with the real OutreachPanel,
-// OutreachAnnouncement, OutreachWaveRow and OutreachBulkActions) under jsdom with '../../lib/api'
+// OutreachAnnouncement, OutreachSectionTabs and OutreachSection) under jsdom with '../../lib/api'
 // mocked. jsdom is not a browser (AGENTS.md §1): DOM order is real, layout is
 // not.
 import { render, cleanup, waitFor, screen, fireEvent, within } from '@testing-library/svelte';
@@ -13,7 +13,7 @@ const getWorkshopOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const getWorkshopOutreachResults = vi.fn<(id: number) => Promise<OutreachResults>>();
 const startOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const resetOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
-const scheduleAllOutreach = vi.fn();
+const draftAllOutreach = vi.fn();
 const ensureOutreachHandLinks = vi.fn();
 const takedownOutreachPost = vi.fn();
 const listOutreachFlyers = vi.fn<() => Promise<{ flyers: { id: number; workshop_id: number }[] }>>();
@@ -22,10 +22,9 @@ vi.mock('../../lib/api', () => ({
   startOutreach: (id: number) => startOutreach(id),
   getWorkshopOutreachResults: (id: number) => getWorkshopOutreachResults(id),
   ensureOutreachHandLinks: (id: number) => ensureOutreachHandLinks(id),
-  draftAllOutreach: vi.fn(),
+  draftAllOutreach: (...a: unknown[]) => draftAllOutreach(...a),
   resetOutreach: (id: number) => resetOutreach(id),
   listOutreachFlyers: () => listOutreachFlyers(),
-  scheduleAllOutreach: (...a: unknown[]) => scheduleAllOutreach(...a),
   createOutreachPost: vi.fn(),
   takedownOutreachPost: (id: number) => takedownOutreachPost(id),
   ApiError: class ApiError extends Error {
@@ -50,7 +49,7 @@ afterEach(() => {
   startOutreach.mockReset();
   resetOutreach.mockReset();
   listOutreachFlyers.mockReset();
-  scheduleAllOutreach.mockReset();
+  draftAllOutreach.mockReset();
   takedownOutreachPost.mockReset();
   ensureOutreachHandLinks.mockReset();
   scrollSpy.mockClear();
@@ -82,23 +81,23 @@ describe('OutreachWorkshop', () => {
     expect(screen.getByRole('link', { name: 'All outreach' }).getAttribute('href')).toBe('#/outreach');
   });
 
-  it('orders the status board, Announcement, wave rows, Schedule all, Flyers, Links and clicks (#0624, #0626)', async () => {
+  it('orders the status board, the section tabs, the one section, Flyers, Links and clicks (#0640)', async () => {
     getWorkshopOutreach.mockResolvedValue(view({ waves: allWaves }));
     getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);
     render(OutreachWorkshop, { workshopId: 5 });
     const board = await screen.findByRole('table', { name: 'Posts and when they go out' });
-    const announcement = await screen.findByRole('heading', { name: /Announce/ });
-    const reminder = await screen.findByText('Reminder', { selector: 'strong' });
-    const lastCall = await screen.findByText('Final', { selector: 'strong' });
-    const schedule = await screen.findByRole('button', { name: 'Schedule all' });
+    const tabs = await screen.findByRole('tablist', { name: 'Section' });
+    const section = await screen.findByRole('tabpanel');
     const flyers = await screen.findByText('Flyers', { selector: 'strong' });
     const links = await screen.findByText('Links and clicks', { selector: 'strong' });
     const results = await screen.findByRole('link', { name: 'View results' });
-    const order = [board, announcement, reminder, lastCall, schedule, flyers, links, results];
+    const order = [board, tabs, section, flyers, links, results];
     for (let i = 0; i < order.length - 1; i++) {
       expect(order[i].compareDocumentPosition(order[i + 1]) & Node.DOCUMENT_POSITION_FOLLOWING, `element ${i}`).toBeTruthy();
     }
     expect(screen.getByRole('link', { name: 'Open flyers' }).getAttribute('href')).toMatch(/flyers/);
+    expect(screen.getAllByRole('tabpanel')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Schedule all' })).toBeNull();
   });
 
   it('shows the status board in place of the summary line (#0624)', async () => {
@@ -125,7 +124,7 @@ describe('OutreachWorkshop', () => {
     getWorkshopOutreach.mockResolvedValue(view({ waves: allWaves }));
     getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);
     render(OutreachWorkshop, { workshopId: 5 });
-    await screen.findByRole('heading', { name: /Announce/ });
+    await screen.findByRole('tab', { name: /Announce/ });
     expect(screen.queryByText(/Tracked links/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Draft all' })).toBeNull();
     expect(screen.queryByText(/Start outreach/)).toBeNull();
@@ -137,7 +136,7 @@ describe('OutreachWorkshop', () => {
     startOutreach.mockResolvedValue(view());
     getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);
     render(OutreachWorkshop, { workshopId: 5 });
-    await screen.findByRole('heading', { name: /Announce/ });
+    await screen.findByRole('tab', { name: /Announce/ });
     expect(startOutreach).toHaveBeenCalledTimes(1);
     expect(startOutreach).toHaveBeenCalledWith(5);
   });
@@ -257,7 +256,7 @@ describe('OutreachWorkshop', () => {
     getWorkshopOutreach.mockResolvedValue(view({ can_reset: false }));
     getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);
     render(OutreachWorkshop, { workshopId: 5 });
-    await screen.findByRole('heading', { name: /Announce/ });
+    await screen.findByRole('tab', { name: /Announce/ });
     expect(screen.queryByRole('button', { name: 'Reset outreach' })).toBeNull();
   });
 
@@ -290,15 +289,9 @@ describe('OutreachWorkshop', () => {
     const dialog = await screen.findByRole('dialog');
     [...dialog.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Reset outreach')!.click();
     expect(await screen.findByText(/Outreach was reset/)).toBeTruthy();
-    const plan = {
-      dry_run: true,
-      to_schedule: [{ post_id: 11, channel: 'bluesky', channel_label: 'Bluesky', wave: 'announce', wave_label: 'Announce', scheduled_at: '2099-12-04T18:00:00Z' }],
-      skipped: [],
-    };
-    scheduleAllOutreach.mockResolvedValueOnce(plan).mockResolvedValueOnce({ ...plan, dry_run: false });
-    await fireEvent.click(await screen.findByRole('button', { name: 'Schedule all' }));
+    draftAllOutreach.mockResolvedValue({ created: [], skipped: 0, without_link: 0 });
     expect(screen.queryByText(/Outreach was reset/)).not.toBeNull();
-    await fireEvent.click(await screen.findByRole('button', { name: 'Schedule 1 post' }));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Write the announcement' }));
     await waitFor(() => expect(screen.queryByText(/Outreach was reset/)).toBeNull());
   });
 
@@ -441,15 +434,37 @@ describe('one open section (#0625)', () => {
   }
   const boardBtn = (board: HTMLElement, name: RegExp) => within(board).getByRole('button', { name });
   const lastScrollWas = (w: string) => {
-    expect(scrollSpy.mock.contexts.at(-1)).toBe(document.getElementById(`outreach-section-${w}`));
+    expect(scrollSpy.mock.contexts.at(-1)).toBe(document.getElementById('outreach-section-tabs'));
+    expect(rowBtn(w).getAttribute('aria-selected')).toBe('true');
     expect(scrollSpy.mock.calls.at(-1)?.[0]).toEqual({ block: 'start' });
   };
 
-  it('Announce is a row like the others (#0625)', async () => {
+  it('Announce is a tab like the others (#0625, #0640)', async () => {
     await mount(fullView());
-    const heads = screen.getAllByRole('heading', { level: 3 });
-    expect(heads).toHaveLength(3);
-    for (const h of heads) expect(h.querySelector('button')).not.toBeNull();
+    const tabs = within(screen.getByRole('tablist', { name: 'Section' })).getAllByRole('tab');
+    expect(tabs.map((t) => t.textContent?.replace(/\s+/g, ' ').trim())).toEqual(['1 Announce', '2 Reminder', '3 Final']);
+  });
+
+  it('renders no strip, Write it or note for a closed section (#0640)', async () => {
+    const board = await mount(fullView());
+    expect(openNames()).toEqual(['announce']);
+    for (const label of ['Reminder', 'Final']) {
+      const hits = [...document.querySelectorAll('*')].filter((e) => e.children.length === 0 && e.textContent?.trim() === label);
+      expect(hits).toHaveLength(2);
+      expect(hits.some((e) => board.contains(e))).toBe(true);
+      expect(hits.some((e) => e.closest('[role="tab"]'))).toBe(true);
+    }
+    expect(screen.queryByRole('button', { name: 'Write it' })).toBeNull();
+    expect(document.querySelector('.unsaved-note')).toBeNull();
+  });
+
+  it('an unwritten section shows its Write button inside the panel, not beside a strip', async () => {
+    await mount(view({ channels: two, waves: allWaves, posts: written().filter((p) => p.wave === 'announce') }));
+    await fireEvent.click(rowBtn('reminder'));
+    await waitFor(() => expect(openNames()).toEqual(['reminder']));
+    const btn = within(panel('reminder')).getByRole('button', { name: 'Write the reminder post' });
+    expect(btn).toBeTruthy();
+    expect(document.getElementById('outreach-section-tabs')?.contains(btn)).toBe(false);
   });
 
   it('opens the first section not fully posted (#0625)', async () => {
@@ -476,7 +491,7 @@ describe('one open section (#0625)', () => {
     expect(openNames()).toEqual(['announce']);
   });
 
-  it('selecting a board row opens it, brings it into view and moves focus to its row button (#0625)', async () => {
+  it('selecting a board row opens it, brings it into view and moves focus to its tab (#0625, #0640)', async () => {
     const board = await mount(fullView());
     await fireEvent.click(boardBtn(board, /Reminder/));
     await waitFor(() => expect(document.activeElement).toBe(rowBtn('reminder')));
@@ -492,7 +507,7 @@ describe('one open section (#0625)', () => {
     lastScrollWas('announce');
   });
 
-  it('selecting a row button below the open section also brings it into view (#0625)', async () => {
+  it('selecting a tab after the open section also brings it into view (#0625)', async () => {
     await mount(fullView());
     await fireEvent.click(rowBtn('last-call'));
     await waitFor(() => expect(scrollSpy).toHaveBeenCalledTimes(1));
@@ -500,20 +515,19 @@ describe('one open section (#0625)', () => {
     expect(document.activeElement).toBe(rowBtn('last-call'));
   });
 
-  it('typed text survives switching, and the row and board say it is not saved (#0625)', async () => {
+  it('typed text survives switching, and the tab and board say it is not saved (#0625)', async () => {
     const board = await mount(fullView());
     const field = panel('announce').querySelector('textarea') as HTMLTextAreaElement;
     await fireEvent.input(field, { target: { value: 'My unsaved words' } });
     await fireEvent.click(boardBtn(board, /Final/));
     await waitFor(() => expect(openNames()).toEqual(['last-call']));
-    const row = document.getElementById('outreach-section-announce') as HTMLElement;
-    expect(row.querySelector('.unsaved-note')?.textContent).toContain('not saved yet');
+    expect(rowBtn('announce').textContent).toContain('not saved');
     expect(board.querySelector('tr[data-wave="announce"] .board-row-head')?.textContent).toContain('Not saved yet');
     await fireEvent.click(boardBtn(board, /Announce/));
     await waitFor(() => expect(openNames()).toEqual(['announce']));
     expect(panel('announce').querySelector('textarea')).toBe(field);
     expect(field.value).toBe('My unsaved words');
-    expect(row.querySelector('.unsaved-note')?.textContent).toBe('');
+    expect(rowBtn('announce').textContent).toContain('not saved');
   });
 
   it('a failed reload keeps the page and typed text on screen, and Retry recovers (#0625)', async () => {
@@ -549,7 +563,7 @@ describe('one open section (#0625)', () => {
     [...dialog.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Reset outreach')!.click();
     await waitFor(() => expect(panel('reminder').querySelector('textarea')).toBeNull());
     await waitFor(() => expect(board.querySelector('tr[data-wave="reminder"] .board-row-head')?.textContent).not.toContain('Not saved yet'));
-    expect(document.querySelector('#outreach-section-reminder .unsaved-note')?.textContent).toBe('');
+    expect(rowBtn('reminder').textContent).not.toContain('not saved');
   });
 
   it('Reset outreach goes back to the first section (#0625)', async () => {

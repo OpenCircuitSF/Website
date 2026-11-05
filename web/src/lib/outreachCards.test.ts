@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { boardCell, boardOffLine, boardRows, cardButtons, combinedPostResult, copyLabel, defaultOpenSection, flyerLinkFor, groupByWave, notScheduledNote, pollDelay, postableAutomatic, postDialogCopy, onChannels, sectionFullyPosted, statusLine, weekdayTime, summaryLine, visibleNotice } from './outreachCards';
+import { boardCell, boardOffLine, boardRows, cardButtons, combinedPostResult, copyLabel, defaultOpenSection, flyerLinkFor, groupByWave, pollDelay, postableAutomatic, postDialogCopy, onChannels, sectionFullyPosted, statusLine, weekdayTime, summaryLine, visibleNotice } from './outreachCards';
 import type { OutreachChannel, OutreachPost, OutreachResults } from './types';
 
 const auto: OutreachChannel = { name: 'bluesky', label: 'Bluesky', utm_source: 'b', utm_medium: 'social', char_limit: 300, automatic: true, configured: true, account: '' };
@@ -288,35 +288,6 @@ describe('boardRows (#0624)', () => {
   });
 });
 
-describe('notScheduledNote (#0624)', () => {
-  const channels = [auto, mast];
-  const sched = post({ status: 'scheduled', scheduled_at: TIME });
-  it('counts a draft beside a scheduled post', () => {
-    expect(notScheduledNote({ channels, posts: [sched, post({ id: 2, channel: 'mastodon' })] }, 'announce')).toBe('1 not scheduled');
-  });
-  it('counts a channel with no post beside a scheduled post', () => {
-    expect(notScheduledNote({ channels: [auto, mast, thread], posts: [sched] }, 'announce')).toBe('2 not scheduled');
-  });
-  it('counts a draft beside a posted post', () => {
-    expect(notScheduledNote({ channels, posts: [post({ status: 'posted', posted_at: TIME }), post({ id: 2, channel: 'mastodon' })] }, 'announce')).toBe('1 not scheduled');
-  });
-  it('is empty when nothing is scheduled or posted', () => {
-    expect(notScheduledNote({ channels, posts: [post(), post({ id: 2, channel: 'mastodon' })] }, 'announce')).toBe('');
-    expect(notScheduledNote({ channels, posts: [] }, 'announce')).toBe('');
-  });
-  it('is empty when every automatic channel is scheduled or posted', () => {
-    expect(notScheduledNote({ channels, posts: [sched, post({ id: 2, channel: 'mastodon', status: 'posted', posted_at: TIME })] }, 'announce')).toBe('');
-  });
-  it('ignores hand-posted channels', () => {
-    expect(notScheduledNote({ channels: [auto, manual], posts: [sched, post({ id: 2, channel: 'reddit' })] }, 'announce')).toBe('');
-  });
-  it('does not count a failed or queued post', () => {
-    for (const status of ['failed', 'queued'] as const) {
-      expect(notScheduledNote({ channels, posts: [sched, post({ id: 2, channel: 'mastodon', status })] }, 'announce')).toBe('');
-    }
-  });
-});
-
 describe('defaultOpenSection (#0625)', () => {
   const mast: OutreachChannel = { ...auto, name: 'mastodon', label: 'Mastodon' };
   const channels = [auto, mast];
@@ -368,12 +339,6 @@ describe('a switched-off channel (#0628)', () => {
     expect(boardCell(null, tiktok).channelLabel).toBe('TikTok');
     const [row] = boardRows({ channels: [tiktok], waves, posts: [], off_channels: off('tiktok') });
     expect(row.cells[0].channelLabel).toBe('TikTok (off)');
-  });
-  it('does not count an off channel as not scheduled', () => {
-    const mast: OutreachChannel = { ...auto, name: 'mastodon', label: 'Mastodon' };
-    const posts = [post({ status: 'scheduled', scheduled_at: '2026-11-20T18:00:00Z' })];
-    expect(notScheduledNote({ channels: [auto, mast], posts }, 'announce')).toBe('1 not scheduled');
-    expect(notScheduledNote({ channels: [auto, mast], posts, off_channels: [{ name: 'mastodon', label: 'Mastodon', automatic: true }] }, 'announce')).toBe('');
   });
   it('treats a section as fully posted when only an off channel is missing', () => {
     const posts = [post({ status: 'posted' })];

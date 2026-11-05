@@ -134,21 +134,6 @@ export function boardCell(post: OutreachPost | null, channel: OutreachChannel, o
   return { channel: channel.name, channelLabel: boardChannelLabel(channel.label, off), kind, status, detail };
 }
 
-/**
- * "2 not scheduled" when part of a wave is out or on its way and some of the
- * channels that post themselves are not: no post yet, or a post with no time.
- * Empty when nothing has gone out or been scheduled, since the wave's own
- * status already says that, and when a post has failed or is sending only.
- */
-export function notScheduledNote(view: Pick<WorkshopOutreach, 'channels' | 'posts' | 'off_channels'>, wave: string): string {
-  const own = onChannels(view).filter(sendsItself).map((c) => view.posts.find((p) => p.channel === c.name && p.wave === wave) ?? null);
-  const under = own.filter((p) => p === null || p.status === 'draft' || p.status === 'manual').length;
-  // A post that has left drafting counts as started even on an off channel, since the strip reports it.
-  const started = view.channels.filter(sendsItself).some((c) => view.posts.some((p) => p.channel === c.name && p.wave === wave && (p.status === 'scheduled' || p.status === 'posted')));
-  return under > 0 && started ? `${under} not scheduled` : '';
-}
-
-export function sectionRowId(name: string): string { return `outreach-section-${name}`; }
 export function sectionHeadId(name: string): string { return `outreach-section-${name}-head`; }
 export function sectionPanelId(name: string): string { return `outreach-section-${name}-panel`; }
 

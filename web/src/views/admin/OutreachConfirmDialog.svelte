@@ -1,7 +1,7 @@
 <!--
   A generic in-app confirmation (#0581), replacing the browser's native dialog on the
   outreach pages: a title, caller-supplied body content, an optional error
-  line and Confirm / Cancel. Modelled on OutreachScheduleAllDialog.svelte:
+  line and Confirm / Cancel. Like every modal here it uses
   role="dialog" aria-modal="true", the container takes focus, Escape closes it
   from the same node, and nothing closes it while a request is in flight.
 -->

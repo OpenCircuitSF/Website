@@ -19,7 +19,6 @@ import type {
   ConnectionTestResult,
   OutreachDraftAllResult,
   OutreachLinkReport,
-  OutreachScheduleAllResult,
   OutreachLocation,
   FlyerLinkInfo,
   FlyerRow,
@@ -1383,14 +1382,6 @@ export function draftAllOutreach(workshopId: number, waves: string[] = []): Prom
 /** POST /admin/workshops/{id}/outreach/reset (#0592) — remove the posts and flyers; 409 once anything is public. */
 export function resetOutreach(workshopId: number): Promise<WorkshopOutreach> {
   return apiPost<WorkshopOutreach>(`/admin/workshops/${workshopId}/outreach/reset`);
-}
-
-/** POST /admin/workshops/{id}/outreach/schedule-all — preview (`dry_run`) or confirm the previewed ids. */
-export function scheduleAllOutreach(
-  workshopId: number,
-  body: { dry_run: true } | { dry_run: false; post_ids: number[]; times?: Record<number, string> },
-): Promise<OutreachScheduleAllResult> {
-  return apiPost<OutreachScheduleAllResult>(`/admin/workshops/${workshopId}/outreach/schedule-all`, body);
 }
 
 /** GET /admin/outreach — every workshop that has outreach. */

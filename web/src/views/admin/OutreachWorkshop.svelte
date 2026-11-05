@@ -1,10 +1,10 @@
 <!--
   One workshop's outreach page (#0568, #0582, #0625): header, then the status
-  board, then one row per section (one message, how it will look, one post
-  button), of which exactly one is open. The default is picked once per workshop
-  and selecting from the board or a row goes through selectSection. Then
-  Schedule all, Flyers and
-  "Links and clicks" as collapsed rows with a status and one action each. The
+  board, then the pinned section tabs and the one open section (one message,
+  how it will look, one post button; #0640). The others stay mounted but
+  hidden, so typed text survives a tab switch. The default is picked once per
+  workshop and selecting from the board or a tab goes through selectSection.
+  Then Flyers and "Links and clicks" as collapsed rows with a status and one action each. The
   OutreachPanel stays self-loading (and starts outreach implicitly) and hands
   its view and results to the body snippet. The tracked-links table lives on
   Results, not here.
@@ -16,13 +16,13 @@
   import Panel from '../../lib/Panel.svelte';
   import OutreachPanel from './OutreachPanel.svelte';
   import OutreachStatusBoard from './OutreachStatusBoard.svelte';
-  import OutreachWaveRow from './OutreachWaveRow.svelte';
-  import OutreachBulkActions from './OutreachBulkActions.svelte';
+  import OutreachSectionTabs from './OutreachSectionTabs.svelte';
+  import OutreachSection from './OutreachSection.svelte';
   import OutreachResetDialog from './OutreachResetDialog.svelte';
   import Button from '../../lib/Button.svelte';
   import { onMount, tick } from 'svelte';
   import { resetOutreach, listOutreachFlyers, ApiError } from '../../lib/api';
-  import { defaultOpenSection, flyerLinkFor, sectionHeadId, sectionRowId } from '../../lib/outreachCards';
+  import { defaultOpenSection, flyerLinkFor, sectionHeadId } from '../../lib/outreachCards';
   import { linkReportMessage } from '../../lib/outreachLinks';
   import { resultsSummaryLine } from '../../lib/outreachResults';
 
@@ -52,12 +52,12 @@
   let openFor: number | null = null;
   let unsavedWaves = $state<Record<string, boolean>>({});
 
-  // Safari has no scroll anchoring, so collapsing a long section above would
-  // otherwise leave the row off screen.
+  // Safari has no scroll anchoring, so switching from a long section would
+  // otherwise leave the tabs off screen; focus lands on the selected tab.
   async function selectSection(name: string): Promise<void> {
     openWave = name;
     await tick();
-    document.getElementById(sectionRowId(name))?.scrollIntoView({ block: 'start' });
+    document.getElementById('outreach-section-tabs')?.scrollIntoView({ block: 'start' });
     document.getElementById(sectionHeadId(name))?.focus({ preventScroll: true });
   }
 
@@ -83,7 +83,7 @@
   }
 
   // The reset note describes the state right after the reset; the next change
-  // (a post, a schedule, a bulk action) makes it stale, so it goes (#0593).
+  // (a post, a schedule, a write) makes it stale, so it goes (#0593).
   function changed(): void {
     resetNote = '';
   }
@@ -131,10 +131,10 @@
     {#snippet body({ view: v, results, onChange: panelChange })}
       {@const onChange = (p: OutreachPost) => { changed(); panelChange(p); }}
       <OutreachStatusBoard view={v} {openWave} unsaved={unsavedWaves} onSelect={(w) => void selectSection(w)} />
+      {#if openWave}<OutreachSectionTabs view={v} selected={openWave} unsaved={unsavedWaves} onSelect={(w) => void selectSection(w)} />{/if}
       {#each v.waves as w (w.name)}
-        <OutreachWaveRow view={v} {results} wave={w} {workshopId} open={openWave === w.name} onSelect={() => void selectSection(w.name)} onUnsavedChange={(u) => (unsavedWaves[w.name] = u)} {onChange} reload={reloadAfterChange} {flyer} />
+        <OutreachSection view={v} {results} wave={w} {workshopId} open={openWave === w.name} onUnsavedChange={(u) => (unsavedWaves[w.name] = u)} {onChange} reload={reloadAfterChange} {flyer} />
       {/each}
-      <OutreachBulkActions {workshopId} view={v} onDone={reloadAfterChange} />
       <div class="row-details row spread">
         <span><strong>Flyers</strong> <span class="text-muted">· print and post at saved locations</span></span>
         <a href={adminOutreachFlyersHash()}>Open flyers</a>

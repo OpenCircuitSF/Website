@@ -1,8 +1,7 @@
 // Pure logic for the Announcement-first outreach page (#0582): the one shared
-// Message field, how it is written into every automatic post, and the status
-// text of the collapsed wave rows. No DOM, so it is unit-testable.
-import { LINK_TOKEN, countCharacters, defaultScheduleAt, isOverLimit } from './outreach';
-import { notScheduledNote, onChannels, sendsItself, weekdayTime } from './outreachCards';
+// Message field and how it is written into every automatic post. No DOM, so it is unit-testable.
+import { LINK_TOKEN, countCharacters, isOverLimit } from './outreach';
+import { sendsItself } from './outreachCards';
 import type { OutreachChannel, OutreachPost, WorkshopOutreach } from './types';
 
 type View = Pick<WorkshopOutreach, 'channels' | 'waves' | 'posts' | 'off_channels'>;
@@ -142,62 +141,4 @@ export function planSaveMessage(view: View, wave: string, message: string): Save
     const body = composeBody(message, tail);
     return { post, channel, body, over: isOverLimit(channel, countCharacters(channel, body, post.prepared).count) };
   });
-}
-
-export interface RowStatus {
-  text: string;
-  /** 'write' when the wave has no posts yet; 'open' otherwise. */
-  action: 'write' | 'open';
-}
-
-/** A section's one-line status, with real dates (#0622). A suggested time shows only while nothing is scheduled or posted. */
-export function waveRowStatus(view: View, wave: string, now: Date = new Date()): RowStatus {
-  const suggested = defaultScheduleAt(wave, view.waves, now);
-  const ahead = suggested ? ` · suggested ${weekdayTime(suggested)}` : '';
-  const inWave = view.posts.filter((p) => p.wave === wave);
-  if (inWave.length === 0) return { text: `Not written · not scheduled${ahead}`, action: 'write' };
-  const note = notScheduledNote(view, wave);
-  const rest = note ? ` · ${note}` : '';
-  const auto = inWave.filter((p) => {
-    const ch = view.channels.find((c) => c.name === p.channel);
-    return ch ? sendsItself(ch) : false;
-  });
-  const handChannels = view.channels.filter((c) => !sendsItself(c));
-  const handPosted = inWave.filter((p) => p.status === 'posted' && handChannels.some((c) => c.name === p.channel));
-  const left = onChannels(view).filter((c) => !sendsItself(c) && !handPosted.some((p) => p.channel === c.name)).length;
-  const hand = left > 0 ? ` · ${left} left to post by hand` : '';
-  const newestOf = (ps: OutreachPost[]) => ps.map((p) => p.posted_at).filter((t): t is string => t !== null).sort().pop();
-  if (auto.length === 0 && !onChannels(view).some(sendsItself)) {
-    if (left > 0) return { text: `Drafted${hand}${ahead}`, action: 'open' };
-    const t = newestOf(handPosted);
-    return { text: t ? `Posted ${weekdayTime(t)}` : `Posted ${handPosted.length} of ${handPosted.length + left}`, action: 'open' };
-  }
-  const postedPosts = auto.filter((p) => p.status === 'posted');
-  const posted = postedPosts.length;
-  const newest = newestOf(left === 0 ? [...postedPosts, ...handPosted] : postedPosts);
-  const when = newest ? weekdayTime(newest) : '';
-  if (auto.length > 0 && posted === auto.length) return { text: `${when ? `Posted ${when}` : `Posted ${posted} of ${auto.length}`}${rest}${hand}`, action: 'open' };
-  if (auto.some((p) => p.status === 'queued')) return { text: 'Posting now…', action: 'open' };
-  if (auto.some((p) => p.status === 'failed')) return { text: `Drafted · a post failed${hand}`, action: 'open' };
-  const times = auto.filter((p) => p.status === 'scheduled' && p.scheduled_at).map((p) => p.scheduled_at as string).sort();
-  if (times.length > 0) {
-    const first = weekdayTime(times[0]);
-    if (auto.some((p) => p.held)) return { text: `Scheduled ${first} · on hold until the event is published${rest}${hand}`, action: 'open' };
-    const from = times[0] !== times[times.length - 1] ? 'from ' : '';
-    const count = posted > 0 ? ` · posted ${posted} of ${auto.length}` : '';
-    return { text: `Posts automatically ${from}${first}${count}${rest}${hand}`, action: 'open' };
-  }
-  if (posted > 0) return { text: `Posted ${posted} of ${auto.length}${when ? ` · ${when}` : ''}${rest}${hand}`, action: 'open' };
-  return { text: `Drafted · not scheduled${hand}${ahead}`, action: 'open' };
-}
-
-export interface WaveStrip extends RowStatus {
-  ordinal: number;
-  label: string;
-}
-
-/** What a section's pinned strip says: its number, its name and its status (#0622). */
-export function waveStrip(view: View, wave: string, now: Date = new Date()): WaveStrip {
-  const i = view.waves.findIndex((w) => w.name === wave);
-  return { ...waveRowStatus(view, wave, now), ordinal: i + 1, label: i >= 0 ? view.waves[i].label : wave };
 }
