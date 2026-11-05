@@ -761,12 +761,12 @@ func TestAdminWorkshops_PatchTreatsWhitespaceOnlyOptionalFieldAsCleared(t *testi
 	cleanupAdminWorkshop(t, pool, w.ID)
 	path := fmt.Sprintf("/admin/workshops/%d", w.ID)
 
-	// The PATCH body carries a whitespace-only summary (must clear, not
-	// store the spaces), a location_note padded with real content (must be
-	// stored verbatim, not trimmed), and never mentions signup_url (must be
-	// left alone).
+	// The PATCH body carries a whitespace-only summary (must clear, not store
+	// the spaces), a body_md padded with real content (must be stored verbatim,
+	// not trimmed), and never mentions signup_url (must be left alone). A venue's
+	// note follows the same rule: TestAdminVenues_NoteVerbatimAndBlankClears.
 	resp := doJSON(t, srv.Client(), http.MethodPatch, srv.URL+path, "workshops-admin-ws-clear-token",
-		`{"summary":"   ","location_note":"  Padded real content  "}`)
+		`{"summary":"   ","body_md":"  Padded real content  "}`)
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -784,8 +784,8 @@ func TestAdminWorkshops_PatchTreatsWhitespaceOnlyOptionalFieldAsCleared(t *testi
 		t.Errorf("SignupURL = %v after a PATCH that never mentioned it, want unchanged %q", updated.SignupURL, signupURL)
 	}
 	const wantNote = "  Padded real content  "
-	if updated.LocationNote == nil || *updated.LocationNote != wantNote {
-		t.Errorf("LocationNote = %v, want verbatim %q (real content is not trimmed)", updated.LocationNote, wantNote)
+	if updated.BodyMD == nil || *updated.BodyMD != wantNote {
+		t.Errorf("BodyMD = %v, want verbatim %q (real content is not trimmed)", updated.BodyMD, wantNote)
 	}
 }
 
@@ -1409,6 +1409,146 @@ func TestAdminWorkshops_ViewsCarryType(t *testing.T) {
 	for _, v := range list.Workshops {
 		if v.EventType.Slug == "" || v.EventTypeID == 0 {
 			t.Errorf("list row lacks type: %+v", v)
+		}
+	}
+}
+
+// ── venues (#0617) ───────────────────────────────────────────────────────────
+
+type workshopVenueRow struct {
+	ID           int64   `json:"id"`
+	VenueID      *int64  `json:"venue_id"`
+	LocationName *string `json:"location_name"`
+}
+
+func decodeWorkshopVenue(t *testing.T, b []byte) workshopVenueRow {
+	t.Helper()
+	var row workshopVenueRow
+	if err := json.Unmarshal(b, &row); err != nil {
+		t.Fatalf("decode %s: %v", b, err)
+	}
+	return row
+}
+
+func createWorkshopVenue(t *testing.T, pool *pgxpool.Pool, do func(method, path, body string) (int, []byte), venueField string) workshopVenueRow {
+	t.Helper()
+	code, b := do(http.MethodPost, "/admin/workshops", fmt.Sprintf(`{"title":"zz-venue-%d"%s}`, testdb.Unique(), venueField))
+	if code != http.StatusCreated {
+		t.Fatalf("create status = %d (%s)", code, b)
+	}
+	row := decodeWorkshopVenue(t, b)
+	cleanupAdminWorkshop(t, pool, row.ID)
+	return row
+}
+
+func seededDefaultVenueID(t *testing.T, pool *pgxpool.Pool) int64 {
+	t.Helper()
+	var id int64
+	if err := pool.QueryRow(context.Background(), `SELECT id FROM venues WHERE name = 'Sequoia Fabrica' ORDER BY id LIMIT 1`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func TestAdminWorkshops_CreateNoVenueFieldGetsDefault(t *testing.T) {
+	pool, do := workshopEventTypeServer(t)
+	row := createWorkshopVenue(t, pool, do, "")
+	if row.VenueID == nil || *row.VenueID != seededDefaultVenueID(t, pool) || row.LocationName == nil || *row.LocationName != "Sequoia Fabrica" {
+		t.Errorf("row = %+v", row)
+	}
+}
+
+func TestAdminWorkshops_CreateNullVenueHasNoLocation(t *testing.T) {
+	pool, do := workshopEventTypeServer(t)
+	row := createWorkshopVenue(t, pool, do, `,"venue_id":null`)
+	if row.VenueID != nil || row.LocationName != nil {
+		t.Errorf("row = %+v", row)
+	}
+}
+
+func TestAdminWorkshops_CreateDisabledVenueRefused(t *testing.T) {
+	pool, do := workshopEventTypeServer(t)
+	id := seedVenue(t, pool, "Zz disabled", nil, nil)
+	disableVenue(t, pool, id)
+	code, b := do(http.MethodPost, "/admin/workshops", fmt.Sprintf(`{"title":"zz-%d","venue_id":%d}`, testdb.Unique(), id))
+	if code != http.StatusBadRequest || !strings.Contains(string(b), venueDisabledMessage) {
+		t.Errorf("status = %d (%s)", code, b)
+	}
+	code, b = do(http.MethodPost, "/admin/workshops", fmt.Sprintf(`{"title":"zz-%d","venue_id":-1}`, testdb.Unique()))
+	if code != http.StatusBadRequest || !strings.Contains(string(b), venueNotFoundMessage) {
+		t.Errorf("unknown status = %d (%s)", code, b)
+	}
+}
+
+func TestAdminWorkshops_CreateDefaultUnsetConflicts(t *testing.T) {
+	pool, do := workshopEventTypeServer(t)
+	removeDefaultVenueSetting(t, pool)
+	code, b := do(http.MethodPost, "/admin/workshops", fmt.Sprintf(`{"title":"zz-%d"}`, testdb.Unique()))
+	if code != http.StatusConflict || !strings.Contains(string(b), "no default venue is set") {
+		t.Errorf("status = %d (%s)", code, b)
+	}
+	// An explicit choice still works without a default.
+	row := createWorkshopVenue(t, pool, do, `,"venue_id":null`)
+	if row.VenueID != nil {
+		t.Errorf("row = %+v", row)
+	}
+}
+
+func TestAdminWorkshops_PatchAbsentVenueKeepsIt(t *testing.T) {
+	pool, do := workshopEventTypeServer(t)
+	id := seedVenue(t, pool, "Zz kept", nil, nil)
+	row := createWorkshopVenue(t, pool, do, fmt.Sprintf(`,"venue_id":%d`, id))
+	code, b := do(http.MethodPatch, fmt.Sprintf("/admin/workshops/%d", row.ID), `{"title":"Renamed"}`)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", code, b)
+	}
+	if got := decodeWorkshopVenue(t, b); got.VenueID == nil || *got.VenueID != id {
+		t.Errorf("row = %+v, want venue %d", got, id)
+	}
+}
+
+func TestAdminWorkshops_PatchNullVenueClearsIt(t *testing.T) {
+	pool, do := workshopEventTypeServer(t)
+	row := createWorkshopVenue(t, pool, do, "")
+	code, b := do(http.MethodPatch, fmt.Sprintf("/admin/workshops/%d", row.ID), `{"venue_id":null}`)
+	if code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", code, b)
+	}
+	if got := decodeWorkshopVenue(t, b); got.VenueID != nil || got.LocationName != nil {
+		t.Errorf("row = %+v", got)
+	}
+}
+
+func TestAdminWorkshops_PatchKeepsDisabledVenue(t *testing.T) {
+	pool, do := workshopEventTypeServer(t)
+	id := seedVenue(t, pool, "Zz kept disabled", nil, nil)
+	row := createWorkshopVenue(t, pool, do, fmt.Sprintf(`,"venue_id":%d`, id))
+	disableVenue(t, pool, id)
+	path := fmt.Sprintf("/admin/workshops/%d", row.ID)
+	if code, b := do(http.MethodPatch, path, `{"title":"Still editable"}`); code != http.StatusOK {
+		t.Errorf("absent venue status = %d (%s)", code, b)
+	}
+	if code, b := do(http.MethodPatch, path, fmt.Sprintf(`{"venue_id":%d}`, id)); code != http.StatusOK {
+		t.Errorf("same venue status = %d (%s)", code, b)
+	}
+	other := createWorkshopVenue(t, pool, do, `,"venue_id":null`)
+	code, b := do(http.MethodPatch, fmt.Sprintf("/admin/workshops/%d", other.ID), fmt.Sprintf(`{"venue_id":%d}`, id))
+	if code != http.StatusBadRequest || !strings.Contains(string(b), venueDisabledMessage) {
+		t.Errorf("moving to it status = %d (%s)", code, b)
+	}
+}
+
+func TestAdminWorkshops_LocationFieldsInBodyRefused(t *testing.T) {
+	pool, do := workshopEventTypeServer(t)
+	row := createWorkshopVenue(t, pool, do, "")
+	for _, field := range []string{"location_name", "location_address", "location_note"} {
+		code, b := do(http.MethodPost, "/admin/workshops", fmt.Sprintf(`{"title":"zz-%d",%q:"x"}`, testdb.Unique(), field))
+		if code != http.StatusBadRequest {
+			t.Errorf("POST %s status = %d (%s)", field, code, b)
+		}
+		code, b = do(http.MethodPatch, fmt.Sprintf("/admin/workshops/%d", row.ID), fmt.Sprintf(`{%q:"x"}`, field))
+		if code != http.StatusBadRequest {
+			t.Errorf("PATCH %s status = %d (%s)", field, code, b)
 		}
 	}
 }

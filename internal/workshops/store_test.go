@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
+	"github.com/brennanMKE/OpenCircuitSF/internal/venues"
 )
 
 // seedInterest inserts a throwaway interests row for workshop_interests
@@ -715,4 +716,262 @@ func TestListVisibleKeepsDisabledTypeListings(t *testing.T) {
 		}
 	}
 	t.Errorf("listing %d missing from upcoming", w.ID)
+}
+
+// ── venues (#0617) ───────────────────────────────────────────────────────────
+
+func venueStrp(s string) *string { return &s }
+
+func seedVenue(t *testing.T, pool *pgxpool.Pool, enabled bool) venues.Venue {
+	t.Helper()
+	ctx := context.Background()
+	store := venues.NewStore(pool)
+	v, err := store.Create(ctx, venues.CreateInput{Name: fmt.Sprintf("Zz venue %d", testdb.Unique()), Address: venueStrp("1 Test St"), Note: venueStrp("Test note"), SortOrder: 900})
+	if err != nil {
+		t.Fatalf("seed venue: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `UPDATE workshops SET venue_id = NULL WHERE venue_id = $1`, v.ID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM venues WHERE id = $1`, v.ID)
+	})
+	if !enabled {
+		setVenueEnabled(t, pool, v.ID, false)
+		v.Enabled = false
+	}
+	return v
+}
+
+func setVenueEnabled(t *testing.T, pool *pgxpool.Pool, id int64, enabled bool) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `UPDATE venues SET enabled = $2 WHERE id = $1`, id, enabled); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func seededDefaultVenue(t *testing.T, pool *pgxpool.Pool) int64 {
+	t.Helper()
+	var id int64
+	if err := pool.QueryRow(context.Background(), `SELECT id FROM venues WHERE name = 'Sequoia Fabrica' ORDER BY id LIMIT 1`).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func restoreDefaultVenue(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `INSERT INTO settings (key, value, updated_at)
+			SELECT 'default_venue_id', id::text, now() FROM venues WHERE name = 'Sequoia Fabrica'
+			ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`)
+	})
+}
+
+func createWithVenue(t *testing.T, store *Store, venueID *int64) Workshop {
+	t.Helper()
+	w, err := store.Create(context.Background(), CreateInput{Title: uniqueTitle(t), VenueID: venueID})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() { _, _ = store.pool.Exec(context.Background(), `DELETE FROM workshops WHERE id = $1`, w.ID) })
+	return w
+}
+
+func TestCreateZeroValueHasNoVenue(t *testing.T) {
+	store := NewStore(testPool(t))
+	w := createWithVenue(t, store, nil)
+	if w.VenueID != nil || w.LocationName != nil || w.LocationAddress != nil || w.LocationNote != nil {
+		t.Errorf("venue=%v name=%v address=%v note=%v, want all nil", w.VenueID, w.LocationName, w.LocationAddress, w.LocationNote)
+	}
+}
+
+func TestCreateWithDefaultVenue(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	w, err := store.Create(context.Background(), CreateInput{Title: uniqueTitle(t), DefaultVenue: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Delete(context.Background(), w.ID) })
+	if w.VenueID == nil || *w.VenueID != seededDefaultVenue(t, pool) || w.LocationName == nil || *w.LocationName != "Sequoia Fabrica" {
+		t.Errorf("venue=%v name=%v", w.VenueID, w.LocationName)
+	}
+}
+
+func TestCreateDefaultVenueUnsetIsNamed(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	restoreDefaultVenue(t, pool)
+	if _, err := pool.Exec(ctx, `DELETE FROM settings WHERE key = 'default_venue_id'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(ctx, CreateInput{Title: uniqueTitle(t), DefaultVenue: true}); !errors.Is(err, ErrDefaultVenueUnset) {
+		t.Errorf("missing setting err = %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO settings (key, value, updated_at) VALUES ('default_venue_id', '-1', now())`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(ctx, CreateInput{Title: uniqueTitle(t), DefaultVenue: true}); !errors.Is(err, ErrDefaultVenueUnset) {
+		t.Errorf("setting naming no row err = %v", err)
+	}
+	disabled := seedVenue(t, pool, false)
+	if _, err := pool.Exec(ctx, `UPDATE settings SET value = $1 WHERE key = 'default_venue_id'`, strconv.FormatInt(disabled.ID, 10)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(ctx, CreateInput{Title: uniqueTitle(t), DefaultVenue: true}); !errors.Is(err, ErrDefaultVenueUnset) {
+		t.Errorf("setting naming a disabled row err = %v", err)
+	}
+}
+
+func TestCreateRefusesDisabledVenue(t *testing.T) {
+	pool := testPool(t)
+	v := seedVenue(t, pool, false)
+	if _, err := NewStore(pool).Create(context.Background(), CreateInput{Title: uniqueTitle(t), VenueID: &v.ID}); !errors.Is(err, ErrVenueDisabled) {
+		t.Errorf("err = %v, want ErrVenueDisabled", err)
+	}
+}
+
+func TestCreateRefusesUnknownVenue(t *testing.T) {
+	missing := int64(-1)
+	if _, err := NewStore(testPool(t)).Create(context.Background(), CreateInput{Title: uniqueTitle(t), VenueID: &missing}); !errors.Is(err, ErrVenueNotFound) {
+		t.Errorf("err = %v, want ErrVenueNotFound", err)
+	}
+}
+
+func TestUpdateKeepsADisabledVenue(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	v := seedVenue(t, pool, true)
+	w := createWithVenue(t, store, &v.ID)
+	setVenueEnabled(t, pool, v.ID, false)
+	got, err := store.Update(context.Background(), w.ID, UpdateInput{Title: "Kept", Status: StatusDraft, VenueID: &v.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.VenueID == nil || *got.VenueID != v.ID || got.Title != "Kept" {
+		t.Errorf("updated = %+v", got)
+	}
+}
+
+func TestUpdateRefusesMovingToADisabledVenue(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	v := seedVenue(t, pool, false)
+	w := createWithVenue(t, store, nil)
+	if _, err := store.Update(context.Background(), w.ID, UpdateInput{Title: w.Title, Status: StatusDraft, VenueID: &v.ID}); !errors.Is(err, ErrVenueDisabled) {
+		t.Errorf("err = %v, want ErrVenueDisabled", err)
+	}
+	missing := int64(-1)
+	if _, err := store.Update(context.Background(), w.ID, UpdateInput{Title: w.Title, Status: StatusDraft, VenueID: &missing}); !errors.Is(err, ErrVenueNotFound) {
+		t.Errorf("err = %v, want ErrVenueNotFound", err)
+	}
+}
+
+func TestUpdateClearsVenue(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	v := seedVenue(t, pool, true)
+	w := createWithVenue(t, store, &v.ID)
+	got, err := store.Update(context.Background(), w.ID, UpdateInput{Title: w.Title, Status: StatusDraft})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.VenueID != nil || got.LocationName != nil {
+		t.Errorf("venue=%v name=%v, want nil", got.VenueID, got.LocationName)
+	}
+}
+
+func TestReadsLocationFromVenue(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	v := seedVenue(t, pool, true)
+	w := createWithVenue(t, store, &v.ID)
+	got, err := store.GetByID(context.Background(), w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LocationName == nil || *got.LocationName != v.Name || *got.LocationAddress != "1 Test St" || *got.LocationNote != "Test note" {
+		t.Errorf("name=%v address=%v note=%v", got.LocationName, got.LocationAddress, got.LocationNote)
+	}
+}
+
+// TestWorkshopReadsIgnoreRetiredLocationColumns proves one source of truth while
+// the three retired text columns still exist: reads come from the venue, and a
+// write leaves the text as it found it. The follow-up that drops them deletes
+// this test.
+func TestWorkshopReadsIgnoreRetiredLocationColumns(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	v := seedVenue(t, pool, true)
+	w := createWithVenue(t, store, &v.ID)
+	if _, err := pool.Exec(ctx, `UPDATE workshops SET location_name = 'SENTINEL', location_address = 'SENTINEL', location_note = 'SENTINEL' WHERE id = $1`, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetByID(ctx, w.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *got.LocationName != v.Name || *got.LocationAddress != "1 Test St" || *got.LocationNote != "Test note" {
+		t.Errorf("read name=%v address=%v note=%v", *got.LocationName, *got.LocationAddress, *got.LocationNote)
+	}
+	if _, err := store.Update(ctx, w.ID, UpdateInput{Title: "Edited", Status: StatusDraft}); err != nil {
+		t.Fatal(err)
+	}
+	var name, address, note string
+	if err := pool.QueryRow(ctx, `SELECT location_name, location_address, location_note FROM workshops WHERE id = $1`, w.ID).Scan(&name, &address, &note); err != nil {
+		t.Fatal(err)
+	}
+	if name != "SENTINEL" || address != "SENTINEL" || note != "SENTINEL" {
+		t.Errorf("text after update = %q %q %q, want the sentinel", name, address, note)
+	}
+}
+
+// TestCreateDefaultVenueRacingDisable moves the default away from x and disables
+// x while a listing is created on the default. Create holds the setting's lock
+// from reading it until it commits, so it must never see a disabled default.
+func TestCreateDefaultVenueRacingDisable(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	venueStore := venues.NewStore(pool)
+	ctx := context.Background()
+	restoreDefaultVenue(t, pool)
+	fallback := seededDefaultVenue(t, pool)
+	x := seedVenue(t, pool, true)
+	in := venues.UpdateInput{Name: x.Name, Address: x.Address, Note: x.Note, SortOrder: x.SortOrder}
+	for round := 0; round < 20; round++ {
+		setVenueEnabled(t, pool, x.ID, true)
+		if err := venueStore.SetDefault(ctx, x.ID); err != nil {
+			t.Fatal(err)
+		}
+		start := make(chan struct{})
+		created := make(chan error, 1)
+		var w Workshop
+		go func() {
+			<-start
+			var err error
+			w, err = store.Create(ctx, CreateInput{Title: uniqueTitle(t), DefaultVenue: true})
+			created <- err
+		}()
+		moved := make(chan error, 1)
+		go func() {
+			<-start
+			if err := venueStore.SetDefault(ctx, fallback); err != nil {
+				moved <- err
+				return
+			}
+			_, err := venueStore.Update(ctx, x.ID, in)
+			moved <- err
+		}()
+		close(start)
+		if err := <-created; err != nil {
+			t.Errorf("round %d: Create: %v", round, err)
+		} else {
+			id := w.ID
+			t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM workshops WHERE id = $1`, id) })
+		}
+		if err := <-moved; err != nil {
+			t.Errorf("round %d: move and disable: %v", round, err)
+		}
+	}
 }

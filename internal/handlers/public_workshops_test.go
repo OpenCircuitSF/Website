@@ -551,3 +551,69 @@ func TestPublicWorkshops_DisabledTypeStaysVisible(t *testing.T) {
 	}
 	t.Errorf("%s missing from list", w.Slug)
 }
+
+// ── venues (#0617) ───────────────────────────────────────────────────────────
+
+func publishedWorkshopAtVenue(t *testing.T, pool *pgxpool.Pool, venueID int64) workshops.Workshop {
+	t.Helper()
+	store := workshops.NewStore(pool)
+	ctx := context.Background()
+	w, err := store.Create(ctx, workshops.CreateInput{Title: uniquePublicWorkshopTitle(t), VenueID: &venueID})
+	if err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	cleanupPublicWorkshop(t, pool, w.ID)
+	w, err = store.Update(ctx, w.ID, workshops.UpdateInput{Title: w.Title, Status: workshops.StatusPublished, VenueID: &venueID})
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	return w
+}
+
+func getPublicWorkshop(t *testing.T, pool *pgxpool.Pool, slug string) (int, map[string]any) {
+	t.Helper()
+	srv := httptest.NewServer(publicWorkshopsMux(pool))
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/api/workshops/" + slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	return resp.StatusCode, out
+}
+
+func TestPublicWorkshop_LocationComesFromVenue(t *testing.T) {
+	pool := interestsTestPool(t)
+	address, note := "1 Venue St", "Side door"
+	id := seedVenue(t, pool, "Zz public venue", &address, &note)
+	w := publishedWorkshopAtVenue(t, pool, id)
+	code, body := getPublicWorkshop(t, pool, w.Slug)
+	if code != http.StatusOK || body["location_name"] != "Zz public venue" || body["location_address"] != address || body["location_note"] != note {
+		t.Errorf("status = %d, body = %v", code, body)
+	}
+}
+
+func TestPublicWorkshop_DisabledVenueStaysVisible(t *testing.T) {
+	pool := interestsTestPool(t)
+	id := seedVenue(t, pool, "Zz public disabled", nil, nil)
+	w := publishedWorkshopAtVenue(t, pool, id)
+	disableVenue(t, pool, id)
+	code, body := getPublicWorkshop(t, pool, w.Slug)
+	if code != http.StatusOK || body["location_name"] != "Zz public disabled" {
+		t.Errorf("status = %d, body = %v", code, body)
+	}
+}
+
+func TestPublicWorkshop_NoVenueFieldOnTheWire(t *testing.T) {
+	pool := interestsTestPool(t)
+	id := seedVenue(t, pool, "Zz public wire", nil, nil)
+	w := publishedWorkshopAtVenue(t, pool, id)
+	_, body := getPublicWorkshop(t, pool, w.Slug)
+	if _, ok := body["venue_id"]; ok {
+		t.Errorf("public body carries venue_id: %v", body)
+	}
+}

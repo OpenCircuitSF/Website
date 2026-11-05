@@ -86,17 +86,16 @@ func TestAdminWorkshopAnnounce_PrefillAndLink(t *testing.T) {
 	locationNote := "Enter through the side door"
 	signupURL := "https://example.com/rsvp"
 
+	venueID := seedVenue(t, pool, locationName, &locationAddress, &locationNote)
 	wkStore := workshops.NewStore(pool)
 	wk, err := wkStore.Create(context.Background(), workshops.CreateInput{
-		Title:           uniqueAdminWorkshopTitle(t),
-		Summary:         &summary,
-		StartsAt:        &starts,
-		EndsAt:          &ends,
-		LocationName:    &locationName,
-		LocationAddress: &locationAddress,
-		LocationNote:    &locationNote,
-		SignupURL:       &signupURL,
-		InterestIDs:     []int64{interest.ID},
+		Title:       uniqueAdminWorkshopTitle(t),
+		Summary:     &summary,
+		StartsAt:    &starts,
+		EndsAt:      &ends,
+		VenueID:     &venueID,
+		SignupURL:   &signupURL,
+		InterestIDs: []int64{interest.ID},
 	})
 	if err != nil {
 		t.Fatalf("seed workshop: %v", err)

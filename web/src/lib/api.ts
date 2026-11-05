@@ -10,6 +10,7 @@ import type {
   AdminUser,
   Setting,
   EventType,
+  Venue,
   Interest,
   CrtCommand,
   OutreachConnections,
@@ -461,6 +462,44 @@ export function updateEventType(
 /** DELETE /admin/event-types/{id}: refused (409) when in use or the default. */
 export function deleteEventType(id: number): Promise<{ message: string }> {
   return apiDelete<{ message: string }>(`/admin/event-types/${id}`);
+}
+
+/** GET /admin/venues: every venue, with a per-venue listing count (#0617). */
+export function listVenues(): Promise<{ venues: Venue[] }> {
+  return apiGet<{ venues: Venue[] }>('/admin/venues');
+}
+
+/** POST /admin/venues. */
+export function createVenue(fields: {
+  name: string;
+  address: string;
+  note: string;
+  sort_order: number;
+}): Promise<Venue> {
+  return apiPost<Venue>('/admin/venues', fields);
+}
+
+/**
+ * PATCH /admin/venues/{id}. A blank address or note clears it. `is_default: true`
+ * must be sent alone, and the server refuses it for a disabled venue.
+ */
+export function updateVenue(
+  id: number,
+  fields: {
+    name?: string;
+    address?: string;
+    note?: string;
+    sort_order?: number;
+    enabled?: boolean;
+    is_default?: true;
+  },
+): Promise<Venue> {
+  return apiPatch<Venue>(`/admin/venues/${id}`, fields);
+}
+
+/** DELETE /admin/venues/{id}: refused (409) when in use or the default. */
+export function deleteVenue(id: number): Promise<{ message: string }> {
+  return apiDelete<{ message: string }>(`/admin/venues/${id}`);
 }
 
 // ── Admin: CRT session commands (#0393) ──────────────────────────────────────
@@ -1217,9 +1256,8 @@ export interface CreateWorkshopFields {
   body_md?: string;
   starts_at?: string;
   ends_at?: string;
-  location_name?: string;
-  location_address?: string;
-  location_note?: string;
+  /** Absent means the default venue on create and unchanged on patch; null means no location (#0617). */
+  venue_id?: number | null;
   capacity?: number;
   signup_url?: string;
   cover_image?: string;
@@ -1246,9 +1284,8 @@ export interface PatchWorkshopFields {
   body_md?: string;
   starts_at?: string;
   ends_at?: string;
-  location_name?: string;
-  location_address?: string;
-  location_note?: string;
+  /** Absent means the default venue on create and unchanged on patch; null means no location (#0617). */
+  venue_id?: number | null;
   capacity?: number | null;
   signup_url?: string;
   cover_image?: string;

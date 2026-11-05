@@ -230,9 +230,9 @@ func outreachMuxPosting(pool *pgxpool.Pool, links shortLinker, posting outreachP
 func seedOutreachWorkshop(t *testing.T, pool *pgxpool.Pool, ws *workshops.Store, status string) workshops.Workshop {
 	t.Helper()
 	start := time.Date(2026, 12, 5, 18, 0, 0, 0, time.UTC)
-	place := "The Shop"
+	venueID := seedVenue(t, pool, "The Shop", nil, nil)
 	w, err := ws.Create(context.Background(), workshops.CreateInput{
-		Title: fmt.Sprintf("zz outreach %d", testdb.Unique()), StartsAt: &start, LocationName: &place,
+		Title: fmt.Sprintf("zz outreach %d", testdb.Unique()), StartsAt: &start, VenueID: &venueID,
 	})
 	if err != nil {
 		t.Fatalf("seed workshop: %v", err)
@@ -240,7 +240,7 @@ func seedOutreachWorkshop(t *testing.T, pool *pgxpool.Pool, ws *workshops.Store,
 	t.Cleanup(func() { _ = ws.Delete(context.Background(), w.ID) })
 	if status != "draft" {
 		w, err = ws.Update(context.Background(), w.ID, workshops.UpdateInput{
-			Title: w.Title, StartsAt: w.StartsAt, LocationName: w.LocationName, Status: status,
+			Title: w.Title, StartsAt: w.StartsAt, VenueID: w.VenueID, Status: status,
 		})
 		if err != nil {
 			t.Fatalf("set status: %v", err)
@@ -568,7 +568,7 @@ func TestAdminOutreach_PrepareRefusedForUnpublishedWorkshop(t *testing.T) {
 	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
 	o := e.start(t, w).Outreach
 	p := e.createPost(t, o.ID, "bluesky", "announce")
-	if _, err := e.ws.Update(context.Background(), w.ID, workshops.UpdateInput{Title: w.Title, StartsAt: w.StartsAt, LocationName: w.LocationName, Status: "draft"}); err != nil {
+	if _, err := e.ws.Update(context.Background(), w.ID, workshops.UpdateInput{Title: w.Title, StartsAt: w.StartsAt, VenueID: w.VenueID, Status: "draft"}); err != nil {
 		t.Fatal(err)
 	}
 	if code, _ := e.do(t, http.MethodPost, fmt.Sprintf("/admin/outreach-posts/%d/prepare", p.ID), ""); code != http.StatusConflict {
@@ -587,7 +587,7 @@ func TestAdminOutreach_RegenerateClearsStale(t *testing.T) {
 	e.do(t, http.MethodPost, fmt.Sprintf("/admin/outreach-posts/%d/prepare", p.ID), "")
 
 	later := w.StartsAt.Add(48 * time.Hour)
-	if _, err := e.ws.Update(context.Background(), w.ID, workshops.UpdateInput{Title: w.Title, StartsAt: &later, LocationName: w.LocationName, Status: "published"}); err != nil {
+	if _, err := e.ws.Update(context.Background(), w.ID, workshops.UpdateInput{Title: w.Title, StartsAt: &later, VenueID: w.VenueID, Status: "published"}); err != nil {
 		t.Fatal(err)
 	}
 	code, b := e.do(t, http.MethodGet, fmt.Sprintf("/admin/workshops/%d/outreach", w.ID), "")
@@ -756,7 +756,7 @@ func TestAdminOutreach_PanelCarriesCardFacts(t *testing.T) {
 	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
 	summary, cover := "Learn to solder.", "/media/cover.png"
 	if _, err := e.ws.Update(context.Background(), w.ID, workshops.UpdateInput{
-		Title: w.Title, StartsAt: w.StartsAt, LocationName: w.LocationName, Status: "published", Summary: &summary, CoverImage: &cover,
+		Title: w.Title, StartsAt: w.StartsAt, VenueID: w.VenueID, Status: "published", Summary: &summary, CoverImage: &cover,
 	}); err != nil {
 		t.Fatalf("update workshop: %v", err)
 	}

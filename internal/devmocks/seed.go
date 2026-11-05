@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/outreachconn"
@@ -59,22 +60,33 @@ func SeedDemo(ctx context.Context, pool *pgxpool.Pool, mediaDir, mockURL string,
 		return fmt.Errorf("devmocks: write cover: %w", err)
 	}
 	start := time.Date(now.Year(), now.Month(), now.Day()+14, 18, 30, 0, 0, time.FixedZone("PT", -7*3600)).UTC()
-	_, err := pool.Exec(ctx, `
-		INSERT INTO workshops (slug, title, summary, body_md, starts_at, ends_at, location_name, location_address,
-		                       location_note, capacity, cover_image, status, published_at)
-		VALUES ($1, 'LED Programming', $2, $3, $4, $5, 'Mission Makerspace Annex',
-		        '2145 Folsom St, San Francisco, CA (fictional demo venue)', 'Enter through the roll-up door on 17th St.',
+	// venues.name has no unique constraint, so this looks the row up by name.
+	var venueID int64
+	err := pool.QueryRow(ctx, `SELECT id FROM venues WHERE name = 'Mission Makerspace Annex' ORDER BY id LIMIT 1`).Scan(&venueID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = pool.QueryRow(ctx, `
+			INSERT INTO venues (name, address, note, sort_order)
+			VALUES ('Mission Makerspace Annex', '2145 Folsom St, San Francisco, CA (fictional demo venue)',
+			        'Enter through the roll-up door on 17th St.', 100)
+			RETURNING id`).Scan(&venueID)
+	}
+	if err != nil {
+		return fmt.Errorf("devmocks: seed venue: %w", err)
+	}
+	_, err = pool.Exec(ctx, `
+		INSERT INTO workshops (slug, title, summary, body_md, starts_at, ends_at, venue_id,
+		                       capacity, cover_image, status, published_at)
+		VALUES ($1, 'LED Programming', $2, $3, $4, $5, $7,
 		        12, '/media/led-programming.png', 'published', $6)
 		ON CONFLICT (slug) DO UPDATE SET title = EXCLUDED.title, summary = EXCLUDED.summary, body_md = EXCLUDED.body_md,
-		  starts_at = EXCLUDED.starts_at, ends_at = EXCLUDED.ends_at, location_name = EXCLUDED.location_name,
-		  location_address = EXCLUDED.location_address, location_note = EXCLUDED.location_note,
+		  starts_at = EXCLUDED.starts_at, ends_at = EXCLUDED.ends_at, venue_id = EXCLUDED.venue_id,
 		  capacity = EXCLUDED.capacity, cover_image = EXCLUDED.cover_image, status = 'published', updated_at = now()`,
 		DemoSlug,
 		"Wire up an LED strip and make it dance: a hands-on evening of microcontroller programming for complete beginners.",
 		"## Make light do what you tell it\n\nBring a laptop. We provide the boards, the LED strips and the snacks. "+
 			"By the end of the evening your strip will chase, pulse and react to a button press.\n\n"+
 			"No electronics experience needed.\n",
-		start, start.Add(2*time.Hour), now.UTC())
+		start, start.Add(2*time.Hour), now.UTC(), venueID)
 	if err != nil {
 		return fmt.Errorf("devmocks: seed workshop: %w", err)
 	}

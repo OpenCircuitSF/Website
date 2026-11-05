@@ -147,6 +147,7 @@
   import Campaigns from './admin/Campaigns.svelte';
   import Workshops from './admin/Workshops.svelte';
   import EventTypes from './admin/EventTypes.svelte';
+  import Venues from './admin/Venues.svelte';
   import Outreach from './admin/Outreach.svelte';
   import Dashboard from './admin/Dashboard.svelte';
   import Pending from './admin/Pending.svelte';
@@ -2535,6 +2536,9 @@
       />
     {/if}
 
+    {#if adminRoute.section === 'venues'}
+      <Venues />
+    {/if}
     {#if adminRoute.section === 'event-types'}
       <EventTypes />
     {/if}

@@ -147,7 +147,7 @@ func TestMountAndServe_SIGTERMReleasesInFlightClaim(t *testing.T) {
 		// the time this test runs and each mountAndServe call only ever
 		// shuts down its own listener/handler.
 		errCh <- mountAndServe(cfg, pool,
-			nil, nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised */
+			nil, nil, nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised */
 			nil, /* adminSubscribersH: not exercised */
 			nil, /* adminImportsH: not exercised */
 			nil, /* adminPendingH: not exercised */

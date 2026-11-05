@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -21,6 +22,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/seo"
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
+	"github.com/brennanMKE/OpenCircuitSF/internal/venues"
 	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
 )
 
@@ -152,7 +154,7 @@ func TestMountAndServe_WorkshopMutationInvalidatesSharedSEOSite(t *testing.T) {
 	ready := make(chan struct{})
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
-			nil, nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised by this test */
+			nil, nil, nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised by this test */
 			nil, /* adminSubscribersH: not exercised by this test */
 			nil, /* adminImportsH: not exercised */
 			nil, /* adminPendingH: not exercised by this test */
@@ -436,7 +438,7 @@ func TestMountAndServe_CampaignArchiveMutationInvalidatesSharedSEOSite(t *testin
 	ready := make(chan struct{})
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
-			nil, nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised by this test */
+			nil, nil, nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised by this test */
 			nil, /* adminSubscribersH: not exercised by this test */
 			nil, /* adminImportsH: not exercised */
 			nil, /* adminPendingH: not exercised by this test */
@@ -630,6 +632,7 @@ func seoWiringServer(t *testing.T) (string, *http.Client, *workshops.Store, *eve
 	}
 	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, site, mailing.NewCampaignStore(pool), auditLogger, cfg.BaseURL)
 	adminEventTypesH := handlers.NewAdminEventTypesHandler(typesStore, auditLogger, site)
+	adminVenuesH := handlers.NewAdminVenuesHandler(venues.NewStore(pool), auditLogger, site)
 
 	requireSession := middleware.RequireSession(auth.NewStore(pool))
 	requireAdmin := func(next http.Handler) http.Handler {
@@ -643,7 +646,7 @@ func seoWiringServer(t *testing.T) (string, *http.Client, *workshops.Store, *eve
 	ready := make(chan struct{})
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
-			nil, nil, nil, nil, nil, nil, adminEventTypesH,
+			nil, nil, nil, nil, nil, nil, adminEventTypesH, adminVenuesH,
 			nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 			adminWorkshopsH,
 			nil, nil, nil, nil, nil,
@@ -724,6 +727,63 @@ func TestMountAndServe_EventTypeRenameInvalidatesSharedSEOSite(t *testing.T) {
 	body := get("/events", http.StatusOK)
 	if !strings.Contains(body, "Zz After") || strings.Contains(body, "Zz Before") {
 		t.Fatalf("/events did not pick up the rename:\n%s", body)
+	}
+}
+
+// adminSend sends one admin request and returns the body, failing on any status
+// other than want.
+func adminSend(t *testing.T, client *http.Client, cookie *http.Cookie, method, url, body string, want int) []byte {
+	t.Helper()
+	req, err := http.NewRequest(method, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("build %s: %v", method, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, url, err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != want {
+		t.Fatalf("%s %s: status=%d body=%s", method, url, resp.StatusCode, respBody)
+	}
+	return respBody
+}
+
+// TestVenueEditInvalidatesServerRenderedPage is #0617's criterion that a corrected
+// address reaches the cached server-rendered pages.
+func TestVenueEditInvalidatesServerRenderedPage(t *testing.T) {
+	baseURL, client, workshopsStore, _, cookie, get := seoWiringServer(t)
+	ctx := context.Background()
+
+	var venue struct {
+		ID int64 `json:"id"`
+	}
+	raw := adminSend(t, client, cookie, http.MethodPost, baseURL+"/admin/venues", `{"name":"Zz Venue","address":"1 Before St"}`, http.StatusCreated)
+	if err := json.Unmarshal(raw, &venue); err != nil {
+		t.Fatalf("decode venue: %v", err)
+	}
+	created, err := workshopsStore.Create(ctx, workshops.CreateInput{Title: fmt.Sprintf("Venue %d", testdb.Unique()), VenueID: &venue.ID})
+	if err != nil {
+		t.Fatalf("seed listing: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = workshopsStore.Delete(context.Background(), created.ID)
+		adminSend(t, client, cookie, http.MethodDelete, fmt.Sprintf("%s/admin/venues/%d", baseURL, venue.ID), "", http.StatusOK)
+	})
+	adminPatch(t, client, cookie, fmt.Sprintf("%s/admin/workshops/%d", baseURL, created.ID), `{"status":"published"}`)
+
+	path := "/events/" + created.Slug
+	// Primes the cache, so a stale render is what a missed invalidation shows.
+	if body := get(path, http.StatusOK); !strings.Contains(body, "1 Before St") {
+		t.Fatalf("%s missing the address before the edit:\n%s", path, body)
+	}
+	adminPatch(t, client, cookie, fmt.Sprintf("%s/admin/venues/%d", baseURL, venue.ID), `{"address":"2 After St"}`)
+	body := get(path, http.StatusOK)
+	if !strings.Contains(body, "2 After St") || strings.Contains(body, "1 Before St") {
+		t.Fatalf("%s did not pick up the edit:\n%s", path, body)
 	}
 }
 

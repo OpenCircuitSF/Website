@@ -56,6 +56,7 @@ vi.mock('../lib/api', () => ({
   listAudit: (...args: unknown[]) => listAudit(...args),
   listInterests: () => listInterests(),
   listEventTypes: vi.fn(() => Promise.resolve({ event_types: [] })),
+  listVenues: vi.fn(() => Promise.resolve({ venues: [] })),
   createInterest: vi.fn(),
   updateInterest: vi.fn(),
   deleteInterest: vi.fn(),

@@ -835,6 +835,7 @@ const KNOWN_LOADING_PLACEHOLDERS: AllowlistEntry[] = [
   { file: 'web/src/views/admin/Pending.svelte', match: 'Loading pending signups…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
   { file: 'web/src/views/admin/CrtCommands.svelte', match: 'Loading CRT commands…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
   { file: 'web/src/views/admin/EventTypes.svelte', match: 'Loading event types…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
+  { file: 'web/src/views/admin/Venues.svelte', match: 'Loading venues…', reason: KNOWN_LOADING_PLACEHOLDER_REASON },
 ];
 
 /** #0286: an in-branch role="status"/aria-live site with dynamic text, no

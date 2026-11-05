@@ -34,6 +34,7 @@ import type { AdminWorkshop } from './types';
 function workshop(fields: Partial<AdminWorkshop> = {}): AdminWorkshop {
   return {
     event_type_id: 1,
+    venue_id: null,
     event_type: { slug: 'workshop', name: 'Workshop', sort_order: 10 },
     id: 1,
     slug: 'soldering-101',
@@ -424,9 +425,7 @@ describe('validateWorkshopForm', () => {
       body_md: '',
       starts_at: '',
       ends_at: '',
-      location_name: '',
-      location_address: '',
-      location_note: '',
+      venue_id: null,
       // #0146: null, never undefined -- see ValidatedWorkshopFields's
       // capacity comment for why capacity's clear sentinel differs from
       // the other optional fields' ''.
@@ -451,9 +450,6 @@ describe('validateWorkshopForm', () => {
       'body_md',
       'starts_at',
       'ends_at',
-      'location_name',
-      'location_address',
-      'location_note',
       'signup_url',
       'cover_image',
     ]) {
@@ -649,9 +645,7 @@ describe('workshopToFormFields / blankWorkshopFormFields', () => {
       bodyMd: '',
       startsAtLocal: '',
       endsAtLocal: '',
-      locationName: '',
-      locationAddress: '',
-      locationNote: '',
+      venueId: null,
       capacity: '',
       signupUrl: '',
       coverImage: '',
@@ -676,6 +670,31 @@ describe('workshopToFormFields / blankWorkshopFormFields', () => {
   });
 });
 
+describe('venue_id (#0617)', () => {
+  it('sends venue_id null for No location', () => {
+    const result = validateWorkshopForm(blankFields({ title: 'X', venueId: null }));
+    if ('error' in result) throw new Error('unexpected validation error');
+    expect(JSON.parse(JSON.stringify(result))).toHaveProperty('venue_id', null);
+  });
+
+  it('sends the chosen venue and reads it back from a workshop', () => {
+    const result = validateWorkshopForm(blankFields({ title: 'X', venueId: 4 }));
+    if ('error' in result) throw new Error('unexpected validation error');
+    expect(result.venue_id).toBe(4);
+    expect(workshopToFormFields(workshop({ venue_id: 4 })).venueId).toBe(4);
+  });
+
+  it('clones a listing with no venue as explicit null', () => {
+    const out = cloneWorkshopFields(
+      workshop({ venue_id: null }),
+      toDatetimeLocalValue('2026-04-05T18:00:00Z'),
+      '',
+    );
+    if ('error' in out) throw new Error('unexpected validation error');
+    expect(JSON.parse(JSON.stringify(out))).toHaveProperty('venue_id', null);
+  });
+});
+
 describe('cloneWorkshopFields', () => {
   const source = workshop({
     id: 7,
@@ -686,9 +705,7 @@ describe('cloneWorkshopFields', () => {
     body_md: '# Bring safety glasses',
     starts_at: '2026-03-01T18:00:00Z',
     ends_at: '2026-03-01T20:30:00Z',
-    location_name: 'Noisebridge',
-    location_address: '272 Capp St',
-    location_note: 'Ring the bell',
+    venue_id: 4,
     capacity: 12,
     signup_url: 'https://example.com/signup',
     cover_image: '/media/soldering.jpg',
@@ -704,9 +721,7 @@ describe('cloneWorkshopFields', () => {
       body_md: '# Bring safety glasses',
       starts_at: '2026-04-05T18:00:00Z',
       ends_at: '2026-04-05T20:30:00Z',
-      location_name: 'Noisebridge',
-      location_address: '272 Capp St',
-      location_note: 'Ring the bell',
+      venue_id: 4,
       capacity: 12,
       signup_url: 'https://example.com/signup',
       cover_image: '/media/soldering.jpg',

@@ -384,6 +384,7 @@ every size, a real `favicon.svg`, and `currentColor` tinting without the mask.
 | `/admin/interests` | CRUD the interest taxonomy, reorder, activate/deactivate |
 | `/admin/campaigns` | List, compose, preview, test-send, target, schedule, send, per-campaign stats |
 | `/admin/event-types` | CRUD event types, reorder, enable/disable, choose the default |
+| `/admin/venues` | CRUD venues, reorder, enable/disable, choose the default |
 | `/admin/workshops` | CRUD workshops, publish/unpublish, "announce to list" shortcut |
 | `/admin/users` | Staff user management (copied from ShortLinks) |
 | `/admin/settings` | Registration toggle, send rate, from-addresses, physical mailing address |
@@ -718,6 +719,20 @@ BEGIN
     RETURN resolved;
 END $$;
 
+-- Places a listing can happen (#0617). The default is settings.default_venue_id.
+-- Name is not unique: a venue that moves is disabled and re-added under its name.
+CREATE TABLE venues (
+    id         BIGSERIAL PRIMARY KEY,
+    name       TEXT NOT NULL,
+    address    TEXT,
+    note       TEXT,
+    enabled    BOOLEAN NOT NULL DEFAULT TRUE,  -- false: no new listings here
+    sort_order INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT venues_name_not_blank CHECK (btrim(name) <> '')
+);
+
 CREATE TABLE workshops (
     id               BIGSERIAL PRIMARY KEY,
     slug             TEXT UNIQUE NOT NULL,
@@ -726,9 +741,9 @@ CREATE TABLE workshops (
     body_md          TEXT,
     starts_at        TIMESTAMPTZ,
     ends_at          TIMESTAMPTZ,
-    location_name    TEXT,
-    location_address TEXT,
-    location_note    TEXT,                  -- "exact address emailed to attendees"
+    location_name    TEXT,                  -- retired by #0617: unread and unwritten, venues holds this
+    location_address TEXT,                  -- retired by #0617: unread and unwritten, venues holds this
+    location_note    TEXT,                  -- retired by #0617: unread and unwritten, venues holds this
     capacity         INT,                   -- display only in v1
     signup_url       TEXT,                  -- external RSVP link if used
     cover_image      TEXT,                  -- path under /media
@@ -736,10 +751,12 @@ CREATE TABLE workshops (
     published_at     TIMESTAMPTZ,
     event_type_id    BIGINT NOT NULL DEFAULT event_types_default_id()
                      REFERENCES event_types(id) ON DELETE RESTRICT,
+    venue_id         BIGINT REFERENCES venues(id) ON DELETE RESTRICT,  -- NULL: no location
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX idx_workshops_event_type ON workshops (event_type_id);
+CREATE INDEX idx_workshops_venue ON workshops (venue_id);
 -- Published AND canceled workshops are both publicly visible (#0135: the
 -- index and the detail route must apply the same visibility rule, or a
 -- canceled workshop silently vanishes from the index while its direct link
@@ -1551,6 +1568,7 @@ All of `/auth/*`, `/account/credentials*`, `/admin/users*`, `/admin/settings`,
 | `PATCH` | `/admin/campaigns/{id}/archive` | Publish or withhold the archive page |
 | `GET` | `/admin/campaigns/{id}/stats` | Sent / failed / bounced / complained |
 | `GET`/`POST`/`PATCH`/`DELETE` | `/admin/event-types[/{id}]` | Event type CRUD; `PATCH` with `is_default: true` alone moves the default |
+| `GET`/`POST`/`PATCH`/`DELETE` | `/admin/venues[/{id}]` | Venue CRUD; `PATCH` with `is_default: true` alone moves the default |
 | `GET`/`POST`/`PATCH`/`DELETE` | `/admin/workshops[/{id}]` | Workshop CRUD |
 | `POST` | `/admin/workshops/{id}/announce` | Create a draft campaign pre-filled from the workshop |
 | `GET` | `/api/events` | SSE — live send progress on the campaign screen |
@@ -1625,9 +1643,10 @@ Runtime-editable values live in the `settings` table, not the environment:
 `registrations_enabled`, `physical_address`, `max_send_rate`,
 `signup_enabled`, `default_from_name`, `soft_bounce_threshold_count`,
 `send_health_min_sample`, `send_health_bounce_pct`,
-`send_health_complaint_pct`, `archive_enabled`, `default_event_type_id`.
-`default_event_type_id` is changed only through the Event types screen;
-`PATCH /admin/settings` refuses it.
+`send_health_complaint_pct`, `archive_enabled`, `default_event_type_id`,
+`default_venue_id`. `default_event_type_id` is changed only through the Event
+types screen and `default_venue_id` only through the Venues screen;
+`PATCH /admin/settings` refuses both.
 
 `soft_bounce_threshold_window_days` is **retired** by §6.9's move from a rolling
 window to a consecutive streak; the Phase 8 migration deletes its row.

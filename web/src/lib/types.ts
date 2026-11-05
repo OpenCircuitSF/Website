@@ -503,6 +503,20 @@ export interface EventType {
   created_at: string;
 }
 
+/** One row of GET /admin/venues (#0617), matching venueView. */
+export interface Venue {
+  id: number;
+  name: string;
+  address: string | null;
+  note: string | null;
+  enabled: boolean;
+  is_default: boolean;
+  sort_order: number;
+  workshop_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
 /** How a listing names its type on the wire (#0613). */
 export interface EventTypeRef {
   slug: string;
@@ -607,6 +621,8 @@ export interface ArchiveDetail {
 export interface AdminWorkshop {
   event_type_id: number;
   event_type: EventTypeRef;
+  /** Null means no location. The location_* fields are read from this venue (#0617). */
+  venue_id: number | null;
   id: number;
   slug: string;
   title: string;

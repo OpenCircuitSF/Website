@@ -242,6 +242,14 @@ describe('admin nav groups (#0599)', () => {
 });
 
 describe('event types section (#0613)', () => {
+  it('routes #/venues and lists it after event types in the Events group', () => {
+    expect(parseAdminHash('#/venues')?.section).toBe('venues');
+    const group = ADMIN_NAV_GROUPS.find((g) => g.label === 'Events');
+    const sections = group?.sections ?? [];
+    expect(sections.indexOf('venues')).toBe(sections.indexOf('event-types') + 1);
+    expect(ADMIN_SECTION_LABELS.venues).toBe('Venues');
+  });
+
   it('routes #/event-types and lists it in the Workshops group', () => {
     expect(parseAdminHash('#/event-types')?.section).toBe('event-types');
     const group = ADMIN_NAV_GROUPS.find((g) => g.label === 'Events');

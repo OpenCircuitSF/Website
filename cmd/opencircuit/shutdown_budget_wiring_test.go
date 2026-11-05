@@ -219,7 +219,7 @@ func TestMountAndServe_ShutdownAndCloseHaveIndependentBudgets(t *testing.T) {
 	ready := make(chan struct{})
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
-			nil, nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised */
+			nil, nil, nil, nil, nil, nil, nil, nil, /* adminInterestsH: not exercised */
 			nil, /* adminSubscribersH: not exercised */
 			nil, /* adminImportsH: not exercised */
 			nil, /* adminPendingH: not exercised */

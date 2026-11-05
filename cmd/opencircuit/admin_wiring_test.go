@@ -32,6 +32,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/shortlinks"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
+	"github.com/brennanMKE/OpenCircuitSF/internal/venues"
 	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
 )
 
@@ -134,6 +135,8 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	eventTypesStore := eventtypes.NewStore(pool)
 	// #0613: exercised the same way as adminInterestsH above.
 	adminEventTypesH := handlers.NewAdminEventTypesHandler(eventTypesStore, auditLogger, nil)
+	venuesStore := venues.NewStore(pool)
+	adminVenuesH := handlers.NewAdminVenuesHandler(venuesStore, auditLogger, nil)
 	subscribersStore := subscribers.NewStore(pool)
 	// #0032: exercised the same way as adminInterestsH above. manualAdd is
 	// nil (matching this test's own "subscribeH: not exercised by this test"
@@ -249,7 +252,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	ready := make(chan struct{})
 	go func() {
 		errCh <- mountAndServe(cfg, pool,
-			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminEventTypesH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, adminOutreachH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
+			authH, credsH, settingsH, adminUsersH, adminAuditH, adminInterestsH, adminEventTypesH, adminVenuesH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, adminOutreachH, eventsH, meH, nil, /* subscribeH: not exercised by this test */
 			nil, nil, nil, nil, nil, nil, nil, /* publicInterestsH, preferencesH, confirmH, unsubscribeH, publicWorkshopsH, publicListStatsH, publicCrtSessionH: not exercised by this test */
 			nil, /* publicArchiveH: not exercised by this test */
 			nil, /* sesNotifyH: not exercised by this test */
@@ -292,6 +295,14 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM event_types WHERE slug LIKE 'zz-wiring-%'`)
+	})
+	targetVenue, err := venuesStore.Create(context.Background(), venues.CreateInput{Name: "zz-wiring venue target"})
+	if err != nil {
+		t.Fatalf("seeding throwaway venue: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `UPDATE workshops SET venue_id = NULL WHERE venue_id IN (SELECT id FROM venues WHERE name = 'zz-wiring venue target')`)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM venues WHERE name = 'zz-wiring venue target'`)
 	})
 	targetInterest, err := interestsStore.Create(context.Background(), targetSlug, "Wiring guard target", nil, 0)
 	if err != nil {
@@ -420,8 +431,8 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 			return status != http.StatusUnauthorized && status != http.StatusForbidden
 		}},
 	}
-	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminEventTypesH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, adminOutreachH) {
-		path := resolveAdminRoutePath(route.path, targetUserID, targetInterest.ID, targetEventType.ID, targetSubscriber.ID, targetCampaign.ID, targetWorkshop.ID, targetCrtCommand.ID)
+	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminEventTypesH, adminVenuesH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, adminOutreachH) {
+		path := resolveAdminRoutePath(route.path, targetUserID, targetInterest.ID, targetEventType.ID, targetVenue.ID, targetSubscriber.ID, targetCampaign.ID, targetWorkshop.ID, targetCrtCommand.ID)
 		for _, c := range cases {
 			req, err := http.NewRequest(route.method, baseURL+path, nil)
 			if err != nil {
@@ -456,7 +467,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 // id; /admin/campaigns/... routes (#0041) take a campaign id, including its
 // /send and /cancel sub-routes. Routes with no {id} (e.g. /admin/settings,
 // /admin/audit, /admin/subscribers itself) pass through unchanged.
-func resolveAdminRoutePath(path string, userID, interestID, eventTypeID, subscriberID, campaignID, workshopID, crtCommandID int64) string {
+func resolveAdminRoutePath(path string, userID, interestID, eventTypeID, venueID, subscriberID, campaignID, workshopID, crtCommandID int64) string {
 	switch {
 	case strings.HasPrefix(path, "/admin/users/"):
 		return strings.Replace(path, "{id}", fmt.Sprint(userID), 1)
@@ -464,6 +475,8 @@ func resolveAdminRoutePath(path string, userID, interestID, eventTypeID, subscri
 		return strings.Replace(path, "{id}", fmt.Sprint(interestID), 1)
 	case strings.HasPrefix(path, "/admin/event-types/"):
 		return strings.Replace(path, "{id}", fmt.Sprint(eventTypeID), 1)
+	case strings.HasPrefix(path, "/admin/venues/"):
+		return strings.Replace(path, "{id}", fmt.Sprint(venueID), 1)
 	case strings.HasPrefix(path, "/admin/subscribers/"):
 		return strings.Replace(path, "{id}", fmt.Sprint(subscriberID), 1)
 	case strings.HasPrefix(path, "/admin/campaigns/"):

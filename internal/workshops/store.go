@@ -77,6 +77,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/defaults"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -131,6 +132,19 @@ var (
 	// when settings.default_event_type_id is missing or names no enabled type
 	// (#0618). It wraps the database's message, which names the key.
 	ErrDefaultEventTypeUnset = errors.New("workshops: no default event type is set")
+
+	// ErrVenueNotFound is returned by Create/Update for a venue id that does not
+	// exist (#0617).
+	ErrVenueNotFound = errors.New("workshops: venue does not exist")
+
+	// ErrVenueDisabled is returned by Create/Update for a new assignment to a
+	// disabled venue. A listing that already has the venue may keep it (#0617).
+	ErrVenueDisabled = errors.New("workshops: venue is disabled")
+
+	// ErrDefaultVenueUnset is returned by Create when CreateInput.DefaultVenue is
+	// set and settings.default_venue_id is missing or names no enabled venue
+	// (#0617).
+	ErrDefaultVenueUnset = errors.New("workshops: no default venue is set")
 
 	// errSlugAttemptsExhausted is wrapped into the error Create returns if
 	// maxSlugAttempts consecutive candidates all collide — effectively
@@ -190,9 +204,12 @@ type Workshop struct {
 	EventTypeSlug      string
 	EventTypeName      string
 	EventTypeSortOrder int
-	InterestIDs        []int64
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	// VenueID is the listing's venue, nil for no location. LocationName,
+	// LocationAddress and LocationNote are read from that venue (#0617).
+	VenueID     *int64
+	InterestIDs []int64
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 // CreateInput is the payload for Create. Status is deliberately absent —
@@ -200,20 +217,23 @@ type Workshop struct {
 // 000020), matching CampaignStore.Create's "always creates in draft"
 // convention; Update is the only path to published/canceled.
 type CreateInput struct {
-	Title           string
-	Summary         *string
-	BodyMD          *string
-	StartsAt        *time.Time
-	EndsAt          *time.Time
-	LocationName    *string
-	LocationAddress *string
-	LocationNote    *string
-	Capacity        *int
-	SignupURL       *string
-	CoverImage      *string
-	InterestIDs     []int64
+	Title       string
+	Summary     *string
+	BodyMD      *string
+	StartsAt    *time.Time
+	EndsAt      *time.Time
+	Capacity    *int
+	SignupURL   *string
+	CoverImage  *string
+	InterestIDs []int64
 	// EventTypeID nil means the current default type (#0613).
 	EventTypeID *int64
+	// VenueID is the listing's venue. With DefaultVenue false, nil means no
+	// venue, so the zero value of this struct creates a listing with no
+	// location (#0617).
+	VenueID *int64
+	// DefaultVenue ignores VenueID and uses settings.default_venue_id.
+	DefaultVenue bool
 }
 
 // UpdateInput is the payload for Update. Unlike a partial PATCH body, this
@@ -227,21 +247,22 @@ type CreateInput struct {
 // PATCH, so this is the sole transition path; see the package doc comment
 // for what each transition does to PublishedAt.
 type UpdateInput struct {
-	Title           string
-	Summary         *string
-	BodyMD          *string
-	StartsAt        *time.Time
-	EndsAt          *time.Time
-	LocationName    *string
-	LocationAddress *string
-	LocationNote    *string
-	Capacity        *int
-	SignupURL       *string
-	CoverImage      *string
-	Status          string
-	InterestIDs     []int64
+	Title       string
+	Summary     *string
+	BodyMD      *string
+	StartsAt    *time.Time
+	EndsAt      *time.Time
+	Capacity    *int
+	SignupURL   *string
+	CoverImage  *string
+	Status      string
+	InterestIDs []int64
 	// EventTypeID nil keeps the listing's current type (#0613).
 	EventTypeID *int64
+	// VenueID is fully resolved like the fields above: nil means no venue, not
+	// "keep the current one". That differs from EventTypeID, because a listing
+	// may have no venue but must have a type (#0617).
+	VenueID *int64
 }
 
 // Store is the data-access layer over workshops and workshop_interests.
@@ -255,11 +276,15 @@ func NewStore(pool *pgxpool.Pool) *Store {
 }
 
 const workshopColumns = `id, slug, title, summary, body_md, starts_at, ends_at,
-	location_name, location_address, location_note, capacity, signup_url,
+	(SELECT name FROM venues v WHERE v.id = workshops.venue_id),
+	(SELECT address FROM venues v WHERE v.id = workshops.venue_id),
+	(SELECT note FROM venues v WHERE v.id = workshops.venue_id),
+	capacity, signup_url,
 	cover_image, status, published_at, created_at, updated_at, event_type_id,
 	(SELECT slug FROM event_types et WHERE et.id = workshops.event_type_id),
 	(SELECT name FROM event_types et WHERE et.id = workshops.event_type_id),
-	(SELECT sort_order FROM event_types et WHERE et.id = workshops.event_type_id)`
+	(SELECT sort_order FROM event_types et WHERE et.id = workshops.event_type_id),
+	venue_id`
 
 func scanWorkshop(row pgx.Row) (Workshop, error) {
 	var w Workshop
@@ -268,6 +293,7 @@ func scanWorkshop(row pgx.Row) (Workshop, error) {
 		&w.LocationName, &w.LocationAddress, &w.LocationNote, &w.Capacity, &w.SignupURL,
 		&w.CoverImage, &w.Status, &w.PublishedAt, &w.CreatedAt, &w.UpdatedAt,
 		&w.EventTypeID, &w.EventTypeSlug, &w.EventTypeName, &w.EventTypeSortOrder,
+		&w.VenueID,
 	); err != nil {
 		return Workshop{}, err
 	}
@@ -628,6 +654,41 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Workshop, error) {
 		}
 	}
 
+	venueID := in.VenueID
+	if in.DefaultVenue {
+		// Setting, then venue row: the same order as internal/venues, so the two
+		// cannot deadlock.
+		id, err := defaults.Lock(ctx, tx, defaults.KeyVenue)
+		switch {
+		case errors.Is(err, defaults.ErrUnset):
+			return Workshop{}, ErrDefaultVenueUnset
+		case err != nil:
+			return Workshop{}, fmt.Errorf("workshops: reading default venue for %q: %w", title, err)
+		}
+		venueID = &id
+	}
+	if venueID != nil {
+		// FOR SHARE blocks a concurrent disable, which the foreign key's own FOR
+		// KEY SHARE would not.
+		var enabled bool
+		err := tx.QueryRow(ctx, `SELECT enabled FROM venues WHERE id = $1 FOR SHARE`, *venueID).Scan(&enabled)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			if in.DefaultVenue {
+				return Workshop{}, ErrDefaultVenueUnset
+			}
+			return Workshop{}, ErrVenueNotFound
+		case err != nil:
+			return Workshop{}, fmt.Errorf("workshops: checking venue for %q: %w", title, err)
+		}
+		if !enabled {
+			if in.DefaultVenue {
+				return Workshop{}, ErrDefaultVenueUnset
+			}
+			return Workshop{}, ErrVenueDisabled
+		}
+	}
+
 	var w Workshop
 	var insertErr error
 	for attempt := 0; attempt < maxSlugAttempts; attempt++ {
@@ -652,11 +713,11 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Workshop, error) {
 		}
 		row := sp.QueryRow(ctx,
 			`INSERT INTO workshops (slug, title, summary, body_md, starts_at, ends_at,
-				location_name, location_address, location_note, capacity, signup_url, cover_image, event_type_id)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, COALESCE($13::bigint, event_types_default_id()))
+				venue_id, capacity, signup_url, cover_image, event_type_id)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11::bigint, event_types_default_id()))
 			 RETURNING `+workshopColumns,
 			candidate, title, in.Summary, in.BodyMD, in.StartsAt, in.EndsAt,
-			in.LocationName, in.LocationAddress, in.LocationNote, in.Capacity, in.SignupURL, in.CoverImage, in.EventTypeID,
+			venueID, in.Capacity, in.SignupURL, in.CoverImage, in.EventTypeID,
 		)
 		w, insertErr = scanWorkshop(row)
 		if insertErr == nil {
@@ -739,23 +800,42 @@ func (s *Store) Update(ctx context.Context, id int64, in UpdateInput) (Workshop,
 		}
 	}
 
+	if in.VenueID != nil {
+		// Keeping a disabled venue the listing already has is allowed; moving to
+		// one is not. FOR SHARE blocks a concurrent disable.
+		var enabled, alreadyHas bool
+		err := tx.QueryRow(ctx,
+			`SELECT v.enabled, EXISTS (SELECT 1 FROM workshops w WHERE w.id = $1 AND w.venue_id = v.id)
+			   FROM venues v WHERE v.id = $2 FOR SHARE OF v`,
+			id, *in.VenueID).Scan(&enabled, &alreadyHas)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			return Workshop{}, ErrVenueNotFound
+		case err != nil:
+			return Workshop{}, fmt.Errorf("workshops: checking venue for %d: %w", id, err)
+		}
+		if !enabled && !alreadyHas {
+			return Workshop{}, ErrVenueDisabled
+		}
+	}
+
 	row := tx.QueryRow(ctx,
 		`UPDATE workshops
 		    SET title = $2, summary = $3, body_md = $4, starts_at = $5, ends_at = $6,
-		        location_name = $7, location_address = $8, location_note = $9,
-		        capacity = $10, signup_url = $11, cover_image = $12,
-		        status = $13,
+		        venue_id = $7,
+		        capacity = $8, signup_url = $9, cover_image = $10,
+		        status = $11,
 		        published_at = CASE
-		            WHEN $13 = 'published' AND status IS DISTINCT FROM 'published' THEN now()
-		            WHEN status = 'published' AND $13 = 'draft' THEN NULL
+		            WHEN $11 = 'published' AND status IS DISTINCT FROM 'published' THEN now()
+		            WHEN status = 'published' AND $11 = 'draft' THEN NULL
 		            ELSE published_at
 		        END,
-		        event_type_id = COALESCE($14::bigint, event_type_id),
+		        event_type_id = COALESCE($12::bigint, event_type_id),
 		        updated_at = now()
 		  WHERE id = $1
 		  RETURNING `+workshopColumns,
 		id, title, in.Summary, in.BodyMD, in.StartsAt, in.EndsAt,
-		in.LocationName, in.LocationAddress, in.LocationNote, in.Capacity, in.SignupURL, in.CoverImage,
+		in.VenueID, in.Capacity, in.SignupURL, in.CoverImage,
 		in.Status, in.EventTypeID,
 	)
 	updated, err := scanWorkshop(row)

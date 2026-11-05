@@ -87,6 +87,7 @@
     previewWorkshop,
     listInterests,
     listEventTypes,
+    listVenues,
     mediaUpload,
     ApiError,
   } from '../../lib/api';
@@ -115,7 +116,8 @@
   } from '../../lib/workshopAdmin';
   import { sortedInterests } from '../../lib/admin';
   import { assignableEventTypes, eventTypeOptionLabel } from '../../lib/eventTypes';
-  import type { AdminWorkshop, EventType, Interest } from '../../lib/types';
+  import { assignableVenues, venueOptionLabel } from '../../lib/venues';
+  import type { AdminWorkshop, EventType, Interest, Venue } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
   import OutreachEditorSummary from './OutreachEditorSummary.svelte';
@@ -138,10 +140,12 @@
 
   // #0613: a disabled current type stays selectable; other disabled types do not.
   let eventTypes = $state<EventType[]>([]);
+  let venues = $state<Venue[]>([]);
 
   // ── Load state ──────────────────────────────────────────────────────────
   let workshop = $state<AdminWorkshop | null>(null);
   let typeOptions = $derived(assignableEventTypes(eventTypes, workshop?.event_type_id ?? null));
+  let venueOptions = $derived(assignableVenues(venues, workshop?.venue_id ?? null));
   let loading = $state(true);
   let loadError = $state<string | null>(null);
   let taxonomyInterests = $state<Interest[]>([]);
@@ -153,9 +157,7 @@
     bodyMd: '',
     startsAtLocal: '',
     endsAtLocal: '',
-    locationName: '',
-    locationAddress: '',
-    locationNote: '',
+    venueId: null,
     capacity: '',
     signupUrl: '',
     coverImage: '',
@@ -341,13 +343,15 @@
     loading = true;
     loadError = null;
     try {
-      const [w, interestsResp, eventTypesResp] = await Promise.all([
+      const [w, interestsResp, eventTypesResp, venuesResp] = await Promise.all([
         getAdminWorkshop(workshopId),
         listInterests(),
         listEventTypes(),
+        listVenues(),
       ]);
       workshop = w;
       eventTypes = eventTypesResp.event_types;
+      venues = venuesResp.venues;
       fields = workshopToFormFields(w);
       taxonomyInterests = interestsResp.interests;
       await refreshPreview();
@@ -645,31 +649,14 @@
         />
       </div>
       <div class="field">
-        <label for="workshop-location-name">Location name</label>
-        <input
-          id="workshop-location-name"
-          type="text"
-          bind:value={fields.locationName}
-          disabled={saving}
-        />
-      </div>
-      <div class="field">
-        <label for="workshop-location-address">Location address</label>
-        <input
-          id="workshop-location-address"
-          type="text"
-          bind:value={fields.locationAddress}
-          disabled={saving}
-        />
-      </div>
-      <div class="field">
-        <label for="workshop-location-note">Location note</label>
-        <input
-          id="workshop-location-note"
-          type="text"
-          bind:value={fields.locationNote}
-          disabled={saving}
-        />
+        <label for="workshop-venue">Venue</label>
+        <select id="workshop-venue" bind:value={fields.venueId} disabled={saving}>
+          <option value={null}>No location</option>
+          {#each venueOptions as venue (venue.id)}
+            <option value={venue.id}>{venueOptionLabel(venue)}</option>
+          {/each}
+        </select>
+        <p class="text-muted">Change a venue's address or note on the <a href="#/venues">Venues</a> screen.</p>
       </div>
     </Panel>
 

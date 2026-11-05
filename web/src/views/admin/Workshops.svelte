@@ -28,7 +28,7 @@
 -->
 <script lang="ts">
   import { onMount, tick } from 'svelte';
-  import { listAdminWorkshops, listOutreach, listEventTypes, createWorkshop, ApiError } from '../../lib/api';
+  import { listAdminWorkshops, listOutreach, listEventTypes, listVenues, createWorkshop, ApiError } from '../../lib/api';
   import {
     workshopStatusLabel,
     workshopStatusBadgeClass,
@@ -37,8 +37,9 @@
     type SortDirection,
   } from '../../lib/workshopAdmin';
   import { assignableEventTypes, defaultEventTypeId, eventTypeOptionLabel } from '../../lib/eventTypes';
+  import { assignableVenues, defaultVenueId, venueOptionLabel } from '../../lib/venues';
   import { formatWorkshopDate } from '../../lib/workshops';
-  import type { AdminWorkshop, EventType, OutreachSummary } from '../../lib/types';
+  import type { AdminWorkshop, EventType, OutreachSummary, Venue } from '../../lib/types';
   import { summariesByWorkshop, outreachChip } from '../../lib/outreachList';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
@@ -81,6 +82,11 @@
   // and omits the field, so the server applies the default.
   let newTypes = $state<EventType[]>([]);
   let newEventTypeId = $state<number | null>(null);
+  let newVenues = $state<Venue[]>([]);
+  let newVenueId = $state<number | null>(null);
+  // A failed load sends no venue_id, so the server's default applies instead of
+  // the select's null silently meaning no location.
+  let newVenuesLoaded = $state(false);
   let createError = $state<string | null>(null);
   let submittingCreate = $state(false);
   let modalEl = $state<HTMLDivElement | null>(null);
@@ -160,7 +166,24 @@
     createError = null;
     newTypes = [];
     newEventTypeId = null;
+    newVenues = [];
+    newVenueId = null;
+    newVenuesLoaded = false;
     void loadNewTypes();
+    void loadNewVenues();
+  }
+
+  async function loadNewVenues(): Promise<void> {
+    try {
+      const all = (await listVenues()).venues;
+      newVenues = assignableVenues(all, null);
+      newVenueId = defaultVenueId(all);
+      newVenuesLoaded = true;
+    } catch {
+      newVenues = [];
+      newVenueId = null;
+      newVenuesLoaded = false;
+    }
   }
 
   async function loadNewTypes(): Promise<void> {
@@ -189,9 +212,11 @@
     submittingCreate = true;
     createError = null;
     try {
-      const created = await createWorkshop(
-        newEventTypeId !== null ? { title, event_type_id: newEventTypeId } : { title },
-      );
+      const created = await createWorkshop({
+        title,
+        ...(newEventTypeId !== null ? { event_type_id: newEventTypeId } : {}),
+        ...(newVenuesLoaded ? { venue_id: newVenueId } : {}),
+      });
       creating = false;
       workshops = [created, ...workshops];
       // #0527: the created workshop's editor is a real URL now.
@@ -303,6 +328,17 @@
               >
                 {#each newTypes as type (type.id)}
                   <option value={type.id}>{eventTypeOptionLabel(type)}</option>
+                {/each}
+              </select>
+            </div>
+          {/if}
+          {#if newVenuesLoaded}
+            <div class="field">
+              <label for="new-workshop-venue">Venue</label>
+              <select id="new-workshop-venue" bind:value={newVenueId} disabled={submittingCreate}>
+                <option value={null}>No location</option>
+                {#each newVenues as venue (venue.id)}
+                  <option value={venue.id}>{venueOptionLabel(venue)}</option>
                 {/each}
               </select>
             </div>

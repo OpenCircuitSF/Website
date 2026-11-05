@@ -9,6 +9,7 @@ import type { AdminWorkshop, EventType } from '../../lib/types';
 const getAdminWorkshop = vi.fn();
 const listInterests = vi.fn();
 const listEventTypes = vi.fn();
+const listVenues = vi.fn();
 const updateWorkshop = vi.fn();
 const previewWorkshop = vi.fn();
 const noop = vi.fn();
@@ -17,6 +18,7 @@ vi.mock('../../lib/api', () => ({
   getAdminWorkshop: (...a: unknown[]) => getAdminWorkshop(...a),
   listInterests: (...a: unknown[]) => listInterests(...a),
   listEventTypes: (...a: unknown[]) => listEventTypes(...a),
+  listVenues: (...a: unknown[]) => listVenues(...a),
   updateWorkshop: (...a: unknown[]) => updateWorkshop(...a),
   previewWorkshop: (...a: unknown[]) => previewWorkshop(...a),
   createWorkshop: noop,
@@ -53,10 +55,11 @@ function types(): EventType[] {
 }
 
 async function mounted(typeId: number, typeName: string): Promise<HTMLSelectElement> {
-  const w = { ...base, event_type_id: typeId, event_type: { slug: 'x', name: typeName, sort_order: 10 } } as AdminWorkshop;
+  const w = { ...base, venue_id: null, event_type_id: typeId, event_type: { slug: 'x', name: typeName, sort_order: 10 } } as AdminWorkshop;
   getAdminWorkshop.mockResolvedValue(w);
   listInterests.mockResolvedValue({ interests: [] });
   listEventTypes.mockResolvedValue({ event_types: types() });
+  listVenues.mockResolvedValue({ venues: [] });
   previewWorkshop.mockResolvedValue({ html: '' });
   updateWorkshop.mockResolvedValue(w);
   render(WorkshopEditor, { workshopId: 7, onBack: vi.fn(), onAnnounced: vi.fn(), onCloned: vi.fn() });

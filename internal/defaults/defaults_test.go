@@ -14,6 +14,11 @@ func TestIsManagedCoversEveryKey(t *testing.T) {
 			t.Errorf("IsManaged(%q) = false", k)
 		}
 	}
+	for _, k := range []string{KeyEventType, KeyVenue} {
+		if !IsManaged(k) {
+			t.Errorf("IsManaged(%q) = false", k)
+		}
+	}
 	if IsManaged("physical_address") {
 		t.Error("IsManaged(physical_address) = true")
 	}

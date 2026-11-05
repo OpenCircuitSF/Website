@@ -43,6 +43,7 @@ export type AdminSection =
   | 'workshops'
   | 'outreach'
   | 'event-types'
+  | 'venues'
   | 'crt'
   | 'not-found';
 
@@ -57,7 +58,7 @@ export interface AdminNavGroup {
   sections: readonly Exclude<AdminSection, 'not-found'>[];
 }
 export const ADMIN_NAV_GROUPS: readonly AdminNavGroup[] = [
-  { label: 'Events', landing: 'workshops', sections: ['workshops', 'outreach', 'event-types'] },
+  { label: 'Events', landing: 'workshops', sections: ['workshops', 'outreach', 'event-types', 'venues'] },
   { label: 'Newsletter', landing: 'campaigns', sections: ['campaigns', 'subscribers', 'pending', 'deliverability', 'suppressions', 'interests'] },
   { label: 'System', landing: 'settings', sections: ['settings', 'crt', 'users', 'audit'] },
 ];
@@ -91,6 +92,7 @@ export const ADMIN_SECTION_LABELS: Readonly<Record<AdminSection, string>> = {
   workshops: 'Events',
   outreach: 'Outreach',
   'event-types': 'Event types',
+  venues: 'Venues',
   crt: 'Home screen',
   'not-found': 'Not found',
 };

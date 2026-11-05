@@ -946,6 +946,37 @@ func TestAdminSettings_PatchDefaultEventTypeRefused(t *testing.T) {
 	}
 }
 
+func TestAdminSettings_PatchDefaultVenueRefused(t *testing.T) {
+	pool := settingsTestPool(t)
+	ctx := context.Background()
+	admin := seedAdmin(t, pool, "settings-venue-refused@example.com")
+	seedSession(t, pool, admin, "settings-venue-refused-token")
+	h := NewSettingsHandler(auth.NewStore(pool), audit.New(pool))
+	requireSession := middleware.RequireSession(auth.NewStore(pool))
+	mux := http.NewServeMux()
+	mux.Handle("PATCH /admin/settings", requireSession(middleware.RequireAdmin(http.HandlerFunc(h.Patch))))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var before string
+	if err := pool.QueryRow(ctx, `SELECT value FROM settings WHERE key = $1`, defaults.KeyVenue).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"key":%q,"value":"999999"}`, defaults.KeyVenue)
+	resp := doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/admin/settings", "settings-venue-refused-token", body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+	var after string
+	if err := pool.QueryRow(ctx, `SELECT value FROM settings WHERE key = $1`, defaults.KeyVenue).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Errorf("value = %q, want unchanged %q", after, before)
+	}
+}
+
 func TestResetSettings_KeepsManagedDefaults(t *testing.T) {
 	pool := settingsTestPool(t)
 	ctx := context.Background()

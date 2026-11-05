@@ -156,6 +156,8 @@ func (h *AdminWorkshopsHandler) invalidate() {
 const (
 	eventTypeNotFoundMessage = "that event type does not exist"
 	eventTypeDisabledMessage = "that event type is disabled; choose an enabled one"
+	venueNotFoundMessage     = "that venue does not exist"
+	venueDisabledMessage     = "that venue is disabled; choose an enabled one"
 )
 
 // ── Response shapes ──────────────────────────────────────────────────────────
@@ -182,6 +184,9 @@ type workshopView struct {
 	// EventTypeID is admin-only; EventType is shared with the public view (#0613).
 	EventTypeID int64            `json:"event_type_id"`
 	EventType   eventTypeRefView `json:"event_type"`
+	// VenueID is admin-only, and null means no location. The location_* fields
+	// above are read from this venue (#0617).
+	VenueID *int64 `json:"venue_id"`
 }
 
 // eventTypeRefView is how a listing names its type on the wire (#0613).
@@ -218,6 +223,7 @@ func toWorkshopView(w workshops.Workshop) workshopView {
 		UpdatedAt:       w.UpdatedAt.UTC().Format(time.RFC3339),
 		EventTypeID:     w.EventTypeID,
 		EventType:       eventTypeRefView{Slug: w.EventTypeSlug, Name: w.EventTypeName, SortOrder: w.EventTypeSortOrder},
+		VenueID:         w.VenueID,
 	}
 }
 
@@ -263,19 +269,19 @@ func (h *AdminWorkshopsHandler) Get(w http.ResponseWriter, r *http.Request) {
 // ── POST /admin/workshops ────────────────────────────────────────────────────
 
 type createWorkshopRequest struct {
-	Title           string  `json:"title"`
-	Summary         *string `json:"summary,omitempty"`
-	BodyMD          *string `json:"body_md,omitempty"`
-	StartsAt        *string `json:"starts_at,omitempty"`
-	EndsAt          *string `json:"ends_at,omitempty"`
-	LocationName    *string `json:"location_name,omitempty"`
-	LocationAddress *string `json:"location_address,omitempty"`
-	LocationNote    *string `json:"location_note,omitempty"`
-	Capacity        *int    `json:"capacity,omitempty"`
-	SignupURL       *string `json:"signup_url,omitempty"`
-	CoverImage      *string `json:"cover_image,omitempty"`
-	InterestIDs     []int64 `json:"interest_ids,omitempty"`
-	EventTypeID     *int64  `json:"event_type_id,omitempty"`
+	Title       string  `json:"title"`
+	Summary     *string `json:"summary,omitempty"`
+	BodyMD      *string `json:"body_md,omitempty"`
+	StartsAt    *string `json:"starts_at,omitempty"`
+	EndsAt      *string `json:"ends_at,omitempty"`
+	Capacity    *int    `json:"capacity,omitempty"`
+	SignupURL   *string `json:"signup_url,omitempty"`
+	CoverImage  *string `json:"cover_image,omitempty"`
+	InterestIDs []int64 `json:"interest_ids,omitempty"`
+	EventTypeID *int64  `json:"event_type_id,omitempty"`
+	// VenueID absent means the default venue, null means no location, and a
+	// number means that venue (#0617).
+	VenueID Optional[int64] `json:"venue_id"`
 }
 
 // Create handles POST /admin/workshops. Always creates in status='draft'
@@ -334,20 +340,25 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var venueID *int64
+	if req.VenueID.Valid {
+		v := req.VenueID.Value
+		venueID = &v
+	}
+
 	created, err := h.store.Create(r.Context(), workshops.CreateInput{
-		Title:           title,
-		Summary:         normalizeOptionalCampaignField(req.Summary),
-		BodyMD:          normalizeOptionalCampaignField(req.BodyMD),
-		StartsAt:        startsAt,
-		EndsAt:          endsAt,
-		LocationName:    normalizeOptionalCampaignField(req.LocationName),
-		LocationAddress: normalizeOptionalCampaignField(req.LocationAddress),
-		LocationNote:    normalizeOptionalCampaignField(req.LocationNote),
-		Capacity:        req.Capacity,
-		SignupURL:       signupURL,
-		CoverImage:      coverImage,
-		InterestIDs:     req.InterestIDs,
-		EventTypeID:     req.EventTypeID,
+		Title:        title,
+		Summary:      normalizeOptionalCampaignField(req.Summary),
+		BodyMD:       normalizeOptionalCampaignField(req.BodyMD),
+		StartsAt:     startsAt,
+		EndsAt:       endsAt,
+		Capacity:     req.Capacity,
+		SignupURL:    signupURL,
+		CoverImage:   coverImage,
+		InterestIDs:  req.InterestIDs,
+		EventTypeID:  req.EventTypeID,
+		VenueID:      venueID,
+		DefaultVenue: !req.VenueID.Present,
 	})
 	switch {
 	case err == nil:
@@ -365,6 +376,15 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, workshops.ErrDefaultEventTypeUnset):
 		writeError(w, http.StatusConflict, "no default event type is set; choose one on the Event types screen, or pick a type for this listing")
+		return
+	case errors.Is(err, workshops.ErrVenueNotFound):
+		writeError(w, http.StatusBadRequest, venueNotFoundMessage)
+		return
+	case errors.Is(err, workshops.ErrVenueDisabled):
+		writeError(w, http.StatusBadRequest, venueDisabledMessage)
+		return
+	case errors.Is(err, workshops.ErrDefaultVenueUnset):
+		writeError(w, http.StatusConflict, "no default venue is set; choose one on the Venues screen, or pick a venue for this listing")
 		return
 	default:
 		writeError(w, http.StatusInternalServerError, "internal server error")
@@ -386,6 +406,7 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 				"title":        created.Title,
 				"interest_ids": created.InterestIDs,
 				"event_type":   created.EventTypeSlug,
+				"venue_id":     created.VenueID,
 			},
 			IP: clientIP(r),
 		})
@@ -404,14 +425,11 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 // patchCampaignRequest — see this file's package doc comment for why
 // workshops has no dedicated transition routes.
 type patchWorkshopRequest struct {
-	Title           *string `json:"title,omitempty"`
-	Summary         *string `json:"summary,omitempty"`
-	BodyMD          *string `json:"body_md,omitempty"`
-	StartsAt        *string `json:"starts_at,omitempty"`
-	EndsAt          *string `json:"ends_at,omitempty"`
-	LocationName    *string `json:"location_name,omitempty"`
-	LocationAddress *string `json:"location_address,omitempty"`
-	LocationNote    *string `json:"location_note,omitempty"`
+	Title    *string `json:"title,omitempty"`
+	Summary  *string `json:"summary,omitempty"`
+	BodyMD   *string `json:"body_md,omitempty"`
+	StartsAt *string `json:"starts_at,omitempty"`
+	EndsAt   *string `json:"ends_at,omitempty"`
 	// Capacity is Optional[int], not *int (#0146): JSON null and an absent
 	// key both decode to a nil *int, so *int alone cannot tell "clear it"
 	// apart from "leave it alone". See optional.go's doc comment for why
@@ -427,6 +445,9 @@ type patchWorkshopRequest struct {
 	Status      *string       `json:"status,omitempty"`
 	InterestIDs *[]int64      `json:"interest_ids,omitempty"`
 	EventTypeID *int64        `json:"event_type_id,omitempty"`
+	// VenueID absent leaves the venue alone, null means no location, and a number
+	// means that venue (#0617).
+	VenueID Optional[int64] `json:"venue_id"`
 }
 
 // Patch handles PATCH /admin/workshops/{id}: loads the current row, merges
@@ -495,17 +516,13 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		}
 		endsAt = parsed
 	}
-	locationName := current.LocationName
-	if req.LocationName != nil {
-		locationName = normalizeOptionalCampaignField(req.LocationName)
-	}
-	locationAddress := current.LocationAddress
-	if req.LocationAddress != nil {
-		locationAddress = normalizeOptionalCampaignField(req.LocationAddress)
-	}
-	locationNote := current.LocationNote
-	if req.LocationNote != nil {
-		locationNote = normalizeOptionalCampaignField(req.LocationNote)
+	venueID := current.VenueID
+	if req.VenueID.Present {
+		venueID = nil
+		if req.VenueID.Valid {
+			v := req.VenueID.Value
+			venueID = &v
+		}
 	}
 	capacity := current.Capacity
 	switch {
@@ -549,20 +566,18 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	updated, err := h.store.Update(r.Context(), id, workshops.UpdateInput{
-		Title:           title,
-		Summary:         summary,
-		BodyMD:          bodyMD,
-		StartsAt:        startsAt,
-		EndsAt:          endsAt,
-		LocationName:    locationName,
-		LocationAddress: locationAddress,
-		LocationNote:    locationNote,
-		Capacity:        capacity,
-		SignupURL:       signupURL,
-		CoverImage:      coverImage,
-		Status:          status,
-		InterestIDs:     interestIDs,
-		EventTypeID:     req.EventTypeID,
+		Title:       title,
+		Summary:     summary,
+		BodyMD:      bodyMD,
+		StartsAt:    startsAt,
+		EndsAt:      endsAt,
+		VenueID:     venueID,
+		Capacity:    capacity,
+		SignupURL:   signupURL,
+		CoverImage:  coverImage,
+		Status:      status,
+		InterestIDs: interestIDs,
+		EventTypeID: req.EventTypeID,
 	})
 	switch {
 	case err == nil:
@@ -583,6 +598,12 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		return
 	case errors.Is(err, workshops.ErrEventTypeDisabled):
 		writeError(w, http.StatusBadRequest, eventTypeDisabledMessage)
+		return
+	case errors.Is(err, workshops.ErrVenueNotFound):
+		writeError(w, http.StatusBadRequest, venueNotFoundMessage)
+		return
+	case errors.Is(err, workshops.ErrVenueDisabled):
+		writeError(w, http.StatusBadRequest, venueDisabledMessage)
 		return
 	default:
 		writeError(w, http.StatusInternalServerError, "internal server error")
@@ -618,6 +639,8 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 				"new_interest_ids": updated.InterestIDs,
 				"old_event_type":   current.EventTypeSlug,
 				"new_event_type":   updated.EventTypeSlug,
+				"old_venue_id":     current.VenueID,
+				"new_venue_id":     updated.VenueID,
 			},
 			IP: clientIP(r),
 		})

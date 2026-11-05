@@ -431,7 +431,7 @@ func TestAdminOutreachFlyers_GenerateRequiresPublishedWorkshopAndSelection(t *te
 	}
 	e.selectLocations(t, v.Flyer.ID, e.locs[0])
 	if _, err := e.ws.Update(context.Background(), w.ID, workshops.UpdateInput{
-		Title: w.Title, StartsAt: w.StartsAt, LocationName: w.LocationName, Status: "draft",
+		Title: w.Title, StartsAt: w.StartsAt, VenueID: w.VenueID, Status: "draft",
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -494,9 +494,8 @@ export interface WorkshopFormFields {
   bodyMd: string;
   startsAtLocal: string; // datetime-local value, possibly ''
   endsAtLocal: string; // datetime-local value, possibly ''
-  locationName: string;
-  locationAddress: string;
-  locationNote: string;
+  /** Null means no location (#0617). */
+  venueId: number | null;
   capacity: string; // raw text input
   signupUrl: string;
   coverImage: string;
@@ -527,9 +526,8 @@ export interface ValidatedWorkshopFields {
   body_md: string;
   starts_at: string;
   ends_at: string;
-  location_name: string;
-  location_address: string;
-  location_note: string;
+  /** Always sent, because null means no location rather than unchanged (#0617). */
+  venue_id: number | null;
   // #0146: always present, `null` (not an omitted key) is the clear
   // sentinel -- see validateWorkshopForm's doc comment.
   capacity: number | null;
@@ -698,9 +696,7 @@ export function validateWorkshopForm(
     body_md: fields.bodyMd.trim(),
     starts_at: startsAt ?? '',
     ends_at: endsAt ?? '',
-    location_name: fields.locationName.trim(),
-    location_address: fields.locationAddress.trim(),
-    location_note: fields.locationNote.trim(),
+    venue_id: fields.venueId,
     // #0146: `null` when blank (never `undefined`) -- see this function's
     // doc comment and ValidatedWorkshopFields.capacity's comment for why
     // capacity's clear sentinel is `null` rather than #0139's `''`.
@@ -733,9 +729,7 @@ export function workshopToFormFields(w: AdminWorkshop): WorkshopFormFields {
     bodyMd: w.body_md ?? '',
     startsAtLocal: toDatetimeLocalValue(w.starts_at),
     endsAtLocal: toDatetimeLocalValue(w.ends_at),
-    locationName: w.location_name ?? '',
-    locationAddress: w.location_address ?? '',
-    locationNote: w.location_note ?? '',
+    venueId: w.venue_id,
     capacity: w.capacity != null ? String(w.capacity) : '',
     signupUrl: w.signup_url ?? '',
     coverImage: w.cover_image ?? '',
@@ -752,9 +746,7 @@ export function blankWorkshopFormFields(): WorkshopFormFields {
     bodyMd: '',
     startsAtLocal: '',
     endsAtLocal: '',
-    locationName: '',
-    locationAddress: '',
-    locationNote: '',
+    venueId: null,
     capacity: '',
     signupUrl: '',
     coverImage: '',
@@ -812,9 +804,9 @@ export function cloneWorkshopFields(
     body_md: source.body_md,
     starts_at: startsAt,
     ends_at: endsAt,
-    location_name: source.location_name,
-    location_address: source.location_address,
-    location_note: source.location_note,
+    // A new assignment: the server refuses a disabled venue, and the clone
+    // dialog shows that message rather than silently changing venue (#0617).
+    venue_id: source.venue_id,
     capacity: source.capacity,
     signup_url: source.signup_url,
     cover_image: source.cover_image,

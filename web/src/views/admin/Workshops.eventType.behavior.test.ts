@@ -8,12 +8,14 @@ import type { AdminWorkshop, EventType } from '../../lib/types';
 const listAdminWorkshops = vi.fn();
 const listOutreach = vi.fn();
 const listEventTypes = vi.fn();
+const listVenues = vi.fn();
 const createWorkshop = vi.fn();
 
 vi.mock('../../lib/api', () => ({
   listAdminWorkshops: (...a: unknown[]) => listAdminWorkshops(...a),
   listOutreach: (...a: unknown[]) => listOutreach(...a),
   listEventTypes: (...a: unknown[]) => listEventTypes(...a),
+  listVenues: (...a: unknown[]) => listVenues(...a),
   createWorkshop: (...a: unknown[]) => createWorkshop(...a),
   ApiError: class ApiError extends Error {},
 }));
@@ -32,6 +34,7 @@ const workshop = {
   status: 'draft',
   interest_ids: [],
   event_type_id: 2,
+  venue_id: null,
   event_type: { slug: 'hack-night', name: 'Hack Night', sort_order: 10 },
   created_at: '2026-11-04T00:00:00Z',
   updated_at: '2026-11-04T00:00:00Z',
@@ -50,6 +53,7 @@ async function mounted() {
   listAdminWorkshops.mockResolvedValue({ workshops: [workshop] });
   listOutreach.mockResolvedValue({ outreach: [] });
   listEventTypes.mockResolvedValue({ event_types: types() });
+  listVenues.mockRejectedValue(new Error('not exercised'));
   render(Workshops, { workshopId: null, onOpenWorkshop: vi.fn(), onBackToList: vi.fn(), onAnnounced: vi.fn() });
   await screen.findByRole('button', { name: 'Soldering' });
 }

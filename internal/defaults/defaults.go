@@ -21,6 +21,9 @@ import (
 // KeyEventType names the default event type's row in settings.
 const KeyEventType = "default_event_type_id"
 
+// KeyVenue names the default venue's row in settings (#0617).
+const KeyVenue = "default_venue_id"
+
 // ErrUnset means the setting is missing or does not hold a valid id. A store
 // cannot tell which row is the default in this state, so it refuses to disable or
 // delete anything until a new default is written.
@@ -28,7 +31,7 @@ var ErrUnset = errors.New("defaults: setting is missing or is not a valid id")
 
 // Keys returns every key this package manages.
 func Keys() []string {
-	return []string{KeyEventType}
+	return []string{KeyEventType, KeyVenue}
 }
 
 // IsManaged reports whether key is one this package manages.
