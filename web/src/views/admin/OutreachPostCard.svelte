@@ -370,7 +370,7 @@
     overflow-wrap: anywhere;
   }
   .hand-text {
-    max-height: 9rem;
+    max-height: 20rem;
     overflow-y: auto;
     margin-bottom: var(--space-2);
   }

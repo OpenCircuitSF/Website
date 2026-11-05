@@ -11,7 +11,7 @@ const BRACKETED = new RegExp(`\\s*\\([^()]*${MARK}[^()]*\\)`, 'g');
 const ANY_URL = /(?:https?:\/\/|www\.)[^\s<>"]+/gi;
 const URL_TAIL = /[.,;:!?)\]}'"…]+$/;
 const NOT_A_SENTENCE_END = /(?:^|[\s("'])(?:mr|mrs|ms|dr|st|vs|jr|sr|approx)$|[^\s]\.[^\s]*$/i;
-const DANGLING = /(?::|→|->|⇒|👇|⬇️?|-|–|—)$|\b(?:sign[ -]?up|register|rsvp|tickets?|details|more info|learn more|links?)(?: (?:here|below|now))?[.!]?$/iu;
+const DANGLING = /(?::|→|->|⇒|👇|⬇️?|-|–|—)$|^(?:sign[ -]?up|register|rsvp|tickets?|details|more info|learn more|links?)(?: (?:here|below|now))?[.!]?$/iu;
 
 function markLinks(line: string, shortUrl: string | null): string {
   let s = line.split(LINK_TOKEN).join(MARK);
@@ -66,8 +66,8 @@ export function textOnly(body: string, shortUrl: string | null): string {
       continue;
     }
     while (out.length > 0 && out[out.length - 1].trim() === '') out.pop();
-    if (out.length > 0 && DANGLING.test(out[out.length - 1].trim())) {
-      const prior = sentences(out[out.length - 1].trim());
+    const prior = out.length > 0 ? sentences(out[out.length - 1].trim()) : [];
+    if (prior.length > 0 && DANGLING.test(prior[prior.length - 1])) {
       prior.pop();
       out[out.length - 1] = prior.join(' ');
     }

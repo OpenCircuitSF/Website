@@ -37,6 +37,11 @@ describe('textOnly', () => {
     ['a time keeps its colon', `Doors at 6:30. Sign up: ${U}`, 'Doors at 6:30.'],
     ['a price keeps its point', `It costs $5.50 to attend. See ${U}`, 'It costs $5.50 to attend.'],
     ['a question before a link', `What's next? ${U}`, "What's next?"],
+    ['a sentence ending in "shift register" is not a lead-in', `Title.\n\nLearn to drive LEDs with a shift register.\n\nSign up: ${U}`, 'Title.\n\nLearn to drive LEDs with a shift register.'],
+    ['a sentence ending in "details" is not a lead-in', `We sweat all the details.\n\nSign up: ${U}`, 'We sweat all the details.'],
+    ['a sentence ending in "learn more" is not a lead-in', `Meet the crew and learn more.\n\nSign up: ${U}\n\n#sf`, 'Meet the crew and learn more.\n\n#sf'],
+    ['a sentence ending in "links" beside the link stays', `Build a chain of radio links. Info at ${U}.`, 'Build a chain of radio links.'],
+    ['the same with no full stop', `A class on the shift register\n\nSign up: ${U}`, 'A class on the shift register'],
   ])('%s', (_name, input, expected) => {
     expect(textOnly(input, U)).toBe(expected);
   });
