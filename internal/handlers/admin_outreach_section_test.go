@@ -225,3 +225,84 @@ func TestAdminOutreachPosting_UnscheduleSection(t *testing.T) {
 		t.Errorf("left_alone = %+v", got.LeftAlone)
 	}
 }
+
+func TestAdminOutreachPosting_ScheduleSectionNotConnected(t *testing.T) {
+	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	w, ids := e.sectionWorkshop(t, []string{"bluesky", "mastodon"}, map[string]bool{"bluesky": true, "mastodon": true})
+	code, b := e.do(t, http.MethodPost, sectionPath(w.ID, "schedule"), scheduleBody("reminder", time.Now().Add(3*time.Hour)))
+	if code != http.StatusOK {
+		t.Fatalf("schedule section = %d (%s)", code, b)
+	}
+	got := decodeOutreach[sectionView](t, b)
+	if len(got.Posts) != 1 || got.Posts[0].ID != ids["bluesky"] {
+		t.Errorf("posts = %+v, want Bluesky only", got.Posts)
+	}
+	if len(got.LeftAlone) != 1 || got.LeftAlone[0] != (sectionLeftAlone{Channel: "mastodon", ChannelLabel: "Mastodon", Reason: "not_connected"}) {
+		t.Errorf("left_alone = %+v", got.LeftAlone)
+	}
+	if status, at := e.postStatus(t, ids["mastodon"]); status != "draft" || at != nil {
+		t.Errorf("Mastodon moved: %s %v", status, at)
+	}
+}
+
+// A scheduled post on a channel since disconnected is still stopped by the
+// section unschedule: stopping a post is always safe.
+func TestAdminOutreachPosting_UnscheduleSectionDisconnected(t *testing.T) {
+	posting := fakePosting{"bluesky": true, "mastodon": true}
+	e := newOutreachEnvPosting(t, true, posting)
+	w, ids := e.sectionWorkshop(t, []string{"bluesky", "mastodon"}, map[string]bool{"bluesky": true, "mastodon": true})
+	if code, b := e.do(t, http.MethodPost, sectionPath(w.ID, "schedule"), scheduleBody("reminder", time.Now().Add(3*time.Hour))); code != http.StatusOK {
+		t.Fatalf("schedule section = %d (%s)", code, b)
+	}
+	posting["mastodon"] = false
+	code, b := e.do(t, http.MethodPost, sectionPath(w.ID, "unschedule"), `{"wave":"reminder"}`)
+	if code != http.StatusOK {
+		t.Fatalf("unschedule section = %d (%s)", code, b)
+	}
+	got := decodeOutreach[sectionView](t, b)
+	if len(got.Posts) != 2 || len(got.LeftAlone) != 0 {
+		t.Errorf("posts = %+v, left_alone = %+v", got.Posts, got.LeftAlone)
+	}
+	for ch, id := range ids {
+		if status, at := e.postStatus(t, id); status != "draft" || at != nil {
+			t.Errorf("%s still %s %v", ch, status, at)
+		}
+	}
+}
+
+func TestAdminOutreachPosting_SectionSwitchedOffChannel(t *testing.T) {
+	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true, "mastodon": true})
+	w, ids := e.sectionWorkshop(t, []string{"bluesky", "mastodon"}, map[string]bool{"bluesky": true, "mastodon": true})
+	soon := time.Now().Add(3 * time.Hour).Truncate(time.Second)
+
+	// A draft on a switched-off channel is hidden and never a target.
+	e.h.SetEnabledChannels(func() []string { return []string{"bluesky", "instagram"} })
+	t.Cleanup(func() { e.h.SetEnabledChannels(nil) })
+	code, b := e.do(t, http.MethodPost, sectionPath(w.ID, "schedule"), scheduleBody("reminder", soon))
+	if code != http.StatusOK {
+		t.Fatalf("schedule section = %d (%s)", code, b)
+	}
+	got := decodeOutreach[sectionView](t, b)
+	if len(got.Posts) != 1 || got.Posts[0].ID != ids["bluesky"] {
+		t.Errorf("posts = %+v, want Bluesky only", got.Posts)
+	}
+	if status, at := e.postStatus(t, ids["mastodon"]); status != "draft" || at != nil {
+		t.Errorf("hidden Mastodon draft moved: %s %v", status, at)
+	}
+
+	// A scheduled post there stays visible and is rescheduled.
+	e.h.SetEnabledChannels(nil)
+	if code, b := e.do(t, http.MethodPost, sectionPath(w.ID, "schedule"), scheduleBody("reminder", soon)); code != http.StatusOK {
+		t.Fatalf("schedule both = %d (%s)", code, b)
+	}
+	e.h.SetEnabledChannels(func() []string { return []string{"bluesky", "instagram"} })
+	later := soon.Add(time.Hour)
+	if code, b := e.do(t, http.MethodPost, sectionPath(w.ID, "schedule"), scheduleBody("reminder", later)); code != http.StatusOK {
+		t.Fatalf("reschedule = %d (%s)", code, b)
+	}
+	for ch, id := range ids {
+		if status, at := e.postStatus(t, id); status != "scheduled" || at == nil || !at.Equal(later) {
+			t.Errorf("%s = %s %v, want scheduled at %v", ch, status, at, later)
+		}
+	}
+}

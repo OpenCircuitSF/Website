@@ -253,9 +253,10 @@ type sectionResponse struct {
 
 // sectionTargets resolves one section's automatic posts for the section
 // routes (#0640): the ones a call may act on, and the ones it leaves alone
-// with the reason, both in channel order. ok=false means the response is
-// written.
-func (h *AdminOutreachHandler) sectionTargets(w http.ResponseWriter, r *http.Request, wave string) (workshops.Workshop, []outreach.Post, []sectionLeftAlone, bool) {
+// with the reason, both in channel order. anyConnection keeps a channel that
+// is not connected among the targets: the unschedule route passes it, since
+// stopping a post is always safe. ok=false means the response is written.
+func (h *AdminOutreachHandler) sectionTargets(w http.ResponseWriter, r *http.Request, wave string, anyConnection bool) (workshops.Workshop, []outreach.Post, []sectionLeftAlone, bool) {
 	wk, o, ok := h.workshopOutreach(w, r)
 	if !ok {
 		return wk, nil, nil, false
@@ -290,7 +291,7 @@ func (h *AdminOutreachHandler) sectionTargets(w http.ResponseWriter, r *http.Req
 			}
 			reason := ""
 			switch {
-			case !h.channelConfigured(ch.Name):
+			case !anyConnection && !h.channelConfigured(ch.Name):
 				reason = "not_connected"
 			case p.Status == "posted":
 				reason = "posted"
@@ -367,7 +368,7 @@ func (h *AdminOutreachHandler) ScheduleSection(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "scheduled_at "+msg)
 		return
 	}
-	wk, targets, left, ok := h.sectionTargets(w, r, req.Wave)
+	wk, targets, left, ok := h.sectionTargets(w, r, req.Wave, false)
 	if !ok {
 		return
 	}
@@ -412,7 +413,8 @@ func (h *AdminOutreachHandler) ScheduleSection(w http.ResponseWriter, r *http.Re
 
 // UnscheduleSection handles POST /admin/workshops/{id}/outreach/unschedule:
 // every scheduled automatic post of one section goes back to draft in one
-// call, all or nothing (#0640).
+// call, all or nothing (#0640), including one on a channel since disconnected
+// or switched off.
 func (h *AdminOutreachHandler) UnscheduleSection(w http.ResponseWriter, r *http.Request) {
 	actor, ok := middleware.UserFromContext(r.Context())
 	if !ok {
@@ -424,7 +426,7 @@ func (h *AdminOutreachHandler) UnscheduleSection(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	wk, all, left, ok := h.sectionTargets(w, r, req.Wave)
+	wk, all, left, ok := h.sectionTargets(w, r, req.Wave, true)
 	if !ok {
 		return
 	}
