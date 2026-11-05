@@ -7,6 +7,7 @@
 // browser was run for this change.
 import { render, cleanup, waitFor, screen, fireEvent, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fromLocalInputValue } from '../../lib/outreach';
 import type { OutreachPost, WorkshopOutreach } from '../../lib/types';
 
 const sendOutreachPost = vi.fn();
@@ -15,19 +16,22 @@ const unmarkOutreachPosted = vi.fn();
 const takedownOutreachPost = vi.fn();
 const markOutreachPosted = vi.fn();
 const prepareOutreachPost = vi.fn();
+const scheduleOutreachPost = vi.fn();
+const unscheduleOutreachPost = vi.fn();
+const deleteOutreachPost = vi.fn();
 const reloadMock = vi.fn();
 vi.mock('../../lib/api', () => ({
   draftAllOutreach: vi.fn(),
   createOutreachPost: vi.fn(),
   sendOutreachPost: (id: number) => sendOutreachPost(id),
-  unscheduleOutreachPost: vi.fn(),
+  unscheduleOutreachPost: (id: number) => unscheduleOutreachPost(id),
   markOutreachPosted: (id: number, url?: string) => markOutreachPosted(id, url),
   unmarkOutreachPosted: (id: number) => unmarkOutreachPosted(id),
   takedownOutreachPost: (id: number) => takedownOutreachPost(id),
   updateOutreachPost: (id: number, b: unknown) => updateOutreachPost(id, b),
   prepareOutreachPost: (id: number) => prepareOutreachPost(id),
-  scheduleOutreachPost: vi.fn(),
-  deleteOutreachPost: vi.fn(),
+  scheduleOutreachPost: (id: number, at: string) => scheduleOutreachPost(id, at),
+  deleteOutreachPost: (id: number) => deleteOutreachPost(id),
   ApiError: class ApiError extends Error {},
 }));
 
@@ -41,6 +45,9 @@ afterEach(() => {
   markOutreachPosted.mockReset();
   prepareOutreachPost.mockReset();
   updateOutreachPost.mockReset();
+  scheduleOutreachPost.mockReset();
+  unscheduleOutreachPost.mockReset();
+  deleteOutreachPost.mockReset();
   reloadMock.mockReset();
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -791,5 +798,105 @@ describe('hand-posted copy (#0626)', () => {
     expect(videoHead.compareDocumentPosition(row()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(row().compareDocumentPosition(byHand) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(bs.querySelector('.hand-text')).toBeNull();
+  });
+});
+
+describe('editor layout (#0627)', () => {
+  const AT = '2026-12-01T20:00:00Z';
+  const card = () => screen.getByRole('article', { name: 'Bluesky Announce' });
+  const dateInput = () => card().querySelector('input[type="datetime-local"]') as HTMLInputElement | null;
+  const toggle = (name = 'Schedule…') => within(card()).getByRole('button', { name }) as HTMLButtonElement;
+  const openEditor = async (over: Partial<OutreachPost> = {}) => {
+    setup([post({ id: 1, ...over })]);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+  };
+  /** Opens the picker and types a date, leaving the Schedule submit button in reach. */
+  const pickDate = async () => {
+    await fireEvent.click(toggle());
+    await fireEvent.input(dateInput()!, { target: { value: '2099-11-28T10:00' } });
+    return within(card()).getByRole('button', { name: 'Schedule' }) as HTMLButtonElement;
+  };
+
+  it('Edit opens with the picker closed, and the toggle opens and closes it keeping the typed date', async () => {
+    await openEditor();
+    expect(dateInput()).toBeNull();
+    expect(toggle().getAttribute('aria-expanded')).toBe('false');
+    await fireEvent.click(toggle());
+    expect(within(card()).getByLabelText('Schedule for (Pacific time)')).toBe(dateInput());
+    expect(toggle().getAttribute('aria-expanded')).toBe('true');
+    await fireEvent.input(dateInput()!, { target: { value: '2099-11-28T10:00' } });
+    await fireEvent.click(toggle());
+    expect(dateInput()).toBeNull();
+    await fireEvent.click(toggle());
+    expect(dateInput()?.value).toBe('2099-11-28T10:00');
+  });
+
+  it('Schedule… on the card opens the editor with the picker already open', async () => {
+    setup([post({ id: 1 })]);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Schedule…' }));
+    expect(dateInput()).toBeTruthy();
+    expect(toggle().getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('Schedule and Unschedule share one row with Save, Cancel and Delete', async () => {
+    await openEditor({ status: 'scheduled', scheduled_at: AT });
+    const row = card().querySelector('.row.actions');
+    expect(Array.from(row!.querySelectorAll('button')).map((b) => b.textContent?.trim())).toEqual(['Save', 'Cancel', 'Change time…', 'Unschedule', 'Delete']);
+    expect(card().querySelector('.schedule')).toBeNull();
+  });
+
+  it('a scheduled post states its time once', async () => {
+    setup([post({ id: 1, status: 'scheduled', scheduled_at: AT })]);
+    await screen.findByRole('article', { name: 'Bluesky Announce' });
+    expect(card().textContent?.match(/Posts automatically/g)?.length).toBe(1);
+    await fireEvent.click(within(card()).getByRole('button', { name: 'Edit' }));
+    expect(card().textContent?.match(/Scheduled for/g)?.length).toBe(1);
+    expect(dateInput()).toBeNull();
+  });
+
+  it('Schedule sends the picked time, closes the picker and returns focus to the toggle', async () => {
+    const iso = fromLocalInputValue('2099-11-28T10:00');
+    scheduleOutreachPost.mockResolvedValue(post({ id: 1, status: 'scheduled', scheduled_at: iso }));
+    await openEditor();
+    await fireEvent.click(await pickDate());
+    await waitFor(() => expect(scheduleOutreachPost).toHaveBeenCalledWith(1, iso));
+    await waitFor(() => expect(dateInput()).toBeNull());
+    await waitFor(() => expect(document.activeElement).toBe(toggle('Change time…')));
+    expect(within(card()).getByText('Scheduled.')).toBeTruthy();
+  });
+
+  it('a failed Schedule keeps the picker open and shows the error', async () => {
+    scheduleOutreachPost.mockRejectedValue(new Error('x'));
+    await openEditor();
+    await fireEvent.click(await pickDate());
+    expect(await within(card()).findByText('Could not schedule. Please try again.')).toBeTruthy();
+    expect(dateInput()).toBeTruthy();
+  });
+
+  it('Schedule stays off while the text has unsaved edits', async () => {
+    await openEditor();
+    const submit = await pickDate();
+    await fireEvent.input(screen.getByLabelText('Post text'), { target: { value: 'Edited' } });
+    expect(submit.disabled).toBe(true);
+    expect(within(card()).getByText('Save your edits before creating the link or scheduling.')).toBeTruthy();
+  });
+
+  it('Unschedule goes back to draft and leaves the editor open', async () => {
+    unscheduleOutreachPost.mockResolvedValue(post({ id: 1 }));
+    await openEditor({ status: 'scheduled', scheduled_at: AT });
+    await fireEvent.click(within(card()).getByRole('button', { name: 'Unschedule' }));
+    await waitFor(() => expect(unscheduleOutreachPost).toHaveBeenCalledWith(1));
+    expect(await within(card()).findByText('Back to draft.')).toBeTruthy();
+    expect(toggle()).toBeTruthy();
+    expect(within(card()).getByLabelText('Post text')).toBeTruthy();
+  });
+
+  it('Delete in the editor deletes the post and closes the editor', async () => {
+    deleteOutreachPost.mockResolvedValue(undefined);
+    await openEditor();
+    await fireEvent.click(within(card()).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(deleteOutreachPost).toHaveBeenCalledWith(1));
+    await waitFor(() => expect(reloadMock).toHaveBeenCalled());
+    await waitFor(() => expect(card().querySelector('textarea')).toBeNull());
   });
 });

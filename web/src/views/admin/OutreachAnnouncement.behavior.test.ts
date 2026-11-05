@@ -183,6 +183,14 @@ describe('OutreachAnnouncement', () => {
     expect(screen.getByRole('article', { name: 'Mastodon Announce preview' }).textContent).toContain('Customized');
   });
 
+  it('Customize… opens the editor with the picker closed (#0627)', async () => {
+    mountView([bPost(), mPost()]);
+    const card = screen.getByRole('article', { name: 'Mastodon Announce preview' });
+    await fireEvent.click(within(card).getByRole('button', { name: 'Customize…' }));
+    expect(card.querySelector('input[type="datetime-local"]')).toBeNull();
+    expect(within(card).getByRole('button', { name: 'Schedule…' }).getAttribute('aria-expanded')).toBe('false');
+  });
+
   it('Use shared message hands a customized post back with customized:false and its own tail', async () => {
     mountView([bPost(), { ...mPost(), customized: true }]);
     updateOutreachPost.mockImplementation((id: number, b: { body: string }) => Promise.resolve(post({ id, channel: 'mastodon', body: b.body })));

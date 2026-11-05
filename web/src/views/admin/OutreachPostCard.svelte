@@ -98,6 +98,8 @@
   let dialog = $state<PostDialogMode | null>(null);
   let dialogError = $state<string | null>(null);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
+  // Which button opened the editor (#0627): each one sets this again on its next click.
+  let scheduleFirst = $state(false);
 
   onDestroy(() => clearTimeout(copyTimer));
 
@@ -238,6 +240,7 @@
         {onDeleted}
         onClose={() => onCloseEditor(p.id)}
         {onDirtyChange}
+        openSchedule={scheduleFirst}
       />
     {/key}
   {:else}
@@ -285,7 +288,7 @@
           <Button variant="primary" onclick={() => openDialog('retry')} disabled={busy}>Retry</Button>
         {/if}
         {#if btn.schedule}
-          <Button onclick={() => onEdit(p)} disabled={busy}>Schedule…</Button>
+          <Button onclick={() => { scheduleFirst = true; onEdit(p); }} disabled={busy}>Schedule…</Button>
         {/if}
         {#if btn.unschedule}
           <Button onclick={() => unschedule(p)} disabled={busy}>Unschedule</Button>
@@ -307,7 +310,7 @@
           <Button onclick={() => openDialog('takedown')} disabled={busy}>Delete and redo…</Button>
         {/if}
         {#if btn.edit}
-          <Button onclick={() => onEdit(p)} data-edit-for={p.id}>Edit</Button>
+          <Button onclick={() => { scheduleFirst = false; onEdit(p); }} data-edit-for={p.id}>Edit</Button>
         {/if}
       {/if}
     </div>

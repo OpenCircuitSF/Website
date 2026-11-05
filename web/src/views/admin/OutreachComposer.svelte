@@ -1,11 +1,11 @@
 <!--
   The composer for one outreach post (#0544): the text with an exact character
   count against the channel limit, the tracked link and its UTM chips under a
-  "Link details" disclosure (#0582), and (#0591) an action row of Save and Cancel
-  (plus Create link when the link is missing), with Delete set apart at the far
-  end; Regenerate sits with its warning, and Schedule / Unschedule (#0545) sit
-  with the schedule picker for an automatic channel the server has credentials
-  for. It always replaces a card's display
+  "Link details" disclosure (#0582), and one action row: Save, Cancel, Create
+  link, Schedule… or Change time…, and Unschedule (#0545) sit together and wrap
+  on a phone, with Delete set apart at the far end (#0591). The schedule picker
+  stays closed until asked for (#0627). Regenerate sits with its warning. It
+  always replaces a card's display
   and always has Cancel; the card owns Post now, Retry and Mark posted behind
   their confirmation dialog (#0581), and since #0582 nothing in this file posts
   or marks posted. `markCustomized` makes Save record the post as customized,
@@ -13,7 +13,7 @@
   lib/outreach.ts (composerActions); this file is markup and wiring only.
 -->
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import {
     updateOutreachPost,
     prepareOutreachPost,
@@ -51,8 +51,10 @@
     markCustomized?: boolean;
     /** Reports whether the text has unsaved edits, so the card list can ask before discarding them. */
     onDirtyChange?: (dirty: boolean) => void;
+    /** The card's Schedule… button opened this editor, so show the picker straight away (#0627). */
+    openSchedule?: boolean;
   }
-  let { post, channel, wave, available, onChange, onDeleted, onClose, markCustomized = false, onDirtyChange }: Props = $props();
+  let { post, channel, wave, available, onChange, onDeleted, onClose, markCustomized = false, onDirtyChange, openSchedule = false }: Props = $props();
 
   // svelte-ignore state_referenced_locally
   let body = $state(post.body);
@@ -83,6 +85,9 @@
   }
   // svelte-ignore state_referenced_locally
   let scheduleLocal = $state(initialScheduleValue());
+  // svelte-ignore state_referenced_locally
+  let scheduleOpen = $state(openSchedule);
+  let root = $state<HTMLDivElement | undefined>();
 
   const actions = $derived(composerActions(post, channel, available));
   const channelNote = $derived(channelStatusNote(channel));
@@ -155,6 +160,10 @@
       }
       onChange(await scheduleOutreachPost(post.id, iso));
       notice = 'Scheduled.';
+      // The Schedule button has just disappeared, so focus has to go somewhere.
+      scheduleOpen = false;
+      await tick();
+      root?.querySelector<HTMLElement>('[data-schedule-toggle]')?.focus({ preventScroll: true });
     });
   const unschedule = () =>
     run('unschedule', async () => {
@@ -168,7 +177,7 @@
     });
 </script>
 
-<div class="composer">
+<div class="composer" bind:this={root}>
   {#if actions.canRegenerate}
     <p class="text-warn">
       The event's title, date or place changed since this was drafted.
@@ -220,23 +229,7 @@
     </p>
   {/if}
 
-  {#if actions.canSchedule}
-    <div class="schedule">
-      <label class="field">
-        <span class="field-label">Schedule for (Pacific time)</span>
-        <input type="datetime-local" bind:value={scheduleLocal} />
-      </label>
-      {#if !scheduleLocal}
-        <p class="text-muted">{scheduleHint(wave.name, [wave])}</p>
-      {/if}
-      <Button onclick={schedule} disabled={busy || dirty || over || !scheduleLocal}>Schedule</Button>
-    </div>
-  {/if}
-  {#if actions.canUnschedule}
-    <div class="schedule"><Button onclick={unschedule} disabled={busy}>Unschedule</Button></div>
-  {/if}
-
-  <div class="row">
+  <div class="row actions">
     {#if actions.canSave}
       <Button variant="primary" onclick={save} disabled={busy || !dirty || over}>Save</Button>
     {/if}
@@ -244,10 +237,28 @@
     {#if actions.canPrepare}
       <Button onclick={prepare} disabled={busy || dirty}>Create link</Button>
     {/if}
+    {#if actions.canSchedule}
+      <Button data-schedule-toggle aria-expanded={scheduleOpen ? 'true' : 'false'} onclick={() => (scheduleOpen = !scheduleOpen)}>{post.status === 'scheduled' ? 'Change time…' : 'Schedule…'}</Button>
+    {/if}
+    {#if actions.canUnschedule}
+      <Button onclick={unschedule} disabled={busy}>Unschedule</Button>
+    {/if}
     {#if actions.canDelete}
       <span class="danger-end"><Button variant="danger" onclick={remove} disabled={busy}>Delete</Button></span>
     {/if}
   </div>
+  {#if actions.canSchedule && scheduleOpen}
+    <div class="schedule">
+      <label class="field">
+        <span class="field-label">Schedule for (Pacific time)</span>
+        <input type="datetime-local" bind:value={scheduleLocal} />
+      </label>
+      <Button onclick={schedule} disabled={busy || dirty || over || !scheduleLocal}>Schedule</Button>
+      {#if !scheduleLocal}
+        <p class="text-muted">{scheduleHint(wave.name, [wave])}</p>
+      {/if}
+    </div>
+  {/if}
   {#if dirty && !locked}
     <p class="text-muted">Save your edits before creating the link or scheduling.</p>
   {/if}
@@ -296,6 +307,26 @@
   }
   .danger-end {
     margin-left: auto;
+  }
+  .actions {
+    flex-wrap: wrap;
+  }
+  .schedule {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+  }
+  .schedule .field {
+    margin-bottom: 0;
+  }
+  .schedule input {
+    max-width: 100%;
+  }
+  .schedule .text-muted {
+    flex-basis: 100%;
+    margin: 0;
   }
   .link-box {
     margin: var(--space-3) 0;
