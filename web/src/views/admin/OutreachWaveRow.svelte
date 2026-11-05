@@ -1,7 +1,8 @@
 <!--
   One section on the workshop outreach page (#0582, #0625): the pinned strip
   with its number, label and status (#0622), and under it the full message
-  section (OutreachAnnouncement). The parent decides which one is open. A closed
+  section (OutreachAnnouncement), then the hand-posted rows for this section
+  (OutreachPostCards, #0626). The parent decides which one is open. A closed
   panel stays mounted under the hidden attribute, so typed text survives
   switching sections, and this row says in words when that text is not saved.
   "Write it" sits beside the strip, not inside its button; it drafts just this
@@ -11,11 +12,13 @@
 -->
 <script lang="ts">
   import { draftAllOutreach, ApiError } from '../../lib/api';
-  import { sectionHeadId, sectionPanelId, sectionRowId } from '../../lib/outreachCards';
+  import { sectionHeadId, sectionPanelId, sectionRowId, sendsItself } from '../../lib/outreachCards';
+  import { handChannelLabel } from '../../lib/outreachHandCopy';
   import { waveStrip } from '../../lib/outreachMessage';
   import type { OutreachPost, OutreachResults, OutreachWave, WorkshopOutreach } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import OutreachAnnouncement from './OutreachAnnouncement.svelte';
+  import OutreachPostCards from './OutreachPostCards.svelte';
   import OutreachWaveStrip from './OutreachWaveStrip.svelte';
 
   interface Props {
@@ -28,8 +31,10 @@
     onUnsavedChange?: (unsaved: boolean) => void;
     onChange: (post: OutreachPost) => void;
     reload: () => void;
+    /** Where the Instagram row's flyer link goes. */
+    flyer?: { href: string; label: string };
   }
-  let { view, results, wave, workshopId, open, onSelect, onUnsavedChange, onChange, reload }: Props = $props();
+  let { view, results, wave, workshopId, open, onSelect, onUnsavedChange, onChange, reload, flyer }: Props = $props();
 
   let busy = $state(false);
   let errorText = $state('');
@@ -37,10 +42,15 @@
 
   const strip = $derived(waveStrip(view, wave.name));
 
-  function unsavedChanged(u: boolean): void {
-    unsaved = u;
-    onUnsavedChange?.(u);
+  // Two sources feed `unsaved`, and neither may overwrite the other.
+  let messageUnsaved = false;
+  let handUnsaved = false;
+  function report(): void {
+    unsaved = messageUnsaved || handUnsaved;
+    onUnsavedChange?.(unsaved);
   }
+  const handChannels = $derived(view.channels.filter((c) => !sendsItself(c)));
+  const written = $derived(view.posts.some((p) => p.wave === wave.name));
 
   async function write(): Promise<void> {
     busy = true;
@@ -66,9 +76,16 @@
   </div>
   <div id={sectionPanelId(wave.name)} hidden={!open}>
     {#if strip.action === 'open' || wave.name === 'announce'}
-      <OutreachAnnouncement {view} {results} wave={wave.name} {workshopId} {onChange} {reload} onUnsavedChange={unsavedChanged} />
+      <OutreachAnnouncement {view} {results} wave={wave.name} {workshopId} {onChange} {reload} onUnsavedChange={(u) => { messageUnsaved = u; report(); }} />
     {:else}
       <p class="text-muted">Nothing written for this one yet.</p>
+    {/if}
+    {#if handChannels.length > 0}
+      {#if written}
+        <OutreachPostCards {view} {results} {onChange} {reload} wave={wave.name} channelFilter={(c) => !sendsItself(c)} {flyer} onUnsavedChange={(u) => { handUnsaved = u; report(); }} />
+      {:else}
+        <p class="text-muted">The text for {handChannels.map((c) => handChannelLabel(c)).join(', ')} appears here once this section is written.</p>
+      {/if}
     {/if}
   </div>
   <p class="text-warn unsaved-note" role="status">{!open && unsaved ? 'Your changes here are not saved yet. Open this section to save them.' : ''}</p>

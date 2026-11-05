@@ -83,7 +83,7 @@ describe('OutreachWorkshop', () => {
     expect(screen.getByRole('link', { name: 'All outreach' }).getAttribute('href')).toBe('#/outreach');
   });
 
-  it('orders the status board, Announcement, wave rows, Schedule all, Post by hand, Flyers, Links and clicks (#0624)', async () => {
+  it('orders the status board, Announcement, wave rows, Schedule all, Flyers, Links and clicks (#0624, #0626)', async () => {
     getWorkshopOutreach.mockResolvedValue(view({ waves: allWaves }));
     getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);
     render(OutreachWorkshop, { workshopId: 5 });
@@ -92,11 +92,10 @@ describe('OutreachWorkshop', () => {
     const reminder = await screen.findByText('Reminder', { selector: 'strong' });
     const lastCall = await screen.findByText('Final', { selector: 'strong' });
     const schedule = await screen.findByRole('button', { name: 'Schedule all' });
-    const byHand = await screen.findByText('Post by hand', { selector: 'strong' });
     const flyers = await screen.findByText('Flyers', { selector: 'strong' });
     const links = await screen.findByText('Links and clicks', { selector: 'strong' });
     const results = await screen.findByRole('link', { name: 'View results' });
-    const order = [board, announcement, reminder, lastCall, schedule, byHand, flyers, links, results];
+    const order = [board, announcement, reminder, lastCall, schedule, flyers, links, results];
     for (let i = 0; i < order.length - 1; i++) {
       expect(order[i].compareDocumentPosition(order[i + 1]) & Node.DOCUMENT_POSITION_FOLLOWING, `element ${i}`).toBeTruthy();
     }
@@ -119,8 +118,6 @@ describe('OutreachWorkshop', () => {
     const board = await screen.findByRole('table', { name: 'Posts and when they go out' });
     expect(container.querySelector('p.summary')).toBeNull();
     expect(within(board).getByRole('columnheader', { name: 'Instagram' })).toBeTruthy();
-    const details = (await screen.findByText('Post by hand', { selector: 'strong' })).closest('details') as HTMLDetailsElement;
-    expect(details.open).toBe(false);
     expect(board.querySelector('tr[data-wave="announce"] td[data-channel="bluesky"]')?.textContent).toContain(weekdayTime(at));
   });
 
@@ -164,7 +161,7 @@ describe('OutreachWorkshop', () => {
     expect(warn.closest('.row-details')?.textContent).toContain('Links and clicks');
   });
 
-  it('lists only non-automatic channels under Post by hand (#0582)', async () => {
+  it('the hand-posted rows are in their section, and no Post by hand row remains (#0626)', async () => {
     const post = (over: Partial<OutreachPost>): OutreachPost => ({
       id: 1, outreach_id: 9, channel: 'bluesky', wave: 'announce', body: 'Bluesky words', status: 'draft', prepared: true, stale: false, customized: false,
       held: false, short_link_key: 'k', short_url: 'https://go.example/k', destination_url: 'https://x',
@@ -179,10 +176,13 @@ describe('OutreachWorkshop', () => {
     );
     getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);
     render(OutreachWorkshop, { workshopId: 5 });
-    const byHand = (await screen.findByText('Post by hand', { selector: 'strong' })).closest('details')!;
-    expect(byHand.textContent).toContain('Instagram words');
-    expect(byHand.textContent).not.toContain('Bluesky words');
-    expect(byHand.hasAttribute('open')).toBe(false);
+    const row = await screen.findByRole('article', { name: 'Instagram Reels Announce' });
+    expect(document.getElementById('outreach-section-announce-panel')?.contains(row)).toBe(true);
+    expect(row.textContent).toContain('Instagram words');
+    expect(row.textContent).not.toContain('Bluesky words');
+    expect(screen.queryByText('Post by hand', { selector: 'strong' })).toBeNull();
+    for (const d of document.querySelectorAll('details')) expect(d.textContent).not.toContain('Post by hand');
+    expect(await screen.findByText('Flyers', { selector: 'strong' })).toBeTruthy();
   });
 
   describe('hand-posted links (#0623)', () => {

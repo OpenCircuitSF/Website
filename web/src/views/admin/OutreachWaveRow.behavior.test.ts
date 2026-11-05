@@ -156,3 +156,64 @@ describe('OutreachWaveRow', () => {
     expect(note.textContent).toBe('Your changes here are not saved yet. Open this section to save them.');
   });
 });
+
+describe('OutreachWaveRow: hand-posted rows (#0626)', () => {
+  const tiktok = { name: 'tiktok', label: 'TikTok', utm_source: 'tiktok', utm_medium: 'video', char_limit: 0, automatic: false, configured: false, account: '' };
+  const instagram = { ...tiktok, name: 'instagram', label: 'Instagram', utm_source: 'instagram' };
+  const handView = (posts: OutreachPost[]): WorkshopOutreach => ({ ...view(posts), channels: [bluesky, instagram, tiktok] });
+  const hand = (over: Partial<OutreachPost> = {}): OutreachPost => ({ ...reminderPost(), id: 4, channel: 'tiktok', status: 'manual', body: 'TikTok words', ...over });
+  const props = (v: WorkshopOutreach, over: Record<string, unknown> = {}) => ({
+    view: v, results: null, wave, workshopId: 5, open: true, onSelect: vi.fn(), onChange: vi.fn(), reload: vi.fn(), ...over,
+  });
+  const panel = () => document.getElementById('outreach-section-reminder-panel')!;
+  const note = (c: Element) => c.querySelector('.unsaved-note')!.textContent;
+
+  it('the hand rows sit inside the panel, closed or open', async () => {
+    const { rerender } = render(OutreachWaveRow, props(handView([reminderPost(), hand()])));
+    expect(panel().contains(screen.getByRole('article', { name: 'TikTok Reminder' }))).toBe(true);
+    expect(panel().contains(screen.getByRole('article', { name: 'Instagram Reels Reminder' }))).toBe(true);
+    await rerender({ open: false });
+    expect(panel().hidden).toBe(true);
+    expect(panel().contains(screen.getByRole('article', { name: 'TikTok Reminder', hidden: true }))).toBe(true);
+  });
+
+  it('a section not written says so and offers no copy', () => {
+    render(OutreachWaveRow, props(handView([])));
+    expect(panel().textContent).toContain('The text for Instagram Reels, TikTok appears here once this section is written.');
+    expect(screen.queryByRole('button', { name: 'Copy with link' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Copy link' })).toBeNull();
+    expect(screen.queryByRole('article', { name: 'TikTok Reminder' })).toBeNull();
+  });
+
+  it('an edit to a hand row shows the not-saved line once the section is closed', async () => {
+    const onUnsavedChange = vi.fn();
+    const { container, rerender } = render(OutreachWaveRow, props(handView([reminderPost(), hand()]), { onUnsavedChange }));
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]);
+    await fireEvent.input(screen.getByLabelText('Post text'), { target: { value: 'Unsaved' } });
+    await waitFor(() => expect(onUnsavedChange.mock.lastCall?.[0]).toBe(true));
+    expect(note(container)).toBe('');
+    await rerender({ open: false });
+    expect(note(container)).toContain('not saved yet');
+  });
+
+  it('one source going clean does not clear the other', async () => {
+    const onUnsavedChange = vi.fn();
+    render(OutreachWaveRow, props(handView([reminderPost(), hand()]), { onUnsavedChange }));
+    const message = screen.getByLabelText('Message') as HTMLTextAreaElement;
+    await fireEvent.input(message, { target: { value: 'Typed' } });
+    await waitFor(() => expect(onUnsavedChange.mock.lastCall?.[0]).toBe(true));
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]);
+    const editor = screen.getByLabelText('Post text');
+    await fireEvent.input(editor, { target: { value: 'Also typed' } });
+    await fireEvent.input(editor, { target: { value: 'TikTok words' } });
+    await waitFor(() => expect(onUnsavedChange.mock.lastCall?.[0]).toBe(true));
+    await fireEvent.input(message, { target: { value: 'Reminder words' } });
+    await waitFor(() => expect(onUnsavedChange.mock.lastCall?.[0]).toBe(false));
+  });
+
+  it('passes the flyer link to Instagram', () => {
+    render(OutreachWaveRow, props(handView([reminderPost(), hand()]), { flyer: { href: '#/outreach?view=flyers&flyer=7', label: 'Open flyer' } }));
+    const link = screen.getByRole('article', { name: 'Instagram Reels Reminder' }).querySelector('a.open-flyer');
+    expect(link?.getAttribute('href')).toBe('#/outreach?view=flyers&flyer=7');
+  });
+});

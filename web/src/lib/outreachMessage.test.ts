@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { composeBody, isHashtagParagraph, manualRowStatus, messageTargets, planSaveMessage, restoredTail, sharedMessage, splitBody, waveExcerpt, waveRowStatus, waveStrip } from './outreachMessage';
-import { boardRows } from './outreachCards';
+import { composeBody, isHashtagParagraph, messageTargets, planSaveMessage, restoredTail, sharedMessage, splitBody, waveExcerpt, waveRowStatus, waveStrip } from './outreachMessage';
+import { boardRows, sectionFullyPosted, weekdayTime } from './outreachCards';
 import type { OutreachChannel, OutreachPost, OutreachWave } from './types';
 
 const ch = (name: string, automatic: boolean, configured: boolean, limit = 0): OutreachChannel => ({
@@ -25,6 +25,8 @@ function post(over: Partial<OutreachPost>): OutreachPost {
 const bPost = post({});
 const mPost = post({ id: 2, channel: 'mastodon', body: mast, short_url: MURL });
 const view = (posts: OutreachPost[]) => ({ channels, waves, posts });
+const autoChannels = channels.slice(0, 2);
+const autoView = (posts: OutreachPost[]) => ({ channels: autoChannels, waves, posts });
 
 describe('isHashtagParagraph', () => {
   it('accepts hashtag-only lines and rejects prose', () => {
@@ -104,12 +106,12 @@ describe('planSaveMessage', () => {
   });
 });
 
-describe('waveRowStatus and manualRowStatus', () => {
+describe('waveRowStatus', () => {
   it('Not written with a write action when the wave has no posts', () => {
-    expect(waveRowStatus(view([bPost]), 'reminder')).toEqual({ text: 'Not written · not scheduled', action: 'write' });
+    expect(waveRowStatus(autoView([bPost]), 'reminder')).toEqual({ text: 'Not written · not scheduled', action: 'write' });
   });
   it('reads Drafted, scheduled, posting, failed and posted', () => {
-    const r = (over: Partial<OutreachPost>) => waveRowStatus(view([post({ wave: 'reminder', ...over })]), 'reminder');
+    const r = (over: Partial<OutreachPost>) => waveRowStatus(autoView([post({ wave: 'reminder', ...over })]), 'reminder');
     expect(r({})).toEqual({ text: 'Drafted · not scheduled', action: 'open' });
     expect(r({ status: 'queued' }).text).toBe('Posting now…');
     expect(r({ status: 'failed' }).text).toBe('Drafted · a post failed');
@@ -121,7 +123,7 @@ describe('waveRowStatus and manualRowStatus', () => {
     const now = new Date('2026-11-01T12:00:00Z');
     const reminderAt = '2026-11-28T18:00:00Z';
     const at = (suggested: string | null, posts: OutreachPost[]) => ({
-      channels,
+      channels: autoChannels,
       waves: [waves[0], { ...waves[1], suggested_at: suggested }],
       posts,
     });
@@ -160,12 +162,8 @@ describe('waveRowStatus and manualRowStatus', () => {
     });
   });
   it('counts only automatic posts', () => {
-    const v = view([post({ wave: 'reminder', status: 'posted' }), post({ id: 2, wave: 'reminder', channel: 'mastodon' })]);
+    const v = autoView([post({ wave: 'reminder', status: 'posted' }), post({ id: 2, wave: 'reminder', channel: 'mastodon' })]);
     expect(waveRowStatus(v, 'reminder').text).toBe('Posted 1 of 2 · 1 not scheduled');
-  });
-  it('the manual row counts hand-posted cards', () => {
-    expect(manualRowStatus(view([bPost]))).toBe('Nothing drafted');
-    expect(manualRowStatus(view([post({ id: 5, channel: 'instagram', status: 'posted' }), post({ id: 6, channel: 'instagram', wave: 'reminder', status: 'manual' })]))).toBe('Posted 1 of 2');
   });
 });
 
@@ -177,8 +175,8 @@ describe('waveStrip', () => {
     expect(waveStrip(v, 'announce')).toMatchObject({ ordinal: 3, label: 'Announce' });
   });
   it('says not scheduled for the announcement before it has a time', () => {
-    expect(waveStrip(view([bPost]), 'announce').text).toBe('Drafted · not scheduled');
-    expect(waveStrip(view([]), 'announce').text).toBe('Not written · not scheduled');
+    expect(waveStrip(autoView([bPost]), 'announce').text).toBe('Drafted · not scheduled');
+    expect(waveStrip(autoView([]), 'announce').text).toBe('Not written · not scheduled');
   });
 });
 
@@ -223,29 +221,91 @@ describe('a partly scheduled section (#0624)', () => {
   const sched = (over: Partial<OutreachPost> = {}) => post({ status: 'scheduled', scheduled_at: TIME, ...over });
   const text = (channels: OutreachChannel[], posts: OutreachPost[]) => waveRowStatus({ channels, waves, posts }, 'announce').text;
   it('says how many are not scheduled beside the time', () => {
-    expect(text(channels, [sched(), post({ id: 2, channel: 'mastodon' })])).toMatch(/^Posts automatically .+ · 1 not scheduled$/);
+    expect(text(autoChannels, [sched(), post({ id: 2, channel: 'mastodon' })])).toMatch(/^Posts automatically .+ · 1 not scheduled$/);
   });
   it('adds it after the posted count', () => {
     expect(text(three, [sched(), post({ id: 2, channel: 'mastodon', status: 'posted', posted_at: TIME }), post({ id: 3, channel: 'threads' })]))
       .toMatch(/^Posts automatically .+ · posted 1 of 3 · 1 not scheduled$/);
   });
   it('adds it to an on hold section', () => {
-    expect(text(channels, [sched({ held: true }), post({ id: 2, channel: 'mastodon' })])).toMatch(/^Scheduled .+ · on hold until the event is published · 1 not scheduled$/);
+    expect(text(autoChannels, [sched({ held: true }), post({ id: 2, channel: 'mastodon' })])).toMatch(/^Scheduled .+ · on hold until the event is published · 1 not scheduled$/);
   });
   it('does not read as fully posted when a channel has no post', () => {
-    expect(text(channels, [post({ status: 'posted', posted_at: TIME })])).toMatch(/^Posted .+ · 1 not scheduled$/);
+    expect(text(autoChannels, [post({ status: 'posted', posted_at: TIME })])).toMatch(/^Posted .+ · 1 not scheduled$/);
   });
   it('adds nothing when every channel is scheduled', () => {
-    expect(text(channels, [sched(), sched({ id: 2, channel: 'mastodon' })])).not.toContain('not scheduled');
+    expect(text(autoChannels, [sched(), sched({ id: 2, channel: 'mastodon' })])).not.toContain('not scheduled');
   });
   it("leaves an unscheduled section's wording alone", () => {
-    expect(text(channels, [post({}), post({ id: 2, channel: 'mastodon' })])).toBe('Drafted · not scheduled');
+    expect(text(autoChannels, [post({}), post({ id: 2, channel: 'mastodon' })])).toBe('Drafted · not scheduled');
   });
   it('the strip and the board row give the same count', () => {
-    const v = { channels, waves, posts: [sched({ wave: 'reminder' }), post({ id: 2, channel: 'mastodon', wave: 'reminder' })] };
+    const v = { channels: autoChannels, waves, posts: [sched({ wave: 'reminder' }), post({ id: 2, channel: 'mastodon', wave: 'reminder' })] };
     const note = boardRows(v)[1].note;
     expect(note).not.toBe('');
     expect(waveStrip(v, 'reminder').text.endsWith(note)).toBe(true);
+  });
+});
+
+describe('hand-posted channels in the section status (#0626)', () => {
+  const ig = (over: Partial<OutreachPost> = {}) => post({ id: 3, channel: 'instagram', status: 'manual', ...over });
+  const T1 = '2026-10-17T20:00:00Z';
+  const T2 = '2026-10-18T20:00:00Z';
+  const live = (over: Partial<OutreachPost> = {}) => post({ status: 'posted', posted_at: T1, ...over });
+  const handOnly = [ch('instagram', false, false), ch('tiktok', false, false)];
+  const text = (v: Parameters<typeof waveRowStatus>[0]) => waveRowStatus(v, 'announce').text;
+
+  it('says how many are left once a section is written', () => {
+    expect(text(view([bPost, mPost, ig()]))).toBe('Drafted · not scheduled · 1 left to post by hand');
+  });
+  it('a hand channel with no post counts as left', () => {
+    expect(text(view([bPost, mPost]))).toBe('Drafted · not scheduled · 1 left to post by hand');
+  });
+  it('reads Posted with the newest time only when hand-posted channels are done too', () => {
+    const v = view([live(), live({ id: 2, channel: 'mastodon' }), ig({ status: 'posted', posted_at: T2 })]);
+    expect(text(v)).toBe(`Posted ${weekdayTime(T2)}`);
+  });
+  it('keeps the automatic date and adds the count while a hand post is left', () => {
+    const v = view([live(), live({ id: 2, channel: 'mastodon' }), ig()]);
+    expect(text(v)).toBe(`Posted ${weekdayTime(T1)} · 1 left to post by hand`);
+  });
+  it('a section with only hand-posted channels reads Drafted until all are marked, then Posted', () => {
+    const two = (a: OutreachPost['status'], b: OutreachPost['status']) => ({
+      channels: handOnly,
+      waves,
+      posts: [
+        ig({ status: a, posted_at: a === 'posted' ? T1 : null }),
+        post({ id: 4, channel: 'tiktok', status: b, posted_at: b === 'posted' ? T2 : null }),
+      ],
+    });
+    expect(text(two('manual', 'manual'))).toBe('Drafted · 2 left to post by hand');
+    expect(text(two('posted', 'manual'))).toBe('Drafted · 1 left to post by hand');
+    expect(text(two('posted', 'posted'))).toBe(`Posted ${weekdayTime(T2)}`);
+  });
+  it('an unconnected Bluesky counts as hand-posted', () => {
+    const v = { channels: [ch('bluesky', true, false, 300), ch('mastodon', true, true, 500)], waves, posts: [bPost, mPost] };
+    expect(text(v)).toBe('Drafted · not scheduled · 1 left to post by hand');
+  });
+  it('a section with nothing written has no hand count', () => {
+    expect(text(view([]))).toBe('Not written · not scheduled');
+  });
+  it('reads as plain Posted exactly when sectionFullyPosted is true', () => {
+    const views = [
+      view([live(), live({ id: 2, channel: 'mastodon' }), ig({ status: 'posted', posted_at: T2 })]),
+      view([live(), live({ id: 2, channel: 'mastodon' }), ig()]),
+      view([live(), live({ id: 2, channel: 'mastodon' })]),
+      view([live(), ig({ status: 'posted', posted_at: T2 })]),
+      view([bPost, mPost, ig({ status: 'posted', posted_at: T2 })]),
+      { channels: handOnly, waves, posts: [ig({ status: 'posted', posted_at: T1 }), post({ id: 4, channel: 'tiktok', status: 'posted', posted_at: T2 })] },
+      { channels: handOnly, waves, posts: [ig({ status: 'posted', posted_at: T1 })] },
+    ];
+    const verdicts = views.map((v) => {
+      const t = text(v);
+      expect(t.startsWith('Posted') && !t.includes('left to post') && !t.includes('not scheduled')).toBe(sectionFullyPosted(v, 'announce'));
+      return sectionFullyPosted(v, 'announce');
+    });
+    expect(verdicts).toContain(true);
+    expect(verdicts).toContain(false);
   });
 });
 

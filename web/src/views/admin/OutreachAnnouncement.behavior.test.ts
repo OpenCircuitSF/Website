@@ -284,3 +284,63 @@ describe('OutreachAnnouncement', () => {
     expect(section.querySelectorAll('article [role="status"], article [role="alert"]').length).toBe(0);
   });
 });
+
+describe('OutreachAnnouncement: what a finished section shows (#0626)', () => {
+  const TIME = '2026-10-18T17:00:00Z';
+  const live = (p: OutreachPost): OutreachPost => ({ ...p, status: 'posted', posted_at: TIME });
+  const ig = { name: 'instagram', label: 'Instagram', utm_source: 'instagram', utm_medium: 'social', char_limit: 0, automatic: false, configured: false, account: '' };
+  const igPost = () => post({ id: 3, channel: 'instagram', status: 'manual', body: 'Hand words' });
+  const mountWith = (chs: WorkshopOutreach['channels'], posts: OutreachPost[]) =>
+    render(OutreachAnnouncement, {
+      view: {
+        available: true, unavailable_reason: '',
+        workshop: { id: 5, slug: 's', title: 'Soldering 101', status: 'published', starts_at: '2026-12-05T18:00:00Z' },
+        outreach: { id: 9, workshop_id: 9, campaign_slug: 's', created_at: '' },
+        channels: chs, waves, posts,
+      },
+      results: null, wave: 'announce', workshopId: 5, reload: vi.fn(), onChange: vi.fn(),
+    });
+
+  it('a fully posted section shows what was posted, with no Message box or Save message', () => {
+    mountView([live(bPost()), live(mPost())]);
+    expect(screen.queryByLabelText('Message')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Save message' })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'What was posted' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'How it will look' })).toBeNull();
+    expect(screen.getByRole('article', { name: 'Bluesky Announce preview' }).textContent).toContain('Join us for Soldering 101.');
+  });
+
+  it('a partly posted section keeps the Message box', () => {
+    mountView([live(bPost()), mPost()]);
+    expect(screen.getByLabelText('Message')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'How it will look' })).toBeTruthy();
+  });
+
+  it('customized drafts keep the Message box', () => {
+    mountView([{ ...bPost(), customized: true }, { ...mPost(), customized: true }]);
+    expect(screen.getByLabelText('Message')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Save message' })).toBeTruthy();
+  });
+
+  it('text typed before the section locked no longer counts as unsaved', async () => {
+    const onUnsaved = vi.fn();
+    const { rerender } = mountView([bPost(), mPost()], 'announce', onUnsaved);
+    await type('Typed words');
+    await waitFor(() => expect(onUnsaved.mock.lastCall?.[0]).toBe(true));
+    await rerender([live(bPost()), live(mPost())]);
+    await waitFor(() => expect(onUnsaved.mock.lastCall?.[0]).toBe(false));
+    expect(screen.queryByText('Save the message before posting or scheduling.')).toBeNull();
+  });
+
+  it('with only hand-posted channels and a written post there is no Write prompt', () => {
+    mountWith([ig], [igPost()]);
+    expect(screen.queryByRole('button', { name: /^Write the/ })).toBeNull();
+    expect(screen.queryByText(/No post/)).toBeNull();
+  });
+
+  it('with Bluesky connected but unwritten beside a hand post it says which channels have no post', () => {
+    mountWith([channels[0], ig], [igPost()]);
+    expect(screen.getByText('No post yet for Bluesky.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Write the announcement' })).toBeTruthy();
+  });
+});

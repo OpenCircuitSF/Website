@@ -7,7 +7,9 @@
   button posts them all through the same in-app dialog the cards use.
   Customize… opens the composer for a single post and marks it customized, so
   a later Save message leaves it alone until "Use shared message" hands it
-  back. Schedule for later… takes one time for every postable post.
+  back. Schedule for later… takes one time for every postable post. Once no
+  automatic post can change any more the Message box goes and the section shows
+  what was posted (#0626).
 
   The live regions (role="status", role="alert") sit unconditionally at the top
   level of this file, never inside an {#if} or {#each}, so the structural guard
@@ -61,6 +63,10 @@
       .filter((a): a is { channel: OutreachChannel; post: OutreachPost } => a.post !== null),
   );
 
+  const locked = $derived(autos.length > 0 && autos.every((a) => a.post.status === 'posted' || a.post.status === 'queued'));
+  const allPosted = $derived(autos.length > 0 && autos.every((a) => a.post.status === 'posted'));
+  const handWritten = $derived(view.posts.some((p) => p.wave === wave));
+  const hasAutoChannel = $derived(view.channels.some(sendsItself));
   const shared = $derived(sharedMessage(view, wave));
   // svelte-ignore state_referenced_locally
   let message = $state(shared);
@@ -77,7 +83,7 @@
   const plan = $derived(planSaveMessage(view, wave, trimmed));
   const dirty = $derived(touched && trimmed !== shared);
   let composerDirty = $state(false);
-  const unsaved = $derived((dirty && autos.length > 0) || composerDirty);
+  const unsaved = $derived((dirty && autos.length > 0 && !locked) || composerDirty);
   $effect(() => {
     const u = unsaved;
     untrack(() => onUnsavedChange?.(u));
@@ -245,8 +251,10 @@
 </script>
 
 <section class="announcement wave-section" aria-label={waveInfo?.label ?? wave}>
-  {#if autos.length === 0}
-    <p class="text-muted">No posts yet. Start with the {wave === 'announce' ? 'announcement' : `${waveName.toLowerCase()} post`}.</p>
+  {#if autos.length === 0 && !hasAutoChannel && handWritten}
+    <!-- Only hand-posted channels: the rows below are the whole section. -->
+  {:else if autos.length === 0}
+    <p class="text-muted">{handWritten ? `No post yet for ${names(view.channels.filter(sendsItself).map((c) => c.label))}.` : `No posts yet. Start with the ${wave === 'announce' ? 'announcement' : `${waveName.toLowerCase()} post`}.`}</p>
     <p class="row">
       <Button variant="primary" onclick={write} disabled={busy || !view.available}>
         Write the {wave === 'announce' ? 'announcement' : `${waveName.toLowerCase()} post`}
@@ -263,23 +271,25 @@
         {/if}
       </p>
     {/if}
-    <label class="field">
-      <span class="field-label">Message</span>
-      <textarea
-        rows="5"
-        bind:value={message}
-        oninput={() => (touched = true)}
-        disabled={busy || messageTargets(view, wave).length === 0}
-      ></textarea>
-    </label>
-    <p class="row">
-      <Button variant="primary" onclick={saveMessage} disabled={busy || !canSave}>Save message</Button>
-    </p>
-    {#if anyOver}
-      <p class="text-error">This message is over the limit for {names(plan.filter((i) => i.over).map((i) => i.channel.label))}.</p>
+    {#if !locked}
+      <label class="field">
+        <span class="field-label">Message</span>
+        <textarea
+          rows="5"
+          bind:value={message}
+          oninput={() => (touched = true)}
+          disabled={busy || messageTargets(view, wave).length === 0}
+        ></textarea>
+      </label>
+      <p class="row">
+        <Button variant="primary" onclick={saveMessage} disabled={busy || !canSave}>Save message</Button>
+      </p>
+      {#if anyOver}
+        <p class="text-error">This message is over the limit for {names(plan.filter((i) => i.over).map((i) => i.channel.label))}.</p>
+      {/if}
     {/if}
 
-    <h4 class="how">How it will look</h4>
+    <h4 class="how">{allPosted ? 'What was posted' : 'How it will look'}</h4>
     {#if sameText}<p class="text-warn">Bluesky and Mastodon will get exactly the same text.</p>{/if}
     {#each autos as { channel, post } (post.id)}
       {@const body = shownBody(post)}
@@ -333,7 +343,7 @@
         <Button onclick={unschedule} disabled={busy}>Unschedule</Button>
       {/if}
     </p>
-    {#if dirty}<p class="text-muted">Save the message before posting or scheduling.</p>{/if}
+    {#if dirty && !locked}<p class="text-muted">Save the message before posting or scheduling.</p>{/if}
     {#if scheduling}
       <div class="schedule">
         <label class="field">

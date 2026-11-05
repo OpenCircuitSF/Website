@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { boardCell, boardRows, cardButtons, combinedPostResult, copyLabel, defaultOpenSection, flyerLinkFor, groupByWave, notScheduledNote, showBioLink, pollDelay, postableAutomatic, postDialogCopy, statusLine, weekdayTime, summaryLine, visibleNotice } from './outreachCards';
+import { boardCell, boardRows, cardButtons, combinedPostResult, copyLabel, defaultOpenSection, flyerLinkFor, groupByWave, notScheduledNote, pollDelay, postableAutomatic, postDialogCopy, statusLine, weekdayTime, summaryLine, visibleNotice } from './outreachCards';
 import type { OutreachChannel, OutreachPost, OutreachResults } from './types';
 
 const auto: OutreachChannel = { name: 'bluesky', label: 'Bluesky', utm_source: 'b', utm_medium: 'social', char_limit: 300, automatic: true, configured: true, account: '' };
@@ -162,13 +162,18 @@ describe('Unmark and the bio link (#0588)', () => {
     expect(c.warning).toContain('Nothing is removed from Instagram');
   });
 
-  it('shows the bio link row only for a hand-posted post whose body lacks the link', () => {
-    const url = 'https://go.example/k';
-    expect(showBioLink(post({ body: 'See bio' }), manual)).toBe(true);
-    expect(showBioLink(post({ body: `Sign up: ${url}` }), manual)).toBe(false);
-    expect(showBioLink(post({ body: 'See bio' }), auto)).toBe(false);
-    expect(showBioLink(post({ body: 'See bio', short_url: null }), manual)).toBe(false);
-    expect(showBioLink(null, manual)).toBe(false);
+  it('offers Copy text only before a hand post has its link', () => {
+    const b = cardButtons(post({ status: 'manual', prepared: false, short_url: null }), manual, true);
+    expect(b.copyText).toBe(true);
+    expect(b.copy).toBe(false);
+    expect(cardButtons(post(), auto, true).copyText).toBe(false);
+    expect(cardButtons(null, manual, true).copyText).toBe(false);
+  });
+
+  it('offers no copy once a hand post is posted', () => {
+    const b = cardButtons(post({ status: 'posted' }), manual, true);
+    expect(b.copyText).toBe(false);
+    expect(b.copy).toBe(false);
   });
 
   it('the flyer link opens this workshop\'s newest flyer, else makes one for it', () => {

@@ -13,17 +13,19 @@ const sendOutreachPost = vi.fn();
 const updateOutreachPost = vi.fn();
 const unmarkOutreachPosted = vi.fn();
 const takedownOutreachPost = vi.fn();
+const markOutreachPosted = vi.fn();
+const prepareOutreachPost = vi.fn();
 const reloadMock = vi.fn();
 vi.mock('../../lib/api', () => ({
   draftAllOutreach: vi.fn(),
   createOutreachPost: vi.fn(),
   sendOutreachPost: (id: number) => sendOutreachPost(id),
   unscheduleOutreachPost: vi.fn(),
-  markOutreachPosted: vi.fn(),
+  markOutreachPosted: (id: number, url?: string) => markOutreachPosted(id, url),
   unmarkOutreachPosted: (id: number) => unmarkOutreachPosted(id),
   takedownOutreachPost: (id: number) => takedownOutreachPost(id),
   updateOutreachPost: (id: number, b: unknown) => updateOutreachPost(id, b),
-  prepareOutreachPost: vi.fn(),
+  prepareOutreachPost: (id: number) => prepareOutreachPost(id),
   scheduleOutreachPost: vi.fn(),
   deleteOutreachPost: vi.fn(),
   ApiError: class ApiError extends Error {},
@@ -36,6 +38,9 @@ afterEach(() => {
   sendOutreachPost.mockReset();
   unmarkOutreachPosted.mockReset();
   takedownOutreachPost.mockReset();
+  markOutreachPosted.mockReset();
+  prepareOutreachPost.mockReset();
+  updateOutreachPost.mockReset();
   reloadMock.mockReset();
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -69,11 +74,12 @@ function viewOf(over: Partial<WorkshopOutreach>): WorkshopOutreach {
 }
 
 /** Mounts the list and plays the panel: a change replaces the post in the view and re-renders. */
-function mountView(view: WorkshopOutreach, flyer?: { href: string; label: string }): void {
+function mountView(view: WorkshopOutreach, flyer?: { href: string; label: string }, extra: Record<string, unknown> = {}): void {
   let current = view;
   const r = render(OutreachPostCards, {
     view,
     flyer,
+    ...extra,
     results: null,
     reload: reloadMock,
     onChange: (p: OutreachPost) => {
@@ -113,7 +119,7 @@ describe('post cards (#0569)', () => {
       post({ id: 4, wave: 'reminder', channel: 'reddit', status: 'failed', body: 'Failing body', last_error: 'raw' }),
     ]);
     expect(await screen.findByText(/Come solder with us/)).toBeTruthy();
-    expect(screen.getByText('Reddit body text')).toBeTruthy();
+    expect(screen.getByText('Reddit body text', { selector: 'pre.body' })).toBeTruthy();
     expect(screen.getByText('Reminder body')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'view post' }).getAttribute('href')).toBe('https://bsky.app/p/1');
     expect(screen.getByText(/^Posts automatically /)).toBeTruthy();
@@ -130,12 +136,13 @@ describe('post cards (#0569)', () => {
     expect(screen.getAllByRole('button', { name: 'Draft' }).length).toBe(3);
   });
 
-  it('automatic cards offer Post now and Schedule…, manual cards offer Copy caption and not Post now', async () => {
+  it('automatic cards offer Post now and Schedule…, manual cards offer Copy with link and Copy text only and not Post now', async () => {
     setup([post({ id: 1 }), post({ id: 2, channel: 'reddit', status: 'manual' })]);
     await screen.findByText('Not scheduled');
     expect(screen.getAllByRole('button', { name: 'Post now' }).length).toBe(1);
     expect(screen.getAllByRole('button', { name: 'Schedule…' }).length).toBe(1);
-    expect(screen.getAllByRole('button', { name: 'Copy caption' }).length).toBe(1);
+    expect(screen.getAllByRole('button', { name: 'Copy with link' }).length).toBe(1);
+    expect(screen.getAllByRole('button', { name: 'Copy text only' }).length).toBe(1);
     expect(screen.getAllByRole('button', { name: 'Mark posted' }).length).toBe(1);
     const manual = screen.getByRole('article', { name: 'Reddit Announce' });
     expect(manual.textContent).not.toContain('Post now');
@@ -261,7 +268,7 @@ describe('post cards (#0569)', () => {
 
   it('Mark posted opens a dialog whose link field rejects a non-http URL (#0581)', async () => {
     setup([post({ id: 2, channel: 'reddit', status: 'manual', body: 'Reddit body' })]);
-    await screen.findByText('Reddit body');
+    await screen.findByText('Reddit body', { selector: 'pre.body' });
     await fireEvent.click(screen.getByRole('button', { name: 'Mark posted' }));
     const dlg = screen.getByRole('dialog');
     await fireEvent.input(within(dlg).getByLabelText(/Link to the post/), { target: { value: 'ftp://x.example/1' } });
@@ -269,20 +276,20 @@ describe('post cards (#0569)', () => {
     expect(dlg.textContent).toContain('http(s)');
   });
 
-  it('Copy caption flips to Copied for two seconds (#0581)', async () => {
+  it('Copy with link flips to Copied for two seconds, and copies the link', async () => {
     setup([post({ id: 2, channel: 'reddit', status: 'manual', body: 'Reddit body' })]);
-    await screen.findByText('Reddit body');
+    await screen.findByText('Reddit body', { selector: 'pre.body' });
     const writeText = vi.fn(() => Promise.resolve());
     vi.stubGlobal('navigator', { clipboard: { writeText } });
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    await fireEvent.click(screen.getByRole('button', { name: 'Copy caption' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Copy with link' }));
     await vi.advanceTimersByTimeAsync(0);
-    expect(writeText).toHaveBeenCalledWith('Reddit body');
+    expect(writeText).toHaveBeenCalledWith('Reddit body\n\nSign up: https://go.example/abc');
     expect(screen.getByRole('button', { name: 'Copied' })).toBeTruthy();
     await vi.advanceTimersByTimeAsync(1999);
     expect(screen.getByRole('button', { name: 'Copied' })).toBeTruthy();
     await vi.advanceTimersByTimeAsync(1);
-    expect(screen.getByRole('button', { name: 'Copy caption' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Copy with link' })).toBeTruthy();
     expect(screen.getByRole('article', { name: 'Reddit Announce' }).querySelector('.notice')?.textContent).toBe('');
     vi.useRealTimers();
   });
@@ -308,18 +315,20 @@ describe('post cards: one link, Instagram, video channels (#0576)', () => {
     const bluesky = screen.getByRole('article', { name: 'Bluesky Announce' });
     expect(bluesky.textContent).not.toContain('https://go.example/abc');
     expect(bluesky.textContent).not.toContain('Put this in your bio');
-    const ig = screen.getByRole('article', { name: 'Instagram Announce' });
+    const ig = screen.getByRole('article', { name: 'Instagram Reels Announce' });
     expect(ig.textContent).toContain('Put this in your bio');
-    expect(ig.textContent?.split('https://go.example/abc').length).toBe(2); // exactly once
-    expect(ig.querySelector('pre')?.textContent).toBe(igBody);
+    // Once in the text that will be copied and once in the link row.
+    expect(ig.textContent?.split('https://go.example/abc').length).toBe(3);
+    expect(ig.querySelector('pre')?.textContent).toBe('Soldering 101: Saturday.\n\nSign up: https://go.example/abc');
     expect(screen.getByRole('button', { name: 'Copy link' })).toBeTruthy();
   });
 
-  it('Instagram offers Copy caption and Open flyer', async () => {
+  it('Instagram Reels offers both copies and Open flyer', async () => {
     setupAll([post({ id: 2, channel: 'instagram', status: 'manual', body: igBody })]);
-    await screen.findByText(/Sign up at the link in our bio/);
-    const ig = screen.getByRole('article', { name: 'Instagram Announce' });
-    expect(ig.textContent).toContain('Copy caption');
+    await screen.findByText(/Sign up at the link in our bio/, { selector: 'pre' });
+    const ig = screen.getByRole('article', { name: 'Instagram Reels Announce' });
+    expect(within(ig).getByRole('button', { name: 'Copy with link' })).toBeTruthy();
+    expect(within(ig).getByRole('button', { name: 'Copy text only' })).toBeTruthy();
     const link = ig.querySelector('a.open-flyer');
     expect(link?.textContent).toBe('Open flyer');
     expect(link?.getAttribute('href')).toMatch(/flyers/);
@@ -327,15 +336,38 @@ describe('post cards: one link, Instagram, video channels (#0576)', () => {
     expect(bsky.querySelector('a.open-flyer')).toBeNull();
   });
 
-  it('collapses TikTok under Video channels by default', async () => {
-    setupAll([post({ id: 3, channel: 'tiktok', status: 'manual', body: 'TikTok description block' })]);
-    await screen.findByText('TikTok description block');
-    const details = screen.getByText(/^Video channels/).closest('details');
-    expect(details).toBeTruthy();
-    expect(details?.hasAttribute('open')).toBe(false);
-    expect(details?.textContent).toContain('TikTok');
-    expect(details?.textContent).toContain('TikTok description block');
-    expect(screen.getByRole('article', { name: 'Bluesky Announce' }).closest('details.video')).toBeNull();
+  it('Instagram keeps its flyer link when posted and when not written', async () => {
+    setupAll([post({ id: 2, channel: 'instagram', status: 'posted', body: igBody, posted_at: '2026-10-18T17:00:00Z' })]);
+    expect((await screen.findByRole('article', { name: 'Instagram Reels Announce' })).querySelector('a.open-flyer')).toBeTruthy();
+    cleanup();
+    setupAll([post({ id: 1, body: 'Bluesky words' })]);
+    expect((await screen.findByRole('article', { name: 'Instagram Reels Announce' })).querySelector('a.open-flyer')).toBeTruthy();
+  });
+
+  it('with a section name, lists Instagram, TikTok and YouTube under one Video heading, open, one row each', async () => {
+    const yt = { ...chans[3], name: 'youtube', label: 'YouTube Shorts', utm_source: 'youtube' };
+    mountView(
+      viewOf({
+        channels: [...chans, yt],
+        posts: [
+          post({ id: 2, channel: 'instagram', status: 'manual', body: igBody }),
+          post({ id: 3, channel: 'tiktok', status: 'manual', body: 'TikTok words' }),
+          post({ id: 4, channel: 'youtube', status: 'manual', body: 'YouTube words' }),
+          post({ id: 5, wave: 'reminder', channel: 'tiktok', status: 'manual', body: 'Later words' }),
+        ],
+      }),
+      undefined,
+      { wave: 'announce', channelFilter: (c: { automatic: boolean }) => !c.automatic },
+    );
+    expect(await screen.findByRole('heading', { name: 'Video' })).toBeTruthy();
+    expect(document.querySelector('details.video')).toBeNull();
+    for (const name of ['Instagram Reels Announce', 'TikTok Announce', 'YouTube Shorts Announce']) {
+      const row = screen.getByRole('article', { name });
+      expect(row.closest('details')).toBeNull();
+      expect(row.compareDocumentPosition(screen.getByRole('heading', { name: 'Video' })) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    }
+    expect(screen.queryByText(/Later words/)).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Announce' })).toBeNull();
   });
 });
 
@@ -420,7 +452,7 @@ describe('post cards: channelFilter (#0582, Post by hand)', () => {
       posts: [post({ id: 1 }), post({ id: 2, channel: 'mastodon' }), post({ id: 3, channel: 'reddit', status: 'manual', body: 'Reddit body' })],
     });
     render(OutreachPostCards, { view: v, results: null, reload: vi.fn(), onChange: vi.fn(), channelFilter: (c: { automatic: boolean }) => !c.automatic });
-    await screen.findByText('Reddit body');
+    await screen.findByText('Reddit body', { selector: 'pre.body' });
     expect(screen.queryByRole('article', { name: 'Bluesky Announce' })).toBeNull();
     expect(screen.queryByRole('article', { name: 'Mastodon Announce' })).toBeNull();
     expect(screen.getByRole('article', { name: 'Reddit Announce' })).toBeTruthy();
@@ -442,8 +474,8 @@ describe('post cards: manual channels (#0588)', () => {
     const posted = post({ id: 2, channel: 'instagram', status: 'posted', body: 'IG body', posted_at: '2026-10-18T17:00:00Z', remote_url: 'https://instagram.com/p/x' });
     unmarkOutreachPosted.mockResolvedValue({ ...posted, status: 'manual', posted_at: null, remote_url: null });
     mount([posted]);
-    await screen.findByText('IG body');
-    const card = screen.getByRole('article', { name: 'Instagram Announce' });
+    await screen.findByText(/IG body/, { selector: 'pre.body' });
+    const card = screen.getByRole('article', { name: 'Instagram Reels Announce' });
     expect(within(card).queryByRole('button', { name: 'Edit' })).toBeNull();
     await fireEvent.click(within(card).getByRole('button', { name: 'Unmark' }));
     const dlg = screen.getByRole('dialog');
@@ -460,7 +492,7 @@ describe('post cards: manual channels (#0588)', () => {
   it('Cancel leaves the post posted; a site-sent post has no Unmark', async () => {
     const posted = post({ id: 2, channel: 'instagram', status: 'posted', body: 'IG body', posted_at: '2026-10-18T17:00:00Z' });
     mount([posted, post({ id: 1, status: 'posted', posted_at: '2026-10-18T17:00:00Z', body: 'Bsky body' })]);
-    await screen.findByText('IG body');
+    await screen.findByText(/IG body/, { selector: 'pre.body' });
     expect(within(screen.getByRole('article', { name: 'Bluesky Announce' })).queryByRole('button', { name: 'Unmark' })).toBeNull();
     await fireEvent.click(screen.getByRole('button', { name: 'Unmark' }));
     await fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }));
@@ -472,45 +504,44 @@ describe('post cards: manual channels (#0588)', () => {
     const posted = post({ id: 2, channel: 'instagram', status: 'posted', body: 'IG body', posted_at: '2026-10-18T17:00:00Z' });
     unmarkOutreachPosted.mockRejectedValue(new Error('x'));
     mount([posted]);
-    await screen.findByText('IG body');
+    await screen.findByText(/IG body/, { selector: 'pre.body' });
     await fireEvent.click(screen.getByRole('button', { name: 'Unmark' }));
     await fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Unmark' }));
     await waitFor(() => expect(within(screen.getByRole('dialog')).getByRole('alert').textContent).toContain('Could not unmark'));
   });
 
-  it('hides the bio link row when the caption already carries the link (F4), shows it otherwise', async () => {
+  it('every video row shows its link; only Instagram says bio', async () => {
     mount([
       post({ id: 3, channel: 'tiktok', status: 'manual', body: 'Sign up: https://go.example/abc' }),
       post({ id: 2, channel: 'instagram', status: 'manual', body: 'Link in bio.' }),
     ]);
-    await screen.findByText('Link in bio.');
-    const ig = screen.getByRole('article', { name: 'Instagram Announce' });
+    await screen.findByText(/Link in bio\./, { selector: 'pre.body' });
+    const ig = screen.getByRole('article', { name: 'Instagram Reels Announce' });
     expect(ig.textContent).toContain('Put this in your bio');
-    await fireEvent.click(screen.getByText(/^Video channels/));
     const tt = screen.getByRole('article', { name: 'TikTok Announce' });
     expect(tt.textContent).not.toContain('Put this in your bio');
-    expect(within(tt).queryByRole('button', { name: 'Copy link' })).toBeNull();
-    expect(within(tt).getByRole('button', { name: 'Copy caption' })).toBeTruthy();
+    expect(tt.textContent).toContain('ShortLink');
+    expect(within(tt).getByRole('button', { name: 'Copy link' })).toBeTruthy();
+    expect(within(tt).getByRole('button', { name: 'Copy with link' })).toBeTruthy();
   });
 
   it('labels the link row "Link to paste", not the bio, on a hand-posted Bluesky card', async () => {
     const offline = [{ ...channels[0], configured: false }];
     mountView(viewOf({ channels: offline, waves: [waves[0]], posts: [post({ id: 4, channel: 'bluesky', status: 'draft', body: 'Hand Bluesky.' })] }));
-    await screen.findByText('Hand Bluesky.');
-    const bs = screen.getByRole('article', { name: 'Bluesky Announce' });
+    const bs = await screen.findByRole('article', { name: 'Bluesky Announce' });
     expect(bs.textContent).toContain('Link to paste');
     expect(bs.textContent).not.toContain('Put this in your bio');
   });
 
   it('the Instagram flyer link goes where the page says (F2)', async () => {
     mount([post({ id: 2, channel: 'instagram', status: 'manual', body: 'Link in bio.' })], { href: '#/outreach?view=flyers&flyer=7', label: 'Open flyer' });
-    await screen.findByText('Link in bio.');
-    const link = screen.getByRole('article', { name: 'Instagram Announce' }).querySelector('a.open-flyer');
+    await screen.findByText(/Link in bio\./, { selector: 'pre.body' });
+    const link = screen.getByRole('article', { name: 'Instagram Reels Announce' }).querySelector('a.open-flyer');
     expect(link?.getAttribute('href')).toBe('#/outreach?view=flyers&flyer=7');
     cleanup();
     mount([post({ id: 2, channel: 'instagram', status: 'manual', body: 'Link in bio.' })], { href: '#/outreach?view=flyers&workshop=5', label: 'Make a flyer' });
-    await screen.findByText('Link in bio.');
-    const make = screen.getByRole('article', { name: 'Instagram Announce' }).querySelector('a.open-flyer');
+    await screen.findByText(/Link in bio\./, { selector: 'pre.body' });
+    const make = screen.getByRole('article', { name: 'Instagram Reels Announce' }).querySelector('a.open-flyer');
     expect(make?.textContent).toBe('Make a flyer');
     expect(make?.getAttribute('href')).toBe('#/outreach?view=flyers&workshop=5');
   });
@@ -569,7 +600,196 @@ describe('post cards: Delete and redo (#0604)', () => {
   it('a draft or a hand-posted card has no Delete and redo', async () => {
     const chans = [...channels, { name: 'instagram', label: 'Instagram', utm_source: 'instagram', utm_medium: 'social', char_limit: 0, automatic: false, configured: false, account: '' }];
     mountView(viewOf({ channels: chans, waves: [waves[0]], posts: [post({ id: 1 }), post({ id: 2, channel: 'instagram', status: 'posted', body: 'IG body', posted_at: '2026-10-18T17:00:00Z' })] }));
-    await screen.findByText('IG body');
+    await screen.findByText(/IG body/, { selector: 'pre.body' });
     expect(screen.queryByRole('button', { name: 'Delete and redo…' })).toBeNull();
+  });
+});
+
+describe('hand-posted copy (#0626)', () => {
+  const hand = (name: string, label: string) => ({ name, label, utm_source: name, utm_medium: 'video', char_limit: 0, automatic: false, configured: false, account: '' });
+  const video = [hand('instagram', 'Instagram'), hand('tiktok', 'TikTok'), hand('youtube', 'YouTube Shorts')];
+  const tiktokBody = 'Soldering: Saturday.\n\nLearn to solder.\n\nSign up: https://go.example/u/tt\n\nOpen Circuit SF: https://www.opencircuitsf.com\n\n#sf';
+  const tt = (over: Partial<OutreachPost> = {}) => post({ id: 3, channel: 'tiktok', status: 'manual', body: tiktokBody, short_url: 'https://go.example/u/tt', ...over });
+  const onlyVideo = (posts: OutreachPost[], extra: Record<string, unknown> = {}, viewOver: Partial<WorkshopOutreach> = {}) =>
+    mountView(viewOf({ channels: video, waves: [waves[0]], posts, ...viewOver }), undefined, { wave: 'announce', ...extra });
+  const row = () => screen.getByRole('article', { name: 'TikTok Announce' });
+  const btn = (name: string) => within(row()).getByRole('button', { name }) as HTMLButtonElement;
+  const box = () => row().querySelector('.manual-copy textarea') as HTMLTextAreaElement | null;
+  const stubCopy = () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    vi.stubGlobal('navigator', { clipboard: { writeText } });
+    return writeText;
+  };
+
+  it('copying each of the three in one section gives three different links and no token', async () => {
+    const urls: Record<string, string> = { instagram: 'https://go.example/u/ig', tiktok: 'https://go.example/u/tt', youtube: 'https://go.example/u/yt' };
+    onlyVideo([
+      post({ id: 2, channel: 'instagram', status: 'manual', body: 'A.\n\nSign up at the link in our bio.\n\n#sf', short_url: urls.instagram }),
+      tt({ body: 'A.\n\nSign up: {link}', short_url: urls.tiktok }),
+      post({ id: 4, channel: 'youtube', status: 'manual', body: `A.\n\nSign up: ${urls.youtube}`, short_url: urls.youtube }),
+    ]);
+    await screen.findByRole('heading', { name: 'Video' });
+    const writeText = stubCopy();
+    for (const b of screen.getAllByRole('button', { name: 'Copy with link' })) await fireEvent.click(b);
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(3));
+    const copied = writeText.mock.calls.map((c) => (c as unknown as string[])[0]);
+    for (const u of Object.values(urls)) expect(copied.filter((t) => t.includes(u)).length).toBe(1);
+    for (const t of copied) expect(t).not.toContain('{link}');
+  });
+
+  it('Copy text only leaves out the link and the sign-up line', async () => {
+    onlyVideo([tt()]);
+    await screen.findByRole('heading', { name: 'Video' });
+    const writeText = stubCopy();
+    await fireEvent.click(btn('Copy text only'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('Soldering: Saturday.\n\nLearn to solder.\n\n#sf'));
+    expect(await within(row()).findByRole('button', { name: 'Copied' })).toBeTruthy();
+    expect(within(row()).getByRole('status').textContent).toBe('Copied without the link.');
+  });
+
+  it('shows the text that will be copied and the ShortLink before copying', async () => {
+    onlyVideo([tt()]);
+    await screen.findByRole('heading', { name: 'Video' });
+    expect(row().querySelector('.hand-text pre')?.textContent).toBe(tiktokBody);
+    expect(row().querySelector('.link-row .short')?.textContent).toBe('https://go.example/u/tt');
+    expect(row().querySelector('.text-only-body')?.textContent).toBe('Soldering: Saturday.\n\nLearn to solder.\n\n#sf');
+    const scroller = row().querySelector('.hand-text') as HTMLElement;
+    expect(scroller.getAttribute('tabindex')).toBe('0');
+  });
+
+  it('a post with no link says so, turns off Copy with link, and Copy text only still works', async () => {
+    onlyVideo([tt({ short_url: null, prepared: false, body: 'Hello\n\nSign up: {link}' })]);
+    await screen.findByRole('heading', { name: 'Video' });
+    expect(row().textContent).toContain('This post has no ShortLink yet');
+    expect(btn('Copy with link').disabled).toBe(true);
+    expect(within(row()).queryByRole('button', { name: 'Mark posted' })).toBeNull();
+    const writeText = stubCopy();
+    await fireEvent.click(btn('Copy text only'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('Hello'));
+  });
+
+  it('Create link asks for the link when the post has none', async () => {
+    const before = tt({ short_url: null, prepared: false, body: 'Hello\n\nSign up: {link}' });
+    prepareOutreachPost.mockResolvedValue(tt({ body: 'Hello\n\nSign up: https://go.example/u/tt' }));
+    onlyVideo([before]);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Create link' }));
+    await waitFor(() => expect(prepareOutreachPost).toHaveBeenCalledWith(3));
+    await waitFor(() => expect(btn('Copy with link').disabled).toBe(false));
+    expect(row().querySelector('.link-row .short')?.textContent).toBe('https://go.example/u/tt');
+  });
+
+  it('no Create link when ShortLinks is unavailable', async () => {
+    onlyVideo([tt({ short_url: null, prepared: false })], {}, { available: false });
+    await screen.findByRole('heading', { name: 'Video' });
+    expect(row().textContent).toContain('This post has no ShortLink yet');
+    expect(within(row()).queryByRole('button', { name: 'Create link' })).toBeNull();
+  });
+
+  it('a post that is only a link turns off Copy text only and says why', async () => {
+    onlyVideo([tt({ body: 'https://go.example/u/tt' })]);
+    await screen.findByRole('heading', { name: 'Video' });
+    expect(btn('Copy text only').disabled).toBe(true);
+    expect(row().textContent).toContain('Nothing is left of this post without its link');
+    expect(row().querySelector('details.text-only')).toBeNull();
+  });
+
+  async function expectManualBox(expected: string): Promise<void> {
+    await waitFor(() => expect(box()?.value).toBe(expected));
+    expect(within(row()).getByRole('alert').textContent).toContain('Your browser did not allow copying');
+    expect(within(row()).queryByRole('button', { name: 'Copied' })).toBeNull();
+    expect(row().querySelector('.notice')?.textContent).toBe('');
+    await waitFor(() => expect(document.activeElement).toBe(box()));
+    expect(box()?.selectionStart).toBe(0);
+    expect(box()?.selectionEnd).toBe(expected.length);
+  }
+
+  it('when the browser refuses: an alert, the exact text in a box, and never Copied', async () => {
+    onlyVideo([tt()]);
+    await screen.findByRole('heading', { name: 'Video' });
+    vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn(() => Promise.reject(new Error('denied'))) } });
+    await fireEvent.click(btn('Copy with link'));
+    await expectManualBox(tiktokBody);
+    await fireEvent.click(btn('Done'));
+    expect(box()).toBeNull();
+    expect(within(row()).getByRole('alert').textContent).toBe('');
+  });
+
+  it('when there is no clipboard at all: the same', async () => {
+    onlyVideo([tt()]);
+    await screen.findByRole('heading', { name: 'Video' });
+    vi.stubGlobal('navigator', {});
+    await fireEvent.click(btn('Copy text only'));
+    await expectManualBox('Soldering: Saturday.\n\nLearn to solder.\n\n#sf');
+  });
+
+  it('a later copy that works closes the box', async () => {
+    onlyVideo([tt()]);
+    await screen.findByRole('heading', { name: 'Video' });
+    vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn(() => Promise.reject(new Error('denied'))) } });
+    await fireEvent.click(btn('Copy with link'));
+    await waitFor(() => expect(box()).not.toBeNull());
+    stubCopy();
+    await fireEvent.click(btn('Copy with link'));
+    await waitFor(() => expect(box()).toBeNull());
+    expect(within(row()).getByRole('alert').textContent).toBe('');
+    expect(await within(row()).findByRole('button', { name: 'Copied' })).toBeTruthy();
+  });
+
+  it('the box closes when the post changes under it', async () => {
+    const v = viewOf({ channels: video, waves: [waves[0]], posts: [tt()] });
+    const r = render(OutreachPostCards, { view: v, results: null, reload: reloadMock, onChange: vi.fn(), wave: 'announce' });
+    await screen.findByRole('heading', { name: 'Video' });
+    vi.stubGlobal('navigator', {});
+    await fireEvent.click(btn('Copy with link'));
+    await waitFor(() => expect(box()).not.toBeNull());
+    await r.rerender({ view: { ...v, posts: [tt({ body: 'Changed\n\nSign up: https://go.example/u/tt' })] } });
+    await waitFor(() => expect(box()).toBeNull());
+    expect(within(row()).getByRole('alert').textContent).toBe('');
+  });
+
+  it('Mark posted removes both copies and keeps Copy link; Unmark brings them back', async () => {
+    const posted = tt({ status: 'posted', posted_at: '2026-10-18T17:00:00Z' });
+    markOutreachPosted.mockResolvedValue(posted);
+    unmarkOutreachPosted.mockResolvedValue(tt());
+    onlyVideo([tt()]);
+    await screen.findByRole('heading', { name: 'Video' });
+    await fireEvent.click(btn('Mark posted'));
+    await fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Mark posted' }));
+    await waitFor(() => expect(within(row()).queryByRole('button', { name: 'Copy with link' })).toBeNull());
+    expect(within(row()).queryByRole('button', { name: 'Copy text only' })).toBeNull();
+    expect(row().querySelector('details.text-only')).toBeNull();
+    expect(btn('Copy link')).toBeTruthy();
+    await fireEvent.click(btn('Unmark'));
+    await fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Unmark' }));
+    await waitFor(() => expect(btn('Copy with link')).toBeTruthy());
+    expect(btn('Copy text only')).toBeTruthy();
+  });
+
+  it('an editor with changes reports unsaved, and Save clears it', async () => {
+    const onUnsavedChange = vi.fn();
+    updateOutreachPost.mockResolvedValue(tt({ body: 'New words' }));
+    onlyVideo([tt()], { onUnsavedChange });
+    await screen.findByRole('heading', { name: 'Video' });
+    await fireEvent.click(btn('Edit'));
+    await fireEvent.input(screen.getByLabelText('Post text'), { target: { value: 'New words' } });
+    await waitFor(() => expect(onUnsavedChange.mock.lastCall?.[0]).toBe(true));
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onUnsavedChange.mock.lastCall?.[0]).toBe(false));
+  });
+
+  it('an unconnected Bluesky gets its row under Post by hand, not Video', async () => {
+    const offline = { ...channels[0], configured: false };
+    mountView(
+      viewOf({ channels: [offline, video[1]], waves: [waves[0]], posts: [post({ id: 1, body: 'Hand Bluesky.' }), tt()] }),
+      undefined,
+      { wave: 'announce' },
+    );
+    const byHand = await screen.findByRole('heading', { name: 'Post by hand' });
+    const videoHead = screen.getByRole('heading', { name: 'Video' });
+    const bs = screen.getByRole('article', { name: 'Bluesky Announce' });
+    expect(byHand.compareDocumentPosition(bs) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(videoHead.compareDocumentPosition(row()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(row().compareDocumentPosition(byHand) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(bs.querySelector('.hand-text')).toBeNull();
   });
 });

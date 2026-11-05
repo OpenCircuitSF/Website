@@ -3,7 +3,7 @@
   board, then one row per section (one message, how it will look, one post
   button), of which exactly one is open. The default is picked once per workshop
   and selecting from the board or a row goes through selectSection. Then
-  Schedule all, "Post by hand", Flyers and
+  Schedule all, Flyers and
   "Links and clicks" as collapsed rows with a status and one action each. The
   OutreachPanel stays self-loading (and starts outreach implicitly) and hands
   its view and results to the body snippet. The tracked-links table lives on
@@ -18,13 +18,11 @@
   import OutreachStatusBoard from './OutreachStatusBoard.svelte';
   import OutreachWaveRow from './OutreachWaveRow.svelte';
   import OutreachBulkActions from './OutreachBulkActions.svelte';
-  import OutreachPostCards from './OutreachPostCards.svelte';
   import OutreachResetDialog from './OutreachResetDialog.svelte';
   import Button from '../../lib/Button.svelte';
   import { onMount, tick } from 'svelte';
   import { resetOutreach, listOutreachFlyers, ApiError } from '../../lib/api';
-  import { defaultOpenSection, flyerLinkFor, sectionHeadId, sectionRowId, sendsItself } from '../../lib/outreachCards';
-  import { manualRowStatus } from '../../lib/outreachMessage';
+  import { defaultOpenSection, flyerLinkFor, sectionHeadId, sectionRowId } from '../../lib/outreachCards';
   import { linkReportMessage } from '../../lib/outreachLinks';
   import { resultsSummaryLine } from '../../lib/outreachResults';
 
@@ -134,13 +132,9 @@
       {@const onChange = (p: OutreachPost) => { changed(); panelChange(p); }}
       <OutreachStatusBoard view={v} {openWave} unsaved={unsavedWaves} onSelect={(w) => void selectSection(w)} />
       {#each v.waves as w (w.name)}
-        <OutreachWaveRow view={v} {results} wave={w} {workshopId} open={openWave === w.name} onSelect={() => void selectSection(w.name)} onUnsavedChange={(u) => (unsavedWaves[w.name] = u)} {onChange} reload={reloadAfterChange} />
+        <OutreachWaveRow view={v} {results} wave={w} {workshopId} open={openWave === w.name} onSelect={() => void selectSection(w.name)} onUnsavedChange={(u) => (unsavedWaves[w.name] = u)} {onChange} reload={reloadAfterChange} {flyer} />
       {/each}
       <OutreachBulkActions {workshopId} view={v} onDone={reloadAfterChange} />
-      <details class="row-details">
-        <summary><strong>Post by hand</strong> <span class="text-muted">· {manualRowStatus(v)}</span></summary>
-        <OutreachPostCards view={v} {results} {onChange} reload={reloadAfterChange} channelFilter={(c) => !sendsItself(c)} {flyer} />
-      </details>
       <div class="row-details row spread">
         <span><strong>Flyers</strong> <span class="text-muted">· print and post at saved locations</span></span>
         <a href={adminOutreachFlyersHash()}>Open flyers</a>

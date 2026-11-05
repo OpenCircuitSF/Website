@@ -155,7 +155,10 @@ export interface CardButtons {
   schedule: boolean;
   unschedule: boolean;
   retry: boolean;
+  /** Copy with link. */
   copy: boolean;
+  /** Copy text only (#0626): needs no link, so it does not wait for one. */
+  copyText: boolean;
   markPosted: boolean;
   /** Take back a Mark posted (#0588): only a hand-posted channel's posted card. */
   unmark: boolean;
@@ -166,7 +169,7 @@ export interface CardButtons {
 
 /** Which buttons a card shows; the rules themselves come from composerActions. */
 export function cardButtons(post: OutreachPost | null, channel: OutreachChannel, available: boolean): CardButtons {
-  const none: CardButtons = { edit: false, postNow: false, schedule: false, unschedule: false, retry: false, copy: false, markPosted: false, unmark: false, takedown: false, draft: false };
+  const none: CardButtons = { edit: false, postNow: false, schedule: false, unschedule: false, retry: false, copy: false, copyText: false, markPosted: false, unmark: false, takedown: false, draft: false };
   if (post === null) return { ...none, draft: available };
   const a = composerActions(post, channel, available);
   const auto = sendsItself(channel);
@@ -180,6 +183,7 @@ export function cardButtons(post: OutreachPost | null, channel: OutreachChannel,
     unschedule: auto && a.canUnschedule,
     retry: auto && a.canRetry,
     copy: !auto && !posted && !queued && post.prepared,
+    copyText: !auto && !posted && !queued,
     markPosted: !auto && a.canMarkPosted,
     unmark: !auto && posted,
     takedown: auto && posted,
@@ -298,15 +302,6 @@ export function combinedPostResult(results: { label: string; ok: boolean; error?
 /** The Copy buttons flip to "Copied" for two seconds. */
 export function copyLabel(base: string, copied: boolean): string {
   return copied ? 'Copied' : base;
-}
-
-/**
- * Whether a hand-posted card shows its "Put this in your bio" link row (#0588):
- * only when the post has a short link and the body does not already carry it
- * (TikTok and YouTube captions print the sign-up link themselves).
- */
-export function showBioLink(post: Pick<OutreachPost, 'short_url' | 'body'> | null, channel: Pick<OutreachChannel, 'automatic' | 'configured'>): boolean {
-  return post !== null && !!post.short_url && !sendsItself(channel) && !post.body.includes(post.short_url);
 }
 
 /**

@@ -7,11 +7,13 @@
   confirmation, the Announce "Post to Bluesky and Mastodon" button with its one
   confirmation, and the per-card notices. Edit opens the existing
   OutreachComposer inline in the card. No native browser dialog: every confirmation is
-  an in-app dialog. With `channelFilter` (#0582, "Post by hand") only the
-  matching channels' cards are listed, under no heading of their own.
+  an in-app dialog. With `channelFilter` only the matching channels' cards are
+  listed. With `wave` (#0626) only that section's cards are, under the section's
+  own strip, in a Video group and a Post by hand group.
 -->
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { tick, untrack } from 'svelte';
+  import { isVideoChannel } from '../../lib/outreachHandCopy';
   import { postAll } from '../../lib/outreachPostAll';
   import {
     groupByWave,
@@ -32,12 +34,16 @@
     onChange: (post: OutreachPost) => void;
     /** Refetch the whole view (after a draft is created or a post is deleted). */
     reload: () => void;
-    /** Only these channels get cards (the page's "Post by hand" list). */
+    /** Only these channels get cards. */
     channelFilter?: (channel: OutreachChannel) => boolean;
     /** Where the Instagram card's flyer link goes (#0588). */
     flyer?: { href: string; label: string };
+    /** Only this section's cards, with no heading of its own (#0626). */
+    wave?: string;
+    /** Whether a card's editor holds typing not saved yet (#0626). */
+    onUnsavedChange?: (unsaved: boolean) => void;
   }
-  let { view, results, onChange, reload, channelFilter, flyer }: Props = $props();
+  let { view, results, onChange, reload, channelFilter, flyer, wave, onUnsavedChange }: Props = $props();
 
   let editingId = $state<number | null>(null);
   let pendingEditId = $state<number | null>(null);
@@ -58,15 +64,17 @@
     listIds.some((id) => visibleNotice(notices[id] ?? null, view.posts.find((p) => p.id === id) ?? null) !== '') ? listText : '',
   );
   const groups = $derived(
-    groupByWave(view).map((g) => ({ ...g, cards: channelFilter ? g.cards.filter((c) => channelFilter(c.channel)) : g.cards })),
+    groupByWave(view).filter((g) => !wave || g.wave.name === wave).map((g) => ({ ...g, cards: channelFilter ? g.cards.filter((c) => channelFilter(c.channel)) : g.cards })),
   );
   const bothItems = $derived(postableAutomatic(view, 'announce').filter((i) => !channelFilter || channelFilter(i.channel)));
   const bothLabel = $derived(`Post to ${bothItems.map((i) => i.channel.label).join(' and ')}`);
 
-  /** TikTok and YouTube need a video, so their cards sit under Video channels. */
-  const isVideo = (c: PostCard): boolean => c.channel.utm_medium === 'video';
-
-  let editorDirty = false;
+  let editorDirty = $state(false);
+  $effect(() => {
+    const d = editorDirty;
+    untrack(() => onUnsavedChange?.(d));
+    return () => untrack(() => onUnsavedChange?.(false));
+  });
 
   /** Open the composer in place of this card's display; one card edits at a time (#0579). */
   function openEditor(p: OutreachPost): void {
@@ -136,22 +144,27 @@
     />
   {/snippet}
   {#each groups.filter((g) => g.cards.length > 0) as group (group.wave.name)}
-    <h4 class="wave">{group.wave.label}</h4>
+    {@const video = group.cards.filter((c) => isVideoChannel(c.channel))}
+    {@const other = group.cards.filter((c) => !isVideoChannel(c.channel))}
+    {#if !wave}<h4 class="wave">{group.wave.label}</h4>{/if}
     {#if group.wave.name === 'announce' && bothItems.length >= 2}
       <p class="row">
         <Button variant="primary" onclick={openBoth}>{bothLabel}</Button>
       </p>
     {/if}
-    {#each group.cards.filter((c) => !isVideo(c)) as c (c.channel.name)}
-      {@render card(c, group.wave)}
-    {/each}
-    {#if group.cards.some(isVideo)}
-      <details class="video">
-        <summary>Video channels ({group.wave.label})</summary>
-        {#each group.cards.filter(isVideo) as c (c.channel.name)}
-          {@render card(c, group.wave)}
-        {/each}
-      </details>
+    {#if wave}
+      {#if video.length > 0}
+        <h4 class="group">Video</h4>
+        <p class="text-muted">One video, posted in each place by hand. Each has its own link.</p>
+        {#each video as c (c.channel.name)}{@render card(c, group.wave)}{/each}
+      {/if}
+      {#if other.length > 0}
+        <h4 class="group">Post by hand</h4>
+        {#each other as c (c.channel.name)}{@render card(c, group.wave)}{/each}
+      {/if}
+    {:else}
+      {#each other as c (c.channel.name)}{@render card(c, group.wave)}{/each}
+      {#each video as c (c.channel.name)}{@render card(c, group.wave)}{/each}
     {/if}
   {/each}
 </section>
@@ -185,8 +198,8 @@
   .wave {
     margin: var(--space-4) 0 var(--space-2);
   }
-  .video {
-    margin-bottom: var(--space-3);
+  .group {
+    margin: var(--space-4) 0 var(--space-2);
   }
   [role='status']:empty {
     display: none;
