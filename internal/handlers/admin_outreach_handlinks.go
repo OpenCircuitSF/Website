@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outreach"
+	"github.com/brennanMKE/OpenCircuitSF/internal/workshops"
 )
 
 // outreachHandLinkView is one hand-posted channel x wave slot and its short
@@ -15,6 +17,13 @@ type outreachHandLinkView struct {
 	Channel  string  `json:"channel"`
 	Wave     string  `json:"wave"`
 	ShortURL *string `json:"short_url"`
+}
+
+// eventStarted reports whether the workshop's start time has passed
+// (#0638), by the public listing's rule (workshops.Store.ListVisible): a
+// start at or after now is upcoming, and an undated workshop never starts.
+func (h *AdminOutreachHandler) eventStarted(wk workshops.Workshop) bool {
+	return wk.StartsAt != nil && wk.StartsAt.Before(h.now())
 }
 
 // handPostedChannels is the switched-on channels the site can never post to
@@ -73,6 +82,20 @@ func (h *AdminOutreachHandler) handLinkViews(links []outreach.PostLink, posts []
 //
 // A ShortLinks failure is a 200 whose report names it; the slot gets no link
 // and no draft, and the next pass does both.
+//
+//   - A started workshop gets nothing new, and what it has is left as it is
+//     (#0638).
+//   - The pass runs to the end even if the browser goes away, so a slot is
+//     never left with a link and no draft (#0630). outreachLinksTimeout still
+//     bounds the ShortLinks calls.
+//   - Accepted (#0630): a draft deleted before its slot had a link comes back
+//     once, on the pass that makes the link, because no record of the delete
+//     exists and keeping one needs a migration.
+//   - Accepted (#0630): two passes at once (two tabs, or a reload while the
+//     first is still running) still give each slot one link and at most one
+//     draft. ShortLinks de-duplicates only a destination it has already
+//     stored, though, so two truly simultaneous first creates can leave one
+//     unused, zero-click link upstream.
 func (h *AdminOutreachHandler) EnsureHandLinks(w http.ResponseWriter, r *http.Request) {
 	actor, ok := middleware.UserFromContext(r.Context())
 	if !ok {
@@ -95,6 +118,11 @@ func (h *AdminOutreachHandler) EnsureHandLinks(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusConflict, "outreach is only available for a published event")
 		return
 	}
+	if h.eventStarted(wk) {
+		writeJSON(w, http.StatusOK, outreachLinkReport{Failed: []outreachLinkFailure{}})
+		return
+	}
+	r = r.WithContext(context.WithoutCancel(r.Context()))
 	ctx := r.Context()
 	posts, err := h.store.ListPosts(ctx, o.ID)
 	if err != nil {

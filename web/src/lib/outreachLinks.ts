@@ -1,12 +1,9 @@
-// Pure wording and decisions for the workshop outreach page (#0568): the links
-// table, Create links, Draft all and Schedule all. No DOM, so it is all
-// unit-testable; the Svelte components stay thin.
+// Pure wording and decisions for the workshop outreach page (#0568): link-report
+// and Schedule all wording. No DOM, so it is all unit-testable; the Svelte
+// components stay thin.
 import { onChannels } from './outreachCards';
 import type {
-  OutreachDraftAllResult,
   OutreachLinkReport,
-  OutreachLinkRow,
-  OutreachLinksView,
   OutreachScheduleAllResult,
   WorkshopOutreach,
 } from './types';
@@ -30,7 +27,7 @@ export function linkReportMessage(r: OutreachLinkReport | undefined | null): str
   if (!r || r.failed.length === 0) return null;
   const n = r.failed.length;
   const list = r.failed.map((f) => `${f.label} (${linkFailureReasonLabel(f.reason)})`).join(', ');
-  return `${n} ${n === 1 ? 'link' : 'links'} could not be created: ${list}. Everything else is saved — use Create missing links to try again.`;
+  return `${n} ${n === 1 ? 'link' : 'links'} could not be created: ${list}. Everything else is saved. A missing link is made when it is needed: press Create link on a post, or Print on a flyer.`;
 }
 
 /** The warning for a hand-links pass, or null when nothing failed (#0623). */
@@ -55,52 +52,6 @@ const SKIP_REASONS: Record<string, string> = {
 /** A schedule-all skip reason in words. */
 export function scheduleSkipReasonLabel(reason: string): string {
   return SKIP_REASONS[reason] ?? reason;
-}
-
-export type LinksEmptyKind = 'not_connected' | 'not_published' | 'no_links' | 'some_missing' | null;
-
-/** What the links table says above itself, and which next step it points at. */
-export function linksEmptyState(v: OutreachLinksView): { kind: LinksEmptyKind; message: string } {
-  if (v.unavailable_reason === 'shortlinks_not_configured') {
-    return { kind: 'not_connected', message: 'ShortLinks is not connected. Connect it in Settings to create links.' };
-  }
-  if (v.unavailable_reason === 'workshop_not_published') {
-    return { kind: 'not_published', message: 'This event is not published. Publish it in the event editor to create links.' };
-  }
-  if (v.outreach && v.links.length > 0 && v.links.every((l) => l.short_url === null)) {
-    return { kind: 'no_links', message: 'No links yet. Create links to make a short link for every channel, every post and every flyer location.' };
-  }
-  if (v.missing > 0) {
-    return {
-      kind: 'some_missing',
-      message: `${v.missing} ${v.missing === 1 ? 'link is' : 'links are'} missing. Create missing links to finish the set.`,
-    };
-  }
-  return { kind: null, message: '' };
-}
-
-/** "Bluesky" or "Flyer · Mission Library". */
-export function linkRowLabel(row: OutreachLinkRow): string {
-  return row.kind === 'flyer' ? `Flyer · ${row.location_name ?? row.location_code ?? ''}` : row.channel_label;
-}
-
-/** A row's click count, or an em dash when none is known. */
-export function linkClicksLabel(row: OutreachLinkRow, status: string): string {
-  if (status !== 'ok' || row.clicks === null) return '—';
-  return String(row.clicks);
-}
-
-/** The one-line result of Draft all. */
-export function draftAllMessage(r: OutreachDraftAllResult): string {
-  const n = r.created.length;
-  if (n === 0) return `Nothing to draft: all ${r.skipped} cells already have a post.`;
-  let msg = `Drafted ${n} ${n === 1 ? 'post' : 'posts'}`;
-  if (r.skipped > 0) msg += `; ${r.skipped} existing ${r.skipped === 1 ? 'post was' : 'posts were'} left alone`;
-  msg += '.';
-  if (r.without_link > 0) {
-    msg += ` ${r.without_link} ${r.without_link === 1 ? 'draft has' : 'drafts have'} no link yet — create the missing links first.`;
-  }
-  return msg;
 }
 
 /** The one-line result of a confirmed Schedule all. */

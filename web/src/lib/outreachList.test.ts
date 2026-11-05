@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AdminWorkshop, ConnectionGroup, OutreachSummary } from './types';
 import {
+  eventStarted,
   upcomingPublished,
   outreachChip,
   outreachRowButtonLabel,
@@ -91,5 +92,22 @@ describe('needs attention', () => {
   });
   it('reports nothing when all is connected and announced', () => {
     expect(outreachAttentionItems([group('bluesky', true)], [ws(1)], [sum(1, { posted: 1 })], NOW)).toEqual([]);
+  });
+});
+
+describe('eventStarted (#0638)', () => {
+  const now = new Date('2026-12-05T18:00:00Z');
+  it('is false for an undated workshop', () => {
+    expect(eventStarted(null, now)).toBe(false);
+    expect(eventStarted(undefined, now)).toBe(false);
+  });
+  it('is false before the start', () => {
+    expect(eventStarted('2026-12-05T19:00:00Z', now)).toBe(false);
+  });
+  it('is false at the exact start time', () => {
+    expect(eventStarted('2026-12-05T18:00:00Z', now)).toBe(false);
+  });
+  it('is true once the start time has passed', () => {
+    expect(eventStarted('2026-12-05T17:59:00Z', now)).toBe(true);
   });
 });

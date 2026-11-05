@@ -126,3 +126,10 @@ export function outreachAttentionItems(
   }
   return items;
 }
+
+/** Whether the workshop's start time has passed (#0638), by the same rule
+ * as pastWithOutreach: an undated workshop never has, and one starting
+ * exactly now has not. */
+export function eventStarted(startsAt: string | null | undefined, now: Date = new Date()): boolean {
+  return !!startsAt && Date.parse(startsAt) < now.getTime();
+}

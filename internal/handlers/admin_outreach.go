@@ -547,7 +547,8 @@ type outreachPanelView struct {
 	LinkReport *outreachLinkReport `json:"link_report,omitempty"`
 	// HandLinks is one row per switched-on hand-posted channel by wave (#0623).
 	HandLinks []outreachHandLinkView `json:"hand_links"`
-	// HandLinksPending is true when outreach is available and a row has no URL.
+	// HandLinksPending is true when outreach is available and a row has no URL,
+	// and the event has not started (#0638).
 	HandLinksPending bool `json:"hand_links_pending"`
 	// OffChannels is every switched-off channel, in channel order (#0628).
 	OffChannels []outreach.Channel `json:"off_channels"`
@@ -594,7 +595,7 @@ func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop,
 			return v, err
 		}
 		v.HandLinks, v.HandLinksPending = h.handLinkViews(links, posts)
-		v.HandLinksPending = v.HandLinksPending && v.Available
+		v.HandLinksPending = v.HandLinksPending && v.Available && !h.eventStarted(wk)
 		f := h.facts(wk)
 		for _, p := range h.enabledPosts(posts) {
 			v.Posts = append(v.Posts, h.postView(p, f, wk.Status))

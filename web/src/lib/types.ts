@@ -927,33 +927,6 @@ export interface OutreachLinkReport {
   drafted?: number;
 }
 
-export interface OutreachLinkRow {
-  kind: 'post' | 'flyer';
-  channel: string;
-  channel_label: string;
-  wave: string;
-  wave_label: string;
-  location_id: number | null;
-  location_name: string | null;
-  location_code: string | null;
-  short_link_key: string | null;
-  short_url: string | null;
-  destination_url: string;
-  utm: { source: string; medium: string; campaign: string; content: string };
-  clicks: number | null;
-}
-
-export interface OutreachLinksView {
-  available: boolean;
-  unavailable_reason: string;
-  outreach: { id: number; campaign_slug: string } | null;
-  /** 'ok', 'not_started', 'not_configured', 'unreachable', 'rejected' or 'campaign_missing'. */
-  clicks_status: string;
-  missing: number;
-  links: OutreachLinkRow[];
-  report: OutreachLinkReport | null;
-}
-
 export interface OutreachDraftAllResult {
   created: { post_id: number; channel: string; wave: string; has_link: boolean }[];
   skipped: number;

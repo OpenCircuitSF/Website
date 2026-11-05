@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +40,7 @@ func threeChannels() []string { return []string{"bluesky", "mastodon", "instagra
 // when the caller switches them on with SetEnabledChannels(nil).
 func (e *outreachEnv) handSetup(t *testing.T, draftBody string) (workshops.Workshop, int64) {
 	t.Helper()
+	e.beforeEvent()
 	e.h.SetEnabledChannels(threeChannels)
 	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
 	oid := e.startHTTP(t, w).Outreach.ID
@@ -44,6 +48,13 @@ func (e *outreachEnv) handSetup(t *testing.T, draftBody string) (workshops.Works
 		t.Fatalf("draft-all = %d (%s)", code, b)
 	}
 	return w, oid
+}
+
+// beforeEvent pins the handler's clock a month before
+// seedOutreachWorkshop's 2026-12-05 start, so the hand-links pass is
+// allowed (#0638) whatever today's date is.
+func (e *outreachEnv) beforeEvent() {
+	e.h.now = func() time.Time { return time.Date(2026, 11, 5, 18, 0, 0, 0, time.UTC) }
 }
 
 func (e *outreachEnv) handPanel(t *testing.T, w workshops.Workshop) testHandPanel {
@@ -106,6 +117,7 @@ func hasPost(p testHandPanel, channel, wave string) bool {
 
 func TestAdminOutreachHandLinks_ExistingWorkshopGainsLinksAndDrafts(t *testing.T) {
 	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	e.beforeEvent()
 	e.linkLocations(t)
 	w, oid := e.handSetup(t, `{"waves":["reminder"]}`)
 	p := e.handPanel(t, w)
@@ -196,6 +208,7 @@ func TestAdminOutreachHandLinks_ExistingWorkshopGainsLinksAndDrafts(t *testing.T
 // drafts in all three waves; such a workshop gets nothing new.
 func TestAdminOutreachHandLinks_ExistingVideoLinksAndDraftsUnchanged(t *testing.T) {
 	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	e.beforeEvent()
 	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
 	oid := e.startHTTP(t, w).Outreach.ID
 	if code, b := e.do(t, http.MethodPost, e.linksPath(w, "draft-all"), `{"waves":["reminder","last-call"]}`); code != http.StatusOK {
@@ -234,6 +247,7 @@ func TestAdminOutreachHandLinks_ExistingVideoLinksAndDraftsUnchanged(t *testing.
 
 func TestAdminOutreachHandLinks_Idempotent(t *testing.T) {
 	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	e.beforeEvent()
 	w, _ := e.handSetup(t, `{"waves":["reminder"]}`)
 	e.h.SetEnabledChannels(nil)
 	e.handSync(t, w)
@@ -246,6 +260,7 @@ func TestAdminOutreachHandLinks_Idempotent(t *testing.T) {
 
 func TestAdminOutreachHandLinks_OutageKeepsScreenWorking(t *testing.T) {
 	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	e.beforeEvent()
 	w, _ := e.handSetup(t, `{"waves":["reminder"]}`)
 	e.h.SetEnabledChannels(nil)
 	postsBefore := len(e.handPanel(t, w).Posts)
@@ -278,6 +293,7 @@ func TestAdminOutreachHandLinks_OutageKeepsScreenWorking(t *testing.T) {
 
 func TestAdminOutreachHandLinks_DeletedDraftStaysDeleted(t *testing.T) {
 	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	e.beforeEvent()
 	w, oid := e.handSetup(t, `{"waves":["reminder"]}`)
 	e.h.SetEnabledChannels(nil)
 	e.handSync(t, w)
@@ -305,6 +321,7 @@ func TestAdminOutreachHandLinks_DeletedDraftStaysDeleted(t *testing.T) {
 
 func TestAdminOutreachHandLinks_RespectsWaveOptIn(t *testing.T) {
 	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	e.beforeEvent()
 	w, _ := e.handSetup(t, "")
 	e.h.SetEnabledChannels(nil)
 	if r, _ := e.handSync(t, w); r.Created != 6 || r.Drafted != 2 {
@@ -353,6 +370,7 @@ type testSchedulePlan struct {
 
 func TestAdminOutreachHandLinks_SwitchedOffChannelGetsNothing(t *testing.T) {
 	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	e.beforeEvent()
 	w, oid := e.handSetup(t, `{"waves":["reminder"]}`)
 	e.h.SetEnabledChannels(func() []string { return []string{"bluesky", "mastodon", "instagram", "tiktok"} })
 	calls := len(e.links.links)
@@ -384,6 +402,7 @@ func TestAdminOutreachHandLinks_SwitchedOffChannelGetsNothing(t *testing.T) {
 
 func TestAdminOutreachHandLinks_Guards(t *testing.T) {
 	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	e.beforeEvent()
 	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
 
 	resp := doJSON(t, e.srv.Client(), http.MethodPost, e.srv.URL+e.linksPath(w, "hand-links"), "outreach-user-token", "")
@@ -420,6 +439,7 @@ func TestAdminOutreachHandLinks_Guards(t *testing.T) {
 
 func TestAdminOutreachHandLinks_NeverPostedAutomatically(t *testing.T) {
 	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	e.beforeEvent()
 	w, _ := e.handSetup(t, "")
 	e.h.SetEnabledChannels(nil)
 	e.handSync(t, w)
@@ -456,6 +476,7 @@ func TestAdminOutreachHandLinks_NeverPostedAutomatically(t *testing.T) {
 
 func TestAdminOutreachHandLinks_ClicksCounted(t *testing.T) {
 	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	e.beforeEvent()
 	w, _ := e.handSetup(t, "")
 	e.h.SetEnabledChannels(nil)
 	e.handSync(t, w)
@@ -474,5 +495,146 @@ func TestAdminOutreachHandLinks_ClicksCounted(t *testing.T) {
 	}
 	if got["tiktok"] != 3 || got["bluesky"] != 2 {
 		t.Errorf("channel clicks = %v", got)
+	}
+}
+
+func TestAdminOutreachHandLinks_StartedWorkshopGetsNothing(t *testing.T) {
+	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	w, oid := e.handSetup(t, `{"waves":["reminder"]}`)
+	e.h.SetEnabledChannels(nil)
+
+	// Existing rows are untouched once the event has started.
+	r, _ := e.handSync(t, w)
+	if r.Created != 6 || r.Drafted != 4 {
+		t.Fatalf("first pass = %+v", r)
+	}
+	rows, linkRows, calls := e.postRows(t, oid), e.linkRowCount(t, oid), len(e.links.links)
+	e.h.now = func() time.Time { return w.StartsAt.Add(time.Minute) }
+	r, _ = e.handSync(t, w)
+	if r.Created != 0 || r.Drafted != 0 || len(r.Failed) != 0 {
+		t.Errorf("started pass = %+v, want nothing done", r)
+	}
+	if len(e.links.links) != calls {
+		t.Errorf("started pass made %d CreateLink calls", len(e.links.links)-calls)
+	}
+	if n := e.linkRowCount(t, oid); n != linkRows {
+		t.Errorf("link rows = %d, want %d", n, linkRows)
+	}
+	if got := e.postRows(t, oid); !reflect.DeepEqual(got, rows) {
+		t.Error("posts changed on a started workshop")
+	}
+	if !hasPost(e.handPanel(t, w), "tiktok", "announce") {
+		t.Error("existing tiktok/announce draft is gone")
+	}
+
+	// A past workshop that was never synced.
+	w2, oid2 := e.handSetup(t, `{"waves":["reminder"]}`)
+	e.h.SetEnabledChannels(nil)
+	e.h.now = func() time.Time { return w2.StartsAt.Add(time.Minute) }
+	if e.handPanel(t, w2).HandLinksPending {
+		t.Error("pending = true for a started workshop")
+	}
+	rows2, calls2 := e.postRows(t, oid2), len(e.links.links)
+	if r, _ := e.handSync(t, w2); r.Created != 0 {
+		t.Errorf("never-synced started pass = %+v", r)
+	}
+	if len(e.links.links) != calls2 {
+		t.Error("never-synced started pass called ShortLinks")
+	}
+	if !reflect.DeepEqual(e.postRows(t, oid2), rows2) {
+		t.Error("posts changed on a never-synced started workshop")
+	}
+
+	// Starting exactly now is still upcoming.
+	w3, _ := e.handSetup(t, `{"waves":["reminder"]}`)
+	e.h.SetEnabledChannels(nil)
+	e.h.now = func() time.Time { return *w3.StartsAt }
+	if !e.handPanel(t, w3).HandLinksPending {
+		t.Error("pending = false at the exact start time")
+	}
+	if r, _ := e.handSync(t, w3); r.Created != 6 {
+		t.Errorf("start-time pass = %+v, want 6 created", r)
+	}
+}
+
+// Before #0630 this returned 500 with drafts missing: the cancel stopped the
+// link loop and the draft CreatePost failed on the dead context.
+func TestAdminOutreachHandLinks_ClientGoneMidPassStillDrafts(t *testing.T) {
+	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	w, _ := e.handSetup(t, `{"waves":["reminder"]}`)
+	e.h.SetEnabledChannels(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	n := 0
+	e.links.afterCreate = func() {
+		n++
+		if n == 2 {
+			cancel()
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, e.linksPath(w, "hand-links"), nil).WithContext(ctx)
+	req = withCookie(req, "outreach-admin-token")
+	rec := httptest.NewRecorder()
+	e.srv.Config.Handler.ServeHTTP(rec, req)
+	e.links.afterCreate = nil
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", rec.Code, rec.Body.String())
+	}
+	r := decodeOutreach[testHandReport](t, rec.Body.Bytes())
+	if r.Created != 6 || r.Drafted != 4 {
+		t.Fatalf("report = %+v, want 6 created and 4 drafted", r)
+	}
+	p := e.handPanel(t, w)
+	if p.HandLinksPending {
+		t.Error("pending = true after the pass")
+	}
+	for _, ch := range []string{"tiktok", "youtube"} {
+		for _, wv := range []string{"announce", "reminder"} {
+			if !hasPost(p, ch, wv) {
+				t.Errorf("no %s/%s draft", ch, wv)
+			}
+		}
+	}
+}
+
+// This pins the local guarantee only: each slot gets one link and at most one
+// draft. An upstream duplicate link is accepted (see EnsureHandLinks).
+func TestAdminOutreachHandLinks_OverlappingPassesMakeEachSlotOnce(t *testing.T) {
+	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	w, oid := e.handSetup(t, `{"waves":["reminder"]}`)
+	e.h.SetEnabledChannels(nil)
+	e.links.createDelay = 5 * time.Millisecond
+
+	recs := []*httptest.ResponseRecorder{httptest.NewRecorder(), httptest.NewRecorder()}
+	var wg sync.WaitGroup
+	for _, rec := range recs {
+		req := withCookie(httptest.NewRequest(http.MethodPost, e.linksPath(w, "hand-links"), nil), "outreach-admin-token")
+		wg.Add(1)
+		go func(rec *httptest.ResponseRecorder, req *http.Request) {
+			defer wg.Done()
+			e.srv.Config.Handler.ServeHTTP(rec, req)
+		}(rec, req)
+	}
+	wg.Wait()
+	created, drafted := 0, 0
+	for i, rec := range recs {
+		if rec.Code != http.StatusOK {
+			t.Fatalf("pass %d status = %d (%s)", i, rec.Code, rec.Body.String())
+		}
+		r := decodeOutreach[testHandReport](t, rec.Body.Bytes())
+		created += r.Created
+		drafted += r.Drafted
+	}
+	if created != 6 || drafted != 4 {
+		t.Errorf("summed created=%d drafted=%d, want 6 and 4", created, drafted)
+	}
+	if n := e.rowCount(t, `SELECT count(*) FROM outreach_links WHERE outreach_id = $1 AND channel IN ('tiktok','youtube')`, oid); n != 6 {
+		t.Errorf("video link rows = %d, want 6", n)
+	}
+	if n := e.rowCount(t, `SELECT count(*) FROM outreach_posts WHERE outreach_id = $1 AND channel IN ('tiktok','youtube')`, oid); n != 4 {
+		t.Errorf("video posts = %d, want 4", n)
+	}
+	if n := e.rowCount(t, `SELECT count(*) FROM (SELECT 1 FROM outreach_posts WHERE outreach_id = $1 GROUP BY channel, wave HAVING count(*) > 1) d`, oid); n != 0 {
+		t.Errorf("%d slots have more than one post", n)
 	}
 }

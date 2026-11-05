@@ -44,6 +44,12 @@ type fakeShortLinker struct {
 	// createBarrier, when set, makes CreateLink wait until that many calls
 	// are in flight at once, so a test can force two Prepares to race.
 	createBarrier *sync.WaitGroup
+	// afterCreate is called after each newly stored link, inside the lock,
+	// so a test can act mid-pass (#0630).
+	afterCreate func()
+	// createDelay, when non-zero, is slept before taking the lock, so two
+	// passes overlap (#0630).
+	createDelay time.Duration
 	// CampaignStats (#0546): a configurable rollup or error, with every
 	// request recorded.
 	statsRollup *shortlinks.CampaignRollup
@@ -123,7 +129,11 @@ func (f *fakeShortLinker) EnsureCampaign(_ context.Context, slug string, req sho
 func (f *fakeShortLinker) CreateLink(_ context.Context, req shortlinks.CreateLinkRequest) (*shortlinks.Link, error) {
 	f.mu.Lock()
 	barrier := f.createBarrier
+	delay := f.createDelay
 	f.mu.Unlock()
+	if delay > 0 {
+		time.Sleep(delay)
+	}
 	if barrier != nil {
 		barrier.Done()
 		barrier.Wait()
@@ -144,6 +154,9 @@ func (f *fakeShortLinker) CreateLink(_ context.Context, req shortlinks.CreateLin
 		}
 	}
 	f.links = append(f.links, req)
+	if f.afterCreate != nil {
+		f.afterCreate()
+	}
 	if f.fixedKey != "" {
 		return &shortlinks.Link{Key: f.fixedKey}, nil
 	}
@@ -204,8 +217,6 @@ func outreachMuxPosting(pool *pgxpool.Pool, links shortLinker, posting outreachP
 	mux.Handle("POST /admin/outreach-posts/{id}/schedule", requireAdmin(http.HandlerFunc(h.SchedulePost)))
 	mux.Handle("POST /admin/outreach-posts/{id}/unschedule", requireAdmin(http.HandlerFunc(h.UnschedulePost)))
 	mux.Handle("GET /admin/workshops/{id}/outreach/results", requireAdmin(http.HandlerFunc(h.ResultsForWorkshop)))
-	mux.Handle("GET /admin/workshops/{id}/outreach/links", requireAdmin(http.HandlerFunc(h.Links)))
-	mux.Handle("POST /admin/workshops/{id}/outreach/links", requireAdmin(http.HandlerFunc(h.CreateLinks)))
 	mux.Handle("POST /admin/workshops/{id}/outreach/reset", requireAdmin(http.HandlerFunc(h.Reset)))
 	mux.Handle("POST /admin/workshops/{id}/outreach/draft-all", requireAdmin(http.HandlerFunc(h.DraftAll)))
 	mux.Handle("POST /admin/workshops/{id}/outreach/hand-links", requireAdmin(http.HandlerFunc(h.EnsureHandLinks)))

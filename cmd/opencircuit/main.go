@@ -1615,9 +1615,7 @@ func adminRoutes(
 			// #0546: click results read from ShortLinks. Hyphenated like the
 			// siblings so it never overlaps /admin/outreach/{id}/posts.
 			adminRoute{http.MethodGet, "/admin/workshops/{id}/outreach/results", http.HandlerFunc(adminOutreachH.ResultsForWorkshop)},
-			// #0568: tracked links, draft-all and schedule-all, keyed by workshop id.
-			adminRoute{http.MethodGet, "/admin/workshops/{id}/outreach/links", http.HandlerFunc(adminOutreachH.Links)},
-			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/links", http.HandlerFunc(adminOutreachH.CreateLinks)},
+			// #0568: draft-all and schedule-all, keyed by workshop id.
 			// #0592: reset a workshop's outreach while nothing is public.
 			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/reset", http.HandlerFunc(adminOutreachH.Reset)},
 			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/draft-all", http.HandlerFunc(adminOutreachH.DraftAll)},

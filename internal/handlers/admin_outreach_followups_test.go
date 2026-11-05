@@ -77,10 +77,9 @@ func TestAdminOutreach_SummaryCountsQueued(t *testing.T) {
 	t.Error("no row for the workshop")
 }
 
-// #0593: the list counts and the links table follow the visible posts. A
-// switched-off channel's draft is not counted and has no link row; its posted
-// post keeps both.
-func TestAdminOutreach_SwitchedOffChannelCountsAndLinks(t *testing.T) {
+// #0593: the list counts follow the visible posts. A switched-off channel's
+// draft is not counted; its posted post is.
+func TestAdminOutreach_SwitchedOffChannelCounts(t *testing.T) {
 	e := newOutreachEnv(t, true)
 	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
 	o := e.start(t, w).Outreach
@@ -115,30 +114,5 @@ func TestAdminOutreach_SwitchedOffChannelCountsAndLinks(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("list has no row for the workshop")
-	}
-
-	code, b := e.do(t, http.MethodGet, fmt.Sprintf("/admin/workshops/%d/outreach/links", w.ID), "")
-	if code != http.StatusOK {
-		t.Fatalf("links = %d %s", code, b)
-	}
-	var tiktok, youtube, instagram int
-	for _, l := range decodeOutreach[testLinksView](t, b).Links {
-		if l.Kind != "post" {
-			continue
-		}
-		switch l.Channel {
-		case "tiktok":
-			tiktok++
-			if l.Wave != "announce" {
-				t.Errorf("tiktok row for wave %q, want only the posted announce", l.Wave)
-			}
-		case "youtube":
-			youtube++
-		case "instagram":
-			instagram++
-		}
-	}
-	if tiktok != 1 || youtube != 0 || instagram == 0 {
-		t.Errorf("link rows tiktok=%d youtube=%d instagram=%d, want 1, 0 and the enabled channel's rows", tiktok, youtube, instagram)
 	}
 }

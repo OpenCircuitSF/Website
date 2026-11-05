@@ -21,7 +21,6 @@ vi.mock('../../lib/api', () => ({
   getWorkshopOutreach: (id: number) => getWorkshopOutreach(id),
   startOutreach: (id: number) => startOutreach(id),
   getWorkshopOutreachResults: (id: number) => getWorkshopOutreachResults(id),
-  createWorkshopOutreachLinks: vi.fn(),
   ensureOutreachHandLinks: (id: number) => ensureOutreachHandLinks(id),
   draftAllOutreach: vi.fn(),
   resetOutreach: (id: number) => resetOutreach(id),
@@ -66,7 +65,7 @@ const allWaves = [...waves, { name: 'reminder', label: 'Reminder', suggested_at:
 function view(over: Partial<WorkshopOutreach> = {}): WorkshopOutreach {
   return {
     available: true, unavailable_reason: '',
-    workshop: { id: 5, slug: 'soldering-101', title: 'Soldering 101', status: 'published', starts_at: '2026-12-05T18:00:00Z' },
+    workshop: { id: 5, slug: 'soldering-101', title: 'Soldering 101', status: 'published', starts_at: '2099-12-05T18:00:00Z' },
     outreach: { id: 9, workshop_id: 5, campaign_slug: 'soldering-101', created_at: '2026-10-01T00:00:00Z' },
     channels, waves, posts: [], ...over,
   };
@@ -197,6 +196,17 @@ describe('OutreachWorkshop', () => {
       await screen.findByRole('heading', { name: 'Soldering 101' });
       await waitFor(() => expect(ensureOutreachHandLinks).toHaveBeenCalledWith(5));
       expect(ensureOutreachHandLinks).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not make hand-posted links for a workshop that has started (#0638)', async () => {
+      getWorkshopOutreach.mockResolvedValue(
+        view({ hand_links_pending: true, workshop: { id: 5, slug: 'soldering-101', title: 'Soldering 101', status: 'published', starts_at: '2020-01-01T18:00:00Z' } }),
+      );
+      getWorkshopOutreachResults.mockResolvedValue(noResults);
+      render(OutreachWorkshop, { workshopId: 5 });
+      await screen.findByRole('heading', { name: 'Soldering 101' });
+      await waitFor(() => expect(getWorkshopOutreachResults).toHaveBeenCalled());
+      expect(ensureOutreachHandLinks).not.toHaveBeenCalled();
     });
 
     it('does not call it when nothing is missing', async () => {

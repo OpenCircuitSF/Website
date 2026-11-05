@@ -118,8 +118,8 @@ func TestAdminOutreachReset_SuccessKeepsLinksAndStartStillWorks(t *testing.T) {
 	if code, b := e.do(t, http.MethodPost, e.linksPath(w, "draft-all"), ""); code != http.StatusOK {
 		t.Fatalf("draft-all after reset = %d (%s)", code, b)
 	}
-	if code, b := e.do(t, http.MethodPost, e.linksPath(w, "links"), ""); code != http.StatusOK {
-		t.Fatalf("create links after reset = %d (%s)", code, b)
+	if code, b := e.do(t, http.MethodPost, e.linksPath(w, "hand-links"), ""); code != http.StatusOK {
+		t.Fatalf("hand links after reset = %d (%s)", code, b)
 	}
 	if len(e.links.links) != created {
 		t.Errorf("ShortLinks links created after reset: %d new", len(e.links.links)-created)

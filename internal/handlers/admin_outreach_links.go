@@ -109,13 +109,24 @@ func sortedLocations(locs []outreach.Location) []outreach.Location {
 }
 
 // ensureLinks creates every missing tracked link for an outreach: one per
-// channel x wave and one per active flyer location. It is the single helper
-// behind Start, Create links and Prepare's table, so a link made by any path
-// is the same row. The error return is for store failures only; ShortLinks
-// failures are reported per link and never abort the pass, except a rate
-// limit or the deadline, which stop it with the rest reported as not tried.
+// channel x wave and one per active flyer location. It is the helper behind
+// Start, so a link made by any path is the same row. A started workshop gets
+// no hand-posted links (#0638). The error return is for store failures only;
+// ShortLinks failures are reported per link and never abort the pass, except a
+// rate limit or the deadline, which stop it with the rest reported as not
+// tried.
 func (h *AdminOutreachHandler) ensureLinks(r *http.Request, actorID int64, o outreach.Outreach, wk workshops.Workshop) (outreachLinkReport, error) {
-	return h.ensureLinksFor(r, actorID, o, wk, h.enabledChannels(), true)
+	chs := h.enabledChannels()
+	if h.eventStarted(wk) {
+		var auto []outreach.Channel
+		for _, ch := range chs {
+			if ch.Automatic {
+				auto = append(auto, ch)
+			}
+		}
+		chs = auto
+	}
+	return h.ensureLinksFor(r, actorID, o, wk, chs, true)
 }
 
 // ensureLinksFor is ensureLinks limited to the given channels, with or without
@@ -266,158 +277,6 @@ func (h *AdminOutreachHandler) ensureLinksFor(r *http.Request, actorID int64, o 
 	return report, nil
 }
 
-type outreachLinkRowView struct {
-	Kind           string          `json:"kind"`
-	Channel        string          `json:"channel"`
-	ChannelLabel   string          `json:"channel_label"`
-	Wave           string          `json:"wave"`
-	WaveLabel      string          `json:"wave_label"`
-	LocationID     *int64          `json:"location_id"`
-	LocationName   *string         `json:"location_name"`
-	LocationCode   *string         `json:"location_code"`
-	ShortLinkKey   *string         `json:"short_link_key"`
-	ShortURL       *string         `json:"short_url"`
-	DestinationURL string          `json:"destination_url"`
-	UTM            outreachUTMView `json:"utm"`
-	Clicks         *int64          `json:"clicks"`
-}
-
-type outreachLinksView struct {
-	Available         bool                  `json:"available"`
-	UnavailableReason string                `json:"unavailable_reason"`
-	Outreach          *outreachLinksRowRef  `json:"outreach"`
-	ClicksStatus      string                `json:"clicks_status"`
-	Missing           int                   `json:"missing"`
-	Links             []outreachLinkRowView `json:"links"`
-	Report            *outreachLinkReport   `json:"report"`
-}
-
-type outreachLinksRowRef struct {
-	ID           int64  `json:"id"`
-	CampaignSlug string `json:"campaign_slug"`
-}
-
-// linksView builds the links table for a workshop.
-func (h *AdminOutreachHandler) linksView(ctx context.Context, wk workshops.Workshop, o *outreach.Outreach) (outreachLinksView, error) {
-	v := outreachLinksView{Links: []outreachLinkRowView{}, ClicksStatus: "not_started"}
-	switch {
-	case !h.linksEnabled():
-		v.UnavailableReason = "shortlinks_not_configured"
-	case wk.Status != "published":
-		v.UnavailableReason = "workshop_not_published"
-	default:
-		v.Available = true
-	}
-	if o == nil {
-		return v, nil
-	}
-	v.Outreach = &outreachLinksRowRef{ID: o.ID, CampaignSlug: o.CampaignSlug}
-
-	postLinks, err := h.store.ListPostLinks(ctx, o.ID)
-	if err != nil {
-		return v, err
-	}
-	posts, err := h.store.ListPosts(ctx, o.ID)
-	if err != nil {
-		return v, err
-	}
-	flyerLinks, err := h.flyers.ListFlyerLinks(ctx, o.ID)
-	if err != nil {
-		return v, err
-	}
-	locs, err := h.locations.ListLocations(ctx)
-	if err != nil {
-		return v, err
-	}
-	rowBySlot := map[[2]string]outreach.PostLink{}
-	for _, l := range postLinks {
-		rowBySlot[[2]string{l.Channel, l.Wave}] = l
-	}
-	postBySlot := map[[2]string]outreach.Post{}
-	for _, p := range posts {
-		postBySlot[[2]string{p.Channel, p.Wave}] = p
-	}
-	flyerByLoc := map[int64]outreach.FlyerLink{}
-	for _, l := range flyerLinks {
-		flyerByLoc[l.LocationID] = l
-	}
-
-	f := h.facts(wk)
-	// A switched-off channel keeps the rows of its posts that are still
-	// visible, such as a posted one (#0593), and no others.
-	visible := map[[2]string]bool{}
-	for _, p := range h.enabledPosts(posts) {
-		visible[[2]string{p.Channel, p.Wave}] = true
-	}
-	for _, ch := range h.shownChannels(posts) {
-		for _, wv := range outreach.Waves() {
-			slot := [2]string{ch.Name, wv.Name}
-			if !h.channelEnabled(ch.Name) && !visible[slot] {
-				continue
-			}
-			row := outreachLinkRowView{
-				Kind: "post", Channel: ch.Name, ChannelLabel: ch.Label, Wave: wv.Name, WaveLabel: wv.Label,
-				DestinationURL: outreach.DestinationURL(h.baseURL, f, ch, wv),
-				UTM:            outreachUTMView{Source: ch.UTMSource, Medium: ch.UTMMedium, Campaign: f.Slug, Content: wv.Name},
-			}
-			if l, ok := rowBySlot[slot]; ok {
-				k, u := l.Key, l.ShortURL
-				row.ShortLinkKey, row.ShortURL = &k, &u
-			} else if p, ok := postBySlot[slot]; ok && p.ShortLinkKey != nil && p.ShortURL != nil {
-				row.ShortLinkKey, row.ShortURL = p.ShortLinkKey, p.ShortURL
-			}
-			v.Links = append(v.Links, row)
-		}
-	}
-	for _, l := range sortedLocations(locs) {
-		fl, has := flyerByLoc[l.ID]
-		if !l.Active && !has {
-			continue
-		}
-		id, name, code := l.ID, l.Name, l.Code
-		row := outreachLinkRowView{
-			Kind: "flyer", ChannelLabel: "Flyer", LocationID: &id, LocationName: &name, LocationCode: &code,
-			DestinationURL: outreach.FlyerDestinationURL(h.baseURL, wk.Slug, l.Code),
-			UTM:            outreachUTMView{Source: "flyer", Medium: "print", Campaign: wk.Slug, Content: l.Code},
-		}
-		if has {
-			k, u := fl.Key, fl.ShortURL
-			row.ShortLinkKey, row.ShortURL = &k, &u
-		}
-		v.Links = append(v.Links, row)
-	}
-	var keys []string
-	for _, row := range v.Links {
-		if row.ShortLinkKey == nil {
-			v.Missing++
-		} else {
-			keys = append(keys, *row.ShortLinkKey)
-		}
-	}
-	switch {
-	case !h.linksEnabled():
-		v.ClicksStatus = resultsNotConfigured
-	case len(keys) == 0:
-		v.ClicksStatus = resultsOK
-	default:
-		from, to := outreach.ResultsWindow(o.CreatedAt, wk.StartsAt, h.now())
-		rollup, _, err := h.statsCache().Get(ctx, o.CampaignSlug, from, to)
-		if err != nil {
-			v.ClicksStatus = classifyResultsError("links", err)
-			break
-		}
-		v.ClicksStatus = resultsOK
-		clicks := outreach.ClicksByKey(keys, rollup)
-		for i := range v.Links {
-			if k := v.Links[i].ShortLinkKey; k != nil {
-				n := clicks[*k]
-				v.Links[i].Clicks = &n
-			}
-		}
-	}
-	return v, nil
-}
-
 // workshopOutreach loads the workshop named by the path and its outreach, if
 // any; ok=false means the response is written.
 func (h *AdminOutreachHandler) workshopOutreach(w http.ResponseWriter, r *http.Request) (workshops.Workshop, *outreach.Outreach, bool) {
@@ -439,59 +298,6 @@ func (h *AdminOutreachHandler) workshopOutreach(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return wk, nil, false
 	}
-}
-
-// Links handles GET /admin/workshops/{id}/outreach/links.
-func (h *AdminOutreachHandler) Links(w http.ResponseWriter, r *http.Request) {
-	wk, o, ok := h.workshopOutreach(w, r)
-	if !ok {
-		return
-	}
-	v, err := h.linksView(r.Context(), wk, o)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-	writeJSON(w, http.StatusOK, v)
-}
-
-// CreateLinks handles POST /admin/workshops/{id}/outreach/links: create every
-// missing tracked link. Idempotent; a partial failure is a 200 whose report
-// names what failed.
-func (h *AdminOutreachHandler) CreateLinks(w http.ResponseWriter, r *http.Request) {
-	actor, ok := middleware.UserFromContext(r.Context())
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthenticated")
-		return
-	}
-	if !h.linksEnabled() {
-		writeError(w, http.StatusServiceUnavailable, "ShortLinks is not configured")
-		return
-	}
-	wk, o, ok := h.workshopOutreach(w, r)
-	if !ok {
-		return
-	}
-	if o == nil {
-		writeError(w, http.StatusConflict, "start outreach first")
-		return
-	}
-	if wk.Status != "published" {
-		writeError(w, http.StatusConflict, "outreach is only available for a published event")
-		return
-	}
-	report, err := h.ensureLinks(r, actor.ID, *o, wk)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-	v, err := h.linksView(r.Context(), wk, o)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-	v.Report = &report
-	writeJSON(w, http.StatusOK, v)
 }
 
 type draftAllRequest struct {

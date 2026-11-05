@@ -25,6 +25,7 @@
   import { resultsStatusMessage } from '../../lib/outreachResults';
   import { pollDelay } from '../../lib/outreachCards';
   import { handLinkReportMessage } from '../../lib/outreachLinks';
+  import { eventStarted } from '../../lib/outreachList';
   import type { OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
 
@@ -92,7 +93,8 @@
 
   // #0623: once per workshop per mount, so an outage does not loop; opening the
   // page again tries again. Not awaited by load(): the page and results never
-  // wait on ShortLinks.
+  // wait on ShortLinks. Never for a workshop that has started (#0638); the
+  // server refuses too.
   let handLinksTried: number | null = null;
   let handLinkNote = $state('');
 
@@ -134,7 +136,7 @@
       await start();
       return;
     }
-    if (autoStart && view?.hand_links_pending && handLinksTried !== workshopId) {
+    if (autoStart && view?.hand_links_pending && !eventStarted(view.workshop.starts_at) && handLinksTried !== workshopId) {
       handLinksTried = workshopId;
       void ensureHandLinks(workshopId);
     }

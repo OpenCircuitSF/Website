@@ -17,7 +17,6 @@ import type {
   ServerSettings,
   ConnectionGroup,
   ConnectionTestResult,
-  OutreachLinksView,
   OutreachDraftAllResult,
   OutreachLinkReport,
   OutreachScheduleAllResult,
@@ -1366,16 +1365,6 @@ export function getWorkshopOutreach(workshopId: number): Promise<WorkshopOutreac
 /** POST /admin/workshops/{id}/outreach — ensure the ShortLinks campaign and start outreach. */
 export function startOutreach(workshopId: number): Promise<WorkshopOutreach> {
   return apiPost<WorkshopOutreach>(`/admin/workshops/${workshopId}/outreach`);
-}
-
-/** GET /admin/workshops/{id}/outreach/links — the links table (#0568). */
-export function getWorkshopOutreachLinks(workshopId: number): Promise<OutreachLinksView> {
-  return apiGet<OutreachLinksView>(`/admin/workshops/${workshopId}/outreach/links`);
-}
-
-/** POST /admin/workshops/{id}/outreach/links — create every missing tracked link (idempotent). */
-export function createWorkshopOutreachLinks(workshopId: number): Promise<OutreachLinksView> {
-  return apiPost<OutreachLinksView>(`/admin/workshops/${workshopId}/outreach/links`);
 }
 
 /** POST /admin/workshops/{id}/outreach/hand-links — make missing hand-posted links, and a draft with each where the wave is written (#0623). */
