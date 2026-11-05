@@ -193,6 +193,40 @@ async function renderSubscribersSection(): Promise<void> {
   });
 }
 
+describe('Admin.svelte settings section: the default event type (#0618)', () => {
+  it('offers no field for default_event_type_id', async () => {
+    const distinctive = '7654321';
+    getSettings.mockReset();
+    getSettings.mockResolvedValue({
+      settings: [
+        { key: 'physical_address', value: 'PO Box 618' },
+        { key: 'default_event_type_id', value: distinctive },
+      ] as Setting[],
+    });
+    listUsers.mockResolvedValue({ users: [] });
+    listAudit.mockResolvedValue(emptyAuditPage());
+    listInterests.mockResolvedValue({ interests: [] });
+    listSubscribers.mockResolvedValue(emptySubscribersPage());
+    listSuppressions.mockResolvedValue({ suppressions: [], count: 0 });
+    currentUser.set(adminUser());
+    window.location.hash = '#/settings';
+
+    const { container } = render(Admin);
+    await waitFor(() => expect(getSettings).toHaveBeenCalled());
+    // The address reaching its field proves the settings have rendered.
+    await waitFor(() => {
+      const fields = [...container.querySelectorAll<HTMLInputElement>('input, textarea')];
+      expect(fields.some((el) => el.value === 'PO Box 618')).toBe(true);
+    });
+
+    expect(container.textContent).not.toContain('default_event_type_id');
+    expect(container.textContent).not.toContain(distinctive);
+    for (const el of container.querySelectorAll<HTMLInputElement>('input, textarea, select')) {
+      expect(el.value).not.toBe(distinctive);
+    }
+  });
+});
+
 describe('Admin.svelte subscribers section: CSV export link (#0219)', () => {
   it('renders a real <a href download> to the export endpoint, not a button (a real navigation, per this issue\'s criterion 3)', async () => {
     await renderSubscribersSection();

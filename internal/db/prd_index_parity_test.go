@@ -154,6 +154,7 @@ var prdIndexParityTables = map[string]bool{
 // [8:9] is unchanged.
 var (
 	createIndexPattern     = regexp.MustCompile(`(?i)CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(\w+)\s+ON\s+(\w+)\s*(\([^;]*?\))(?:\s+WHERE\s+([^;]*?))?;`)
+	dropColumnClause       = regexp.MustCompile(`(?i)^\s*DROP\s+COLUMN\s+(?:IF\s+EXISTS\s+)?(\w+)`)
 	dropIndexPattern       = regexp.MustCompile(`(?i)DROP\s+INDEX\s+(?:IF\s+EXISTS\s+)?(\w+)\s*;`)
 	looseIndexStartPattern = regexp.MustCompile(`(?i)CREATE\s+(?:UNIQUE\s+)?INDEX\b`)
 )
@@ -960,13 +961,11 @@ func columnsFromCreateTable(text string, openParen int) (cols []string, bodyEnd 
 // liveColumnsFromMigrations replays every CREATE TABLE and
 // ALTER TABLE ADD COLUMN statement across migrations/*.up.sql — in version
 // order and by byte position within each file, the same ordering
-// liveIndexesFromMigrations uses and for the same reason: today every column
-// change in this tree is a monotonic addition (CREATE TABLE's own list, or a
-// later ADD COLUMN — migrations/000011, 000018, 000019), so a plain union
-// gives the right answer, but the position-ordered replay is what keeps that
-// true if a future migration ever DROPs and recreates a table or drops a
-// column, exactly as idx_email_events_soft_bounce's DROP+CREATE pair is what
-// makes the *index* replay's ordering load-bearing rather than incidental.
+// liveIndexesFromMigrations uses and for the same reason: most column changes
+// in this tree are additions (CREATE TABLE's own list, or a later ADD COLUMN —
+// migrations/000011, 000018, 000019), and migrations/000047 drops one, which is
+// what makes the position-ordered replay load-bearing here, exactly as
+// idx_email_events_soft_bounce's DROP+CREATE pair does for the *index* replay.
 func liveColumnsFromMigrations(t *testing.T) map[string]map[string]columnDef {
 	t.Helper()
 	stems := listMigrations(t)
@@ -976,6 +975,7 @@ func liveColumnsFromMigrations(t *testing.T) map[string]map[string]columnDef {
 		pos     int
 		table   string
 		columns []string
+		dropped []string
 	}
 
 	for _, m := range stems {
@@ -997,9 +997,16 @@ func liveColumnsFromMigrations(t *testing.T) map[string]map[string]columnDef {
 		for _, loc := range alterTableStmtPattern.FindAllStringSubmatchIndex(text, -1) {
 			table := matchGroup(text, loc, 2)
 			blob := matchGroup(text, loc, 4)
-			cols := columnAddsInClauses(splitTopLevel(blob))
-			if len(cols) > 0 {
-				ops = append(ops, op{pos: loc[0], table: table, columns: cols})
+			clauses := splitTopLevel(blob)
+			cols := columnAddsInClauses(clauses)
+			var dropped []string
+			for _, clause := range clauses {
+				if m := dropColumnClause.FindStringSubmatch(clause); m != nil {
+					dropped = append(dropped, m[1])
+				}
+			}
+			if len(cols) > 0 || len(dropped) > 0 {
+				ops = append(ops, op{pos: loc[0], table: table, columns: cols, dropped: dropped})
 			}
 		}
 		sort.Slice(ops, func(i, j int) bool { return ops[i].pos < ops[j].pos })
@@ -1009,6 +1016,9 @@ func liveColumnsFromMigrations(t *testing.T) map[string]map[string]columnDef {
 			}
 			for _, c := range o.columns {
 				live[o.table][c] = columnDef{sourceFile: m.stem}
+			}
+			for _, c := range o.dropped {
+				delete(live[o.table], c)
 			}
 		}
 	}

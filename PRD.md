@@ -694,17 +694,29 @@ CREATE TABLE event_types (
     slug       TEXT UNIQUE NOT NULL,      -- immutable; #0614 uses it in URLs
     name       TEXT NOT NULL,
     enabled    BOOLEAN NOT NULL DEFAULT TRUE,  -- false: no new listings of this type
-    is_default BOOLEAN NOT NULL DEFAULT FALSE,
     sort_order INT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE event_types ADD CONSTRAINT event_types_slug_format
     CHECK (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$');
-ALTER TABLE event_types ADD CONSTRAINT event_types_default_enabled
-    CHECK (NOT is_default OR enabled);
-CREATE UNIQUE INDEX event_types_one_default ON event_types (is_default) WHERE is_default;
-CREATE FUNCTION event_types_default_id() RETURNS BIGINT LANGUAGE sql STABLE
-    AS $$ SELECT id FROM event_types WHERE is_default $$;
+-- The default type is settings.default_event_type_id (#0618). This raises SQLSTATE
+-- OCDEF if that row is missing, or names no enabled type; it never picks another.
+CREATE FUNCTION event_types_default_id() RETURNS BIGINT LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    raw TEXT;
+    resolved BIGINT;
+BEGIN
+    SELECT value INTO raw FROM settings WHERE key = 'default_event_type_id';
+    IF raw IS NULL THEN
+        RAISE EXCEPTION 'settings.default_event_type_id is missing' USING ERRCODE = 'OCDEF';
+    END IF;
+    SELECT id INTO resolved FROM event_types WHERE id::text = raw AND enabled;
+    IF resolved IS NULL THEN
+        RAISE EXCEPTION 'settings.default_event_type_id (%) names no enabled event type', raw
+            USING ERRCODE = 'OCDEF';
+    END IF;
+    RETURN resolved;
+END $$;
 
 CREATE TABLE workshops (
     id               BIGSERIAL PRIMARY KEY,
@@ -1613,7 +1625,9 @@ Runtime-editable values live in the `settings` table, not the environment:
 `registrations_enabled`, `physical_address`, `max_send_rate`,
 `signup_enabled`, `default_from_name`, `soft_bounce_threshold_count`,
 `send_health_min_sample`, `send_health_bounce_pct`,
-`send_health_complaint_pct`, `archive_enabled`.
+`send_health_complaint_pct`, `archive_enabled`, `default_event_type_id`.
+`default_event_type_id` is changed only through the Event types screen;
+`PATCH /admin/settings` refuses it.
 
 `soft_bounce_threshold_window_days` is **retired** by §6.9's move from a rolling
 window to a consecutive streak; the Phase 8 migration deletes its row.

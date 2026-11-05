@@ -9,6 +9,7 @@ import (
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
+	"github.com/brennanMKE/OpenCircuitSF/internal/defaults"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 )
@@ -121,6 +122,14 @@ func (h *SettingsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Key == "" {
 		writeError(w, http.StatusBadRequest, "key is required")
+		return
+	}
+	// A managed default is refused rather than validated: validSettingValue is a
+	// pure shape check and could not hold the locks that make the default's rules
+	// true, so a validated write could still race a disable. Refusing also keeps
+	// one audit action for one kind of change (#0618).
+	if defaults.IsManaged(req.Key) {
+		writeError(w, http.StatusBadRequest, "this setting is changed on its own admin screen")
 		return
 	}
 	if !validSettingValue(req.Key, req.Value) {

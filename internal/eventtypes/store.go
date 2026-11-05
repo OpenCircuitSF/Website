@@ -8,6 +8,10 @@
 //
 // Disabling means "no new listings of this type"; it never hides a listing that
 // already has it. internal/workshops enforces that on assignment.
+//
+// The default type is held in settings, not on the row (#0618). Every path that
+// could leave that setting naming a disabled or deleted type locks it first
+// through internal/defaults, then touches the event_types row.
 package eventtypes
 
 import (
@@ -17,6 +21,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/defaults"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -67,7 +72,11 @@ func NewStore(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool}
 }
 
-const eventTypeColumns = `id, slug, name, enabled, is_default, sort_order, created_at`
+// eventTypeColumns derives is_default from the setting. A broken setting flags no
+// row and does not fail the read, so the admin can still reach "Make default".
+const eventTypeColumns = `id, slug, name, enabled,
+	(enabled AND COALESCE(id::text = (SELECT value FROM settings WHERE key = '` + defaults.KeyEventType + `'), FALSE)) AS is_default,
+	sort_order, created_at`
 
 func scanEventType(row pgx.Row) (EventType, error) {
 	var et EventType
@@ -130,30 +139,54 @@ func (s *Store) Create(ctx context.Context, slug, name string, sortOrder int) (E
 	return et, nil
 }
 
-// Update changes a type's name, sort order and enabled flag. It does no
-// pre-read: disabling the default is refused by the event_types_default_enabled
-// CHECK and mapped to ErrIsDefault, so the check cannot race SetDefault.
+// Update changes a type's name, sort order and enabled flag. Disabling takes the
+// setting's lock first, so it cannot race SetDefault, and is refused for the
+// default, or with defaults.ErrUnset when the default cannot be determined. Any
+// other update stays a single statement, so a rename works with a broken setting.
 func (s *Store) Update(ctx context.Context, id int64, name string, sortOrder int, enabled bool) (EventType, error) {
-	et, err := scanEventType(s.pool.QueryRow(ctx,
-		`UPDATE event_types SET name = $2, sort_order = $3, enabled = $4
+	const update = `UPDATE event_types SET name = $2, sort_order = $3, enabled = $4
 		  WHERE id = $1
-		 RETURNING `+eventTypeColumns,
-		id, name, sortOrder, enabled))
+		 RETURNING ` + eventTypeColumns
+	if enabled {
+		et, err := scanEventType(s.pool.QueryRow(ctx, update, id, name, sortOrder, enabled))
+		return updateResult(et, err, id)
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return EventType{}, fmt.Errorf("eventtypes: beginning update of id %d: %w", id, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	defaultID, err := defaults.Lock(ctx, tx, defaults.KeyEventType)
+	if err != nil {
+		return EventType{}, fmt.Errorf("eventtypes: disabling id %d: %w", id, err)
+	}
+	if defaultID == id {
+		return EventType{}, ErrIsDefault
+	}
+	et, err := scanEventType(tx.QueryRow(ctx, update, id, name, sortOrder, enabled))
+	if et, err = updateResult(et, err, id); err != nil {
+		return EventType{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return EventType{}, fmt.Errorf("eventtypes: committing update of id %d: %w", id, err)
+	}
+	return et, nil
+}
+
+func updateResult(et EventType, err error, id int64) (EventType, error) {
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return EventType{}, ErrNotFound
-	case pgCode(err) == "23514" && pgConstraint(err) == "event_types_default_enabled":
-		return EventType{}, ErrIsDefault
 	case err != nil:
 		return EventType{}, fmt.Errorf("eventtypes: updating id %d: %w", id, err)
 	}
 	return et, nil
 }
 
-// SetDefault moves the default flag to id. These must stay separate statements:
-// Postgres checks event_types_one_default row by row, so a single-statement swap
-// raises a duplicate key. Locking every row first is what stops two concurrent
-// callers colliding, since each later statement gets a fresh snapshot.
+// SetDefault points the setting at id. It locks the setting, then the row, and
+// ignores defaults.ErrUnset, because this is how a broken setting gets repaired.
 func (s *Store) SetDefault(ctx context.Context, id int64) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -161,11 +194,11 @@ func (s *Store) SetDefault(ctx context.Context, id int64) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if _, err := tx.Exec(ctx, `SELECT id FROM event_types ORDER BY id FOR UPDATE`); err != nil {
+	if _, err := defaults.Lock(ctx, tx, defaults.KeyEventType); err != nil && !errors.Is(err, defaults.ErrUnset) {
 		return fmt.Errorf("eventtypes: locking for set-default of id %d: %w", id, err)
 	}
 	var enabled bool
-	err = tx.QueryRow(ctx, `SELECT enabled FROM event_types WHERE id = $1`, id).Scan(&enabled)
+	err = tx.QueryRow(ctx, `SELECT enabled FROM event_types WHERE id = $1 FOR UPDATE`, id).Scan(&enabled)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return ErrNotFound
@@ -175,10 +208,7 @@ func (s *Store) SetDefault(ctx context.Context, id int64) error {
 	if !enabled {
 		return ErrDisabled
 	}
-	if _, err := tx.Exec(ctx, `UPDATE event_types SET is_default = FALSE WHERE is_default`); err != nil {
-		return fmt.Errorf("eventtypes: clearing default: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `UPDATE event_types SET is_default = TRUE WHERE id = $1`, id); err != nil {
+	if err := defaults.Write(ctx, tx, defaults.KeyEventType, id); err != nil {
 		return fmt.Errorf("eventtypes: setting default to id %d: %w", id, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -210,8 +240,9 @@ func (s *Store) UsageCounts(ctx context.Context) (map[int64]int64, error) {
 }
 
 // Delete removes a type that no listing uses. The foreign key's ON DELETE
-// RESTRICT is the in-use guard, mapped to ErrInUse. The row lock keeps a
-// concurrent SetDefault from making this row the default mid-delete.
+// RESTRICT is the in-use guard, mapped to ErrInUse. Holding the setting's lock
+// keeps a concurrent SetDefault from making this row the default mid-delete. It
+// returns defaults.ErrUnset when the default cannot be determined.
 func (s *Store) Delete(ctx context.Context, id int64) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -219,15 +250,19 @@ func (s *Store) Delete(ctx context.Context, id int64) error {
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	var isDefault bool
-	err = tx.QueryRow(ctx, `SELECT is_default FROM event_types WHERE id = $1 FOR UPDATE`, id).Scan(&isDefault)
+	defaultID, err := defaults.Lock(ctx, tx, defaults.KeyEventType)
+	if err != nil {
+		return fmt.Errorf("eventtypes: deleting id %d: %w", id, err)
+	}
+	var one int
+	err = tx.QueryRow(ctx, `SELECT 1 FROM event_types WHERE id = $1 FOR UPDATE`, id).Scan(&one)
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		return ErrNotFound
 	case err != nil:
 		return fmt.Errorf("eventtypes: locking id %d for delete: %w", id, err)
 	}
-	if isDefault {
+	if defaultID == id {
 		return ErrIsDefault
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM event_types WHERE id = $1`, id); err != nil {

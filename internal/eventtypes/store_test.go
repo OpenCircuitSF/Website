@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/defaults"
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
 
@@ -55,15 +57,55 @@ func seededDefault(t *testing.T, pool *pgxpool.Pool) int64 {
 	return id
 }
 
-// restoreDefault puts the seeded default back, in two statements because the
-// unique index refuses a single-statement swap.
+// restoreDefault puts the seeded default back, recreating the row if a test
+// removed it.
 func restoreDefault(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	t.Cleanup(func() {
-		ctx := context.Background()
-		_, _ = pool.Exec(ctx, `UPDATE event_types SET is_default = FALSE WHERE is_default`)
-		_, _ = pool.Exec(ctx, `UPDATE event_types SET is_default = TRUE WHERE slug = 'workshop'`)
+		_, _ = pool.Exec(context.Background(), `INSERT INTO settings (key, value, updated_at)
+			SELECT 'default_event_type_id', id::text, now() FROM event_types WHERE slug = 'workshop'
+			ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`)
 	})
+}
+
+func defaultSetting(t *testing.T, pool *pgxpool.Pool) string {
+	t.Helper()
+	var v string
+	if err := pool.QueryRow(context.Background(), `SELECT value FROM settings WHERE key = 'default_event_type_id'`).Scan(&v); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func setDefaultSetting(t *testing.T, pool *pgxpool.Pool, id int64) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `UPDATE settings SET value = $1 WHERE key = 'default_event_type_id'`, strconv.FormatInt(id, 10)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func removeDefaultSetting(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	restoreDefault(t, pool)
+	if _, err := pool.Exec(context.Background(), `DELETE FROM settings WHERE key = 'default_event_type_id'`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// race runs both functions behind one start barrier and waits for them.
+func race(first, second func()) {
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, f := range []func(){first, second} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			f()
+		}()
+	}
+	close(start)
+	wg.Wait()
 }
 
 func wantConstraint(t *testing.T, err error, constraint string) {
@@ -72,19 +114,6 @@ func wantConstraint(t *testing.T, err error, constraint string) {
 	if !errors.As(err, &pgErr) || pgErr.ConstraintName != constraint {
 		t.Fatalf("err = %v, want violation of %s", err, constraint)
 	}
-}
-
-func TestSchemaRefusesSecondDefault(t *testing.T) {
-	pool := testPool(t)
-	et := seedType(t, NewStore(pool), 0)
-	_, err := pool.Exec(context.Background(), `UPDATE event_types SET is_default = TRUE WHERE id = $1`, et.ID)
-	wantConstraint(t, err, "event_types_one_default")
-}
-
-func TestSchemaRefusesDisabledDefault(t *testing.T) {
-	pool := testPool(t)
-	_, err := pool.Exec(context.Background(), `UPDATE event_types SET enabled = FALSE WHERE is_default`)
-	wantConstraint(t, err, "event_types_default_enabled")
 }
 
 func TestSchemaRefusesDeletingTypeInUse(t *testing.T) {
@@ -151,7 +180,7 @@ func TestUpdateRefusesDisablingDefault(t *testing.T) {
 	}
 }
 
-func TestSetDefaultMovesTheFlag(t *testing.T) {
+func TestSetDefaultMovesTheSetting(t *testing.T) {
 	pool := testPool(t)
 	store := NewStore(pool)
 	restoreDefault(t, pool)
@@ -205,12 +234,123 @@ func TestSetDefaultConcurrentCallersLeaveOneDefault(t *testing.T) {
 			t.Errorf("SetDefault: %v", err)
 		}
 	}
-	var n int
-	if err := pool.QueryRow(context.Background(), `SELECT count(*) FROM event_types WHERE is_default`).Scan(&n); err != nil {
+	all, err := store.ListAll(context.Background())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Errorf("defaults = %d, want 1", n)
+	var flagged []int64
+	for _, et := range all {
+		if et.IsDefault {
+			flagged = append(flagged, et.ID)
+		}
+	}
+	if len(flagged) != 1 {
+		t.Fatalf("flagged = %v, want one", flagged)
+	}
+	if got := defaultSetting(t, pool); got != strconv.FormatInt(a.ID, 10) && got != strconv.FormatInt(b.ID, 10) {
+		t.Errorf("setting = %q, want %d or %d", got, a.ID, b.ID)
+	}
+}
+
+func TestConcurrentSetDefaultAndDisableLeaveAnEnabledDefault(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	restoreDefault(t, pool)
+	fallback := seededDefault(t, pool)
+	x := seedType(t, store, 0)
+	for round := 0; round < 20; round++ {
+		setDefaultSetting(t, pool, fallback)
+		if _, err := store.Update(ctx, x.ID, x.Name, 0, true); err != nil {
+			t.Fatal(err)
+		}
+		var setErr, updateErr error
+		race(
+			func() { setErr = store.SetDefault(ctx, x.ID) },
+			func() { _, updateErr = store.Update(ctx, x.ID, x.Name, 0, false) },
+		)
+		if setErr != nil && !errors.Is(setErr, ErrDisabled) {
+			t.Errorf("round %d: SetDefault: %v", round, setErr)
+		}
+		if updateErr != nil && !errors.Is(updateErr, ErrIsDefault) {
+			t.Errorf("round %d: Update: %v", round, updateErr)
+		}
+		var enabled bool
+		if err := pool.QueryRow(ctx, `SELECT enabled FROM event_types WHERE id::text = $1`, defaultSetting(t, pool)).Scan(&enabled); err != nil {
+			t.Fatalf("round %d: named type: %v", round, err)
+		}
+		if !enabled {
+			t.Fatalf("round %d: the setting names a disabled type", round)
+		}
+	}
+}
+
+func TestConcurrentSetDefaultAndDeleteLeaveAnExistingDefault(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	restoreDefault(t, pool)
+	fallback := seededDefault(t, pool)
+	for round := 0; round < 20; round++ {
+		setDefaultSetting(t, pool, fallback)
+		x := seedType(t, store, 0)
+		var setErr, deleteErr error
+		race(
+			func() { setErr = store.SetDefault(ctx, x.ID) },
+			func() { deleteErr = store.Delete(ctx, x.ID) },
+		)
+		if setErr != nil && !errors.Is(setErr, ErrNotFound) {
+			t.Errorf("round %d: SetDefault: %v", round, setErr)
+		}
+		if deleteErr != nil && !errors.Is(deleteErr, ErrIsDefault) && !errors.Is(deleteErr, ErrNotFound) {
+			t.Errorf("round %d: Delete: %v", round, deleteErr)
+		}
+		var enabled bool
+		if err := pool.QueryRow(ctx, `SELECT enabled FROM event_types WHERE id::text = $1`, defaultSetting(t, pool)).Scan(&enabled); err != nil {
+			t.Fatalf("round %d: the setting names no row: %v", round, err)
+		}
+	}
+	setDefaultSetting(t, pool, fallback)
+}
+
+func TestSetDefaultRepairsAMissingSetting(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	removeDefaultSetting(t, pool)
+	et := seedType(t, store, 0)
+	if err := store.SetDefault(context.Background(), et.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := defaultSetting(t, pool); got != strconv.FormatInt(et.ID, 10) {
+		t.Errorf("setting = %q, want %d", got, et.ID)
+	}
+}
+
+func TestUpdateAndDeleteRefuseWhenSettingIsMissing(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	et := seedType(t, store, 0)
+	removeDefaultSetting(t, pool)
+	if _, err := store.Update(ctx, et.ID, et.Name, 0, false); !errors.Is(err, defaults.ErrUnset) {
+		t.Errorf("disable err = %v, want ErrUnset", err)
+	}
+	if err := store.Delete(ctx, et.ID); !errors.Is(err, defaults.ErrUnset) {
+		t.Errorf("delete err = %v, want ErrUnset", err)
+	}
+}
+
+func TestUpdateRenameWorksWhenSettingIsMissing(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	et := seedType(t, store, 0)
+	removeDefaultSetting(t, pool)
+	got, err := store.Update(context.Background(), et.ID, "Renamed", 0, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "Renamed" || got.IsDefault {
+		t.Errorf("updated = %+v", got)
 	}
 }
 

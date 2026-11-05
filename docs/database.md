@@ -1,7 +1,7 @@
 # Database Schema & Migrations
 
 PostgreSQL, schema managed by [`golang-migrate`](https://github.com/golang-migrate/migrate)
-(`migrations/`, numbered `000001`–`000046`). No ORM — every
+(`migrations/`, numbered `000001`–`000047`). No ORM — every
 store issues hand-written SQL through `pgx/v5`.
 
 ## Applying migrations
@@ -116,6 +116,7 @@ why the activity log is not a second package of its own.
 | `000044_outreach_posts_attempt_generation` | Adds `outreach_posts.attempt_generation INTEGER NOT NULL DEFAULT 0` (`#0604`, "Delete and redo"): counts takedowns of a posted automatic post. Generation 0 keeps the original Bluesky record key and Mastodon `Idempotency-Key` exactly, so in-flight retries are unaffected; each takedown adds one, which the publisher mixes into both keys so a re-send can never recover the deleted record or status. A new migration, not an edit to `000032`, which production has applied |
 | `000045_create_event_types` | Creates `event_types` (`#0613`) with the seeds Workshop (default), Hack Night, Talk, Hackathon and Social; at most one default (`event_types_one_default`), and the default must be enabled. Adds the required `workshops.event_type_id`, `ON DELETE RESTRICT`, defaulting through `event_types_default_id()`, which also backfills existing rows. `internal/eventtypes` owns the table |
 | `000046_crt_events_copy` | Rewords two seeded `crt_commands` values (`#0615`): `workshops-next`'s command becomes `events --next`, and `subscribe-interests`'s output line becomes `[x] events  [ ] digests`. Each statement matches only the seeded text, so a row an admin edited is left alone. The slug and the `workshops` source value do not change. |
+| `000047_default_event_type_setting` | Moves the default event type from `event_types.is_default` to a `default_event_type_id` row in `settings` (`#0618`), and drops the column, its check constraint and its unique index. `event_types_default_id()` now reads the setting and raises SQLSTATE `OCDEF` naming the key if the row is missing or names no enabled type. There is no foreign key, so `internal/eventtypes` enforces the rules by locking the row through `internal/defaults`. |
 
 `internal/subscribers` (`imports.go`) owns `subscriber_imports`, alongside
 every other table that package already owns — see that file's doc comment.

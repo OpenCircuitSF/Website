@@ -127,6 +127,11 @@ var (
 	// a disabled type. A listing that already has the type may keep it (#0613).
 	ErrEventTypeDisabled = errors.New("workshops: event type is disabled")
 
+	// ErrDefaultEventTypeUnset is returned by Create for a listing with no type
+	// when settings.default_event_type_id is missing or names no enabled type
+	// (#0618). It wraps the database's message, which names the key.
+	ErrDefaultEventTypeUnset = errors.New("workshops: no default event type is set")
+
 	// errSlugAttemptsExhausted is wrapped into the error Create returns if
 	// maxSlugAttempts consecutive candidates all collide — effectively
 	// unreachable in practice (it would require ~1000 existing workshops
@@ -661,6 +666,10 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Workshop, error) {
 			break
 		}
 		if !isUniqueViolation(insertErr) {
+			var pgErr *pgconn.PgError
+			if errors.As(insertErr, &pgErr) && pgErr.Code == "OCDEF" {
+				return Workshop{}, fmt.Errorf("%w: %s", ErrDefaultEventTypeUnset, pgErr.Message)
+			}
 			return Workshop{}, fmt.Errorf("workshops: creating %q: %w", title, insertErr)
 		}
 		// Collision on this candidate slug — roll back to the savepoint

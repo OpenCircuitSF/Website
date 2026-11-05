@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -587,19 +589,39 @@ func TestCreateFollowsCurrentDefault(t *testing.T) {
 	ctx := context.Background()
 	id := seedEventType(t, pool, true)
 	t.Cleanup(func() {
-		_, _ = pool.Exec(ctx, `UPDATE event_types SET is_default = FALSE WHERE is_default`)
-		_, _ = pool.Exec(ctx, `UPDATE event_types SET is_default = TRUE WHERE slug = 'workshop'`)
+		_, _ = pool.Exec(ctx, `UPDATE settings SET value = (SELECT id::text FROM event_types WHERE slug = 'workshop') WHERE key = 'default_event_type_id'`)
 	})
-	if _, err := pool.Exec(ctx, `UPDATE event_types SET is_default = FALSE WHERE is_default`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pool.Exec(ctx, `UPDATE event_types SET is_default = TRUE WHERE id = $1`, id); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE settings SET value = $1 WHERE key = 'default_event_type_id'`, strconv.FormatInt(id, 10)); err != nil {
 		t.Fatal(err)
 	}
 	w := createTestWorkshop(t, store, uniqueTitle(t))
 	if w.EventTypeID != id {
 		t.Errorf("EventTypeID = %d, want %d", w.EventTypeID, id)
 	}
+}
+
+func TestCreateNamesAMissingDefault(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `INSERT INTO settings (key, value, updated_at)
+			SELECT 'default_event_type_id', id::text, now() FROM event_types WHERE slug = 'workshop'
+			ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`)
+	})
+	if _, err := pool.Exec(ctx, `DELETE FROM settings WHERE key = 'default_event_type_id'`); err != nil {
+		t.Fatal(err)
+	}
+	_, err := store.Create(ctx, CreateInput{Title: uniqueTitle(t)})
+	if !errors.Is(err, ErrDefaultEventTypeUnset) || !strings.Contains(err.Error(), "default_event_type_id") {
+		t.Errorf("err = %v, want ErrDefaultEventTypeUnset naming the key", err)
+	}
+	id := seedEventType(t, pool, true)
+	w, err := store.Create(ctx, CreateInput{Title: uniqueTitle(t), EventTypeID: &id})
+	if err != nil {
+		t.Fatalf("explicit type: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM workshops WHERE id = $1`, w.ID) })
 }
 
 func TestCreateRefusesDisabledEventType(t *testing.T) {

@@ -10,12 +10,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
+	"github.com/brennanMKE/OpenCircuitSF/internal/defaults"
 	"github.com/brennanMKE/OpenCircuitSF/internal/eventtypes"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 )
@@ -99,8 +101,14 @@ func (h *AdminEventTypesHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	views := make([]eventTypeView, 0, len(all))
+	hasDefault := false
 	for _, et := range all {
 		views = append(views, toEventTypeView(et, counts))
+		hasDefault = hasDefault || et.IsDefault
+	}
+	// Still a 200: this list is how the admin reaches "Make default", the repair.
+	if len(all) > 0 && !hasDefault {
+		slog.Error("event types: no type is the default; settings row is missing or invalid", "key", defaults.KeyEventType)
 	}
 	writeJSON(w, http.StatusOK, eventTypesResponse{EventTypes: views})
 }
@@ -110,6 +118,8 @@ type createEventTypeRequest struct {
 	Name      string `json:"name"`
 	SortOrder int    `json:"sort_order,omitempty"`
 }
+
+const noDefaultEventTypeMessage = "no default event type is set; choose one first"
 
 const eventTypeSlugMessage = "slug must be lowercase and hyphenated (e.g. \"hack-night\")"
 
@@ -280,6 +290,9 @@ func (h *AdminEventTypesHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, eventtypes.ErrIsDefault):
 			writeError(w, http.StatusConflict, "cannot disable the default event type; choose another default first")
 			return
+		case errors.Is(err, defaults.ErrUnset):
+			writeError(w, http.StatusConflict, noDefaultEventTypeMessage)
+			return
 		default:
 			writeError(w, http.StatusInternalServerError, "internal server error")
 			return
@@ -354,6 +367,9 @@ func (h *AdminEventTypesHandler) Delete(w http.ResponseWriter, r *http.Request) 
 		return
 	case errors.Is(err, eventtypes.ErrIsDefault):
 		writeError(w, http.StatusConflict, "cannot delete the default event type; choose another default first")
+		return
+	case errors.Is(err, defaults.ErrUnset):
+		writeError(w, http.StatusConflict, noDefaultEventTypeMessage)
 		return
 	default:
 		writeError(w, http.StatusInternalServerError, "internal server error")

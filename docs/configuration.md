@@ -182,7 +182,9 @@ guards this.
 
 Values an admin can change without a restart or redeploy live in the
 `settings` table, not the environment: `registrations_enabled`,
-`physical_address`, `max_send_rate`, `signup_enabled`, `default_from_name`.
+`physical_address`, `max_send_rate`, `signup_enabled`, `default_from_name`,
+`default_event_type_id`. `default_event_type_id` is changed only through the
+Event types screen; `PATCH /admin/settings` refuses it.
 `MAX_SEND_RATE` in the environment is the hard ceiling; the `settings` table's
 `max_send_rate` value is the operator dial beneath it — the send worker
 (`#0045`) computes `min(MAX_SEND_RATE, settings.max_send_rate)` fresh once

@@ -363,6 +363,9 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, workshops.ErrEventTypeDisabled):
 		writeError(w, http.StatusBadRequest, eventTypeDisabledMessage)
 		return
+	case errors.Is(err, workshops.ErrDefaultEventTypeUnset):
+		writeError(w, http.StatusConflict, "no default event type is set; choose one on the Event types screen, or pick a type for this listing")
+		return
 	default:
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return

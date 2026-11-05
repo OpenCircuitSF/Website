@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -139,23 +140,46 @@ func stripLineComments(sql string) string {
 }
 
 // destructiveDDLPattern matches the three DDL shapes that would break a
-// purely cumulative census: dropping a column or table removes an object
-// an earlier migration's expectations still name, and a RENAME changes an
-// object's identity out from under them. #0360's plan Finding 3 verified
-// none of these appears anywhere in migrations/ today (checked across all
-// 27 files); assertNoDestructiveDDL is what stops that premise from going
-// stale silently, per the plan's step 1c.
+// cumulative census: dropping a column or table removes an object an earlier
+// migration's expectations still name, and a RENAME changes an object's
+// identity out from under them. assertNoDestructiveDDL is what stops the census
+// from going stale silently. The one shape it understands is a statement
+// dropping a single column; see dropColumnStmtPattern.
 var destructiveDDLPattern = regexp.MustCompile(`(?i)\bDROP\s+COLUMN\b|\bDROP\s+TABLE\b|\bRENAME\b`)
+
+// dropColumnStmtPattern matches one whole statement that drops one column, the
+// only destructive shape the census can account for: expectedObjectsFromFiles
+// retires that column from its expectations (#0618). Anything else, including
+// IF EXISTS, CASCADE, or several clauses in one ALTER TABLE, does not match and
+// is still refused.
+var dropColumnStmtPattern = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+("?[a-z_][a-z0-9_]*"?)\s+DROP\s+COLUMN\s+("?[a-z_][a-z0-9_]*"?)\s*$`)
+
+// parseDroppedColumns returns the columns body's plain drop statements remove,
+// and body with those statements taken out.
+func parseDroppedColumns(fileName, body string) (dropped []expectedColumn, rest string) {
+	var kept []string
+	for _, stmt := range strings.Split(body, ";") {
+		m := dropColumnStmtPattern.FindStringSubmatch(stmt)
+		if m == nil {
+			kept = append(kept, stmt)
+			continue
+		}
+		dropped = append(dropped, expectedColumn{table: unquoteIdent(m[1]), column: unquoteIdent(m[2]), file: fileName})
+	}
+	return dropped, strings.Join(kept, ";")
+}
 
 // assertNoDestructiveDDL fails closed — rather than let the census start
 // silently emitting false positives — the moment any scanned migration
-// contains DROP COLUMN, DROP TABLE, or RENAME. f.body has already had its
-// comments stripped, so a match here is real DDL, not prose describing it.
+// contains DROP TABLE, RENAME, or a DROP COLUMN other than dropColumnStmtPattern's
+// plain statement. f.body has already had its comments stripped, so a match
+// here is real DDL, not prose describing it.
 // The error string deliberately does not cite an issue number: it can
 // surface to whoever is running the tests, not only a developer who can
 // open issues/ (AGENTS.md §8, TestNoAdminFacingStringCitesInternalDocs).
 func assertNoDestructiveDDL(f migrationFile) error {
-	if loc := destructiveDDLPattern.FindString(f.body); loc != "" {
+	_, rest := parseDroppedColumns(f.name, f.body)
+	if loc := destructiveDDLPattern.FindString(rest); loc != "" {
 		return fmt.Errorf("testdb: %s contains %q — the cumulative schema census "+
 			"assumes migrations/ never drops, renames, or removes a column, table, or "+
 			"relation an earlier migration declared; that assumption no longer holds "+
@@ -353,10 +377,11 @@ func parseAlterTableAddColumns(fileName, body string) []expectedColumn {
 // column those migrations declare, each tagged with the migration file
 // that owns it — the diagnosis a failure names, per #0360's plan step 1e.
 // A table or column declared more than once (there are none today) keeps
-// only its first-seen owner.
+// only its first-seen owner. A column a later migration drops is no longer
+// expected.
 //
-// assertNoDestructiveDDL runs over every scanned file first: this census
-// is purely additive, and Finding 3 is what makes that sound.
+// assertNoDestructiveDDL runs over every scanned file first, so a drop this
+// census cannot account for stops it rather than skewing it.
 func expectedObjectsFromFiles(files []migrationFile, maxVersion int) ([]expectedTable, []expectedColumn, error) {
 	var tables []expectedTable
 	var columns []expectedColumn
@@ -391,6 +416,13 @@ func expectedObjectsFromFiles(files []migrationFile, maxVersion int) ([]expected
 			}
 			seenColumn[key] = true
 			columns = append(columns, c)
+		}
+		dropped, _ := parseDroppedColumns(f.name, f.body)
+		for _, d := range dropped {
+			delete(seenColumn, d.table+"."+d.column)
+			columns = slices.DeleteFunc(columns, func(c expectedColumn) bool {
+				return c.table == d.table && c.column == d.column
+			})
 		}
 	}
 	return tables, columns, nil

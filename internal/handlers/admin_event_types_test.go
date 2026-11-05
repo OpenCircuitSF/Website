@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -34,6 +35,21 @@ func adminEventTypesMuxWith(pool *pgxpool.Pool, invalidator seoCacheInvalidator)
 	mux.Handle("PATCH /admin/event-types/{id}", guard(h.Patch))
 	mux.Handle("DELETE /admin/event-types/{id}", guard(h.Delete))
 	return mux
+}
+
+// removeDefaultSetting deletes the default's settings row and puts it back at
+// cleanup, naming the seeded workshop type.
+func removeDefaultSetting(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	ctx := context.Background()
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `INSERT INTO settings (key, value, updated_at)
+			SELECT 'default_event_type_id', id::text, now() FROM event_types WHERE slug = 'workshop'
+			ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`)
+	})
+	if _, err := pool.Exec(ctx, `DELETE FROM settings WHERE key = 'default_event_type_id'`); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // seedEventTypeRow adds a throwaway type. Register it before any listing using
@@ -253,8 +269,7 @@ func TestAdminEventTypes_PatchIsDefaultMovesItAndAudits(t *testing.T) {
 	pool, do := eventTypeServer(t)
 	t.Cleanup(func() {
 		ctx := context.Background()
-		_, _ = pool.Exec(ctx, `UPDATE event_types SET is_default = FALSE WHERE is_default`)
-		_, _ = pool.Exec(ctx, `UPDATE event_types SET is_default = TRUE WHERE slug = 'workshop'`)
+		_, _ = pool.Exec(ctx, `UPDATE settings SET value = (SELECT id::text FROM event_types WHERE slug = 'workshop') WHERE key = 'default_event_type_id'`)
 	})
 	et := seedEventTypeRow(t, pool)
 	code, body := do(http.MethodPatch, typePath(et.ID), `{"is_default":true}`)
@@ -264,6 +279,30 @@ func TestAdminEventTypes_PatchIsDefaultMovesItAndAudits(t *testing.T) {
 	actions := eventTypeAuditActions(t, pool, et.ID)
 	if len(actions) != 1 || actions[0] != audit.ActionEventTypeDefaultChanged {
 		t.Errorf("actions = %v", actions)
+	}
+	ctx := context.Background()
+	var setting string
+	if err := pool.QueryRow(ctx, `SELECT value FROM settings WHERE key = 'default_event_type_id'`).Scan(&setting); err != nil {
+		t.Fatal(err)
+	}
+	if setting != strconv.FormatInt(et.ID, 10) {
+		t.Errorf("setting = %q, want %d", setting, et.ID)
+	}
+	all, err := eventtypes.NewStore(pool).ListAll(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range all {
+		if v.IsDefault != (v.ID == et.ID) {
+			t.Errorf("type %d IsDefault = %v", v.ID, v.IsDefault)
+		}
+	}
+	var settingsAudit int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = $1 AND metadata::text LIKE '%default_event_type_id%'`, audit.ActionSettingsUpdated).Scan(&settingsAudit); err != nil {
+		t.Fatal(err)
+	}
+	if settingsAudit != 0 {
+		t.Errorf("settings.updated rows naming the key = %d, want 0", settingsAudit)
 	}
 }
 
@@ -342,8 +381,7 @@ func TestAdminEventTypes_MutationsInvalidateSEOCache(t *testing.T) {
 	pool, inv, do := invalidatingEventTypeServer(t, "ok")
 	t.Cleanup(func() {
 		ctx := context.Background()
-		_, _ = pool.Exec(ctx, `UPDATE event_types SET is_default = FALSE WHERE is_default`)
-		_, _ = pool.Exec(ctx, `UPDATE event_types SET is_default = TRUE WHERE slug = 'workshop'`)
+		_, _ = pool.Exec(ctx, `UPDATE settings SET value = (SELECT id::text FROM event_types WHERE slug = 'workshop') WHERE key = 'default_event_type_id'`)
 	})
 	et := seedEventTypeRow(t, pool)
 	spare := seedEventTypeRow(t, pool)
@@ -392,5 +430,51 @@ func TestAdminEventTypes_RefusedMutationDoesNotInvalidate(t *testing.T) {
 	}
 	if inv.calls != 0 {
 		t.Errorf("invalidator.calls = %d after refused writes, want 0", inv.calls)
+	}
+}
+
+func TestAdminEventTypes_ListWithMissingSettingStillLoads(t *testing.T) {
+	pool, do := eventTypeServer(t)
+	removeDefaultSetting(t, pool)
+	code, body := do(http.MethodGet, "/admin/event-types", "")
+	if code != http.StatusOK {
+		t.Fatalf("status = %d (%s)", code, body)
+	}
+	if !strings.Contains(body, `"slug":"workshop"`) || strings.Contains(body, `"is_default":true`) {
+		t.Errorf("body = %s", body)
+	}
+}
+
+func TestAdminEventTypes_DisableWithMissingSettingConflicts(t *testing.T) {
+	pool, do := eventTypeServer(t)
+	et := seedEventTypeRow(t, pool)
+	removeDefaultSetting(t, pool)
+	code, body := do(http.MethodPatch, typePath(et.ID), `{"enabled":false}`)
+	if code != http.StatusConflict || !strings.Contains(body, "no default event type is set") {
+		t.Errorf("status = %d (%s)", code, body)
+	}
+}
+
+func TestAdminEventTypes_MakeDefaultRepairsMissingSetting(t *testing.T) {
+	pool, do := eventTypeServer(t)
+	removeDefaultSetting(t, pool)
+	code, body := do(http.MethodPatch, typePath(seededEventType(t, pool, "workshop")), `{"is_default":true}`)
+	if code != http.StatusOK || !strings.Contains(body, `"is_default":true`) {
+		t.Errorf("status = %d (%s)", code, body)
+	}
+}
+
+func TestAdminWorkshops_CreateWithNoDefaultTypeConflicts(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+	seedSession(t, pool, seedAdmin(t, pool, "workshops-no-default@example.com"), "workshops-no-default-token")
+	removeDefaultSetting(t, pool)
+	resp := doJSON(t, srv.Client(), http.MethodPost, srv.URL+"/admin/workshops", "workshops-no-default-token",
+		fmt.Sprintf(`{"title":"zz-%d"}`, testdb.Unique()))
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusConflict || !strings.Contains(string(b), "no default event type is set") {
+		t.Errorf("status = %d (%s)", resp.StatusCode, b)
 	}
 }

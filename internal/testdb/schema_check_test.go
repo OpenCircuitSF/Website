@@ -191,12 +191,10 @@ CREATE TABLE gadgets (
 	}
 }
 
-// TestExpectedObjectsFromFiles_RefusesDropColumn is #0360's plan step 1c:
-// the cumulative census depends on no migration ever dropping, or
-// renaming, an object an earlier migration declared (Finding 3). If that
-// premise stops holding, this must fail closed rather than silently start
-// emitting false positives.
-func TestExpectedObjectsFromFiles_RefusesDropColumn(t *testing.T) {
+// TestExpectedObjectsFromFiles_RetiresPlainDropColumn: a plain single-column drop
+// (#0618's migration is the first) removes that column from what the census
+// expects from that version on, and it is still expected before it.
+func TestExpectedObjectsFromFiles_RetiresPlainDropColumn(t *testing.T) {
 	dir := t.TempDir()
 	writeFixture(t, dir, "000001_create_widgets.up.sql", `
 CREATE TABLE widgets (
@@ -211,12 +209,25 @@ ALTER TABLE widgets DROP COLUMN color;
 	if err != nil {
 		t.Fatalf("loadMigrationFiles: %v", err)
 	}
-	_, _, err = expectedObjectsFromFiles(files, 2)
-	if err == nil {
-		t.Fatal("expected expectedObjectsFromFiles to refuse a DROP COLUMN migration, got nil error")
+	_, columns, err := expectedObjectsFromFiles(files, 2)
+	if err != nil {
+		t.Fatalf("expectedObjectsFromFiles: %v", err)
 	}
-	if !strings.Contains(err.Error(), "000002_drop_widget_color.up.sql") {
-		t.Errorf("error should name the offending file, got: %v", err)
+	for _, c := range columns {
+		if c.table == "widgets" && c.column == "color" {
+			t.Errorf("widgets.color is still expected after its drop: %+v", c)
+		}
+	}
+	_, columns, err = expectedObjectsFromFiles(files, 1)
+	if err != nil {
+		t.Fatalf("expectedObjectsFromFiles through 1: %v", err)
+	}
+	found := false
+	for _, c := range columns {
+		found = found || (c.table == "widgets" && c.column == "color")
+	}
+	if !found {
+		t.Error("widgets.color should be expected before the migration that drops it")
 	}
 }
 
@@ -230,6 +241,9 @@ func TestExpectedObjectsFromFiles_RefusesDropTableAndRename(t *testing.T) {
 	}{
 		{"drop table", "DROP TABLE widgets;"},
 		{"rename", "ALTER TABLE widgets RENAME TO gizmos;"},
+		{"drop column if exists", "ALTER TABLE widgets DROP COLUMN IF EXISTS color;"},
+		{"drop column cascade", "ALTER TABLE widgets DROP COLUMN color CASCADE;"},
+		{"two drops in one statement", "ALTER TABLE widgets DROP COLUMN color, DROP COLUMN size;"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

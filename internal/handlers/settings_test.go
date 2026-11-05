@@ -17,8 +17,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
+	"github.com/brennanMKE/OpenCircuitSF/internal/defaults"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
 )
@@ -118,6 +120,10 @@ var settingsSeedStmtRe = regexp.MustCompile(`(?ims)^[ \t]*INSERT INTO settings\b
 // pollute before this package's own tests ever run) — so a migration that
 // adds a new `INSERT INTO settings ... ON CONFLICT (key) DO NOTHING`
 // statement is picked up automatically, with no matching edit here.
+//
+// A statement seeding a defaults-managed key is skipped: that row holds a
+// per-database id that no seed can restate, and its INSERT reads a column later
+// migrations removed (#0618).
 func settingsSeedStatements() ([]string, error) {
 	entries, err := os.ReadDir(settingsMigrationsDir)
 	if err != nil {
@@ -137,7 +143,11 @@ func settingsSeedStatements() ([]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", name, err)
 		}
-		stmts = append(stmts, settingsSeedStmtRe.FindAllString(string(content), -1)...)
+		for _, stmt := range settingsSeedStmtRe.FindAllString(string(content), -1) {
+			if !seedsManagedDefault(stmt) {
+				stmts = append(stmts, stmt)
+			}
+		}
 	}
 	if len(stmts) == 0 {
 		return nil, fmt.Errorf("no INSERT INTO settings statements found under %s", settingsMigrationsDir)
@@ -145,8 +155,18 @@ func settingsSeedStatements() ([]string, error) {
 	return stmts, nil
 }
 
+func seedsManagedDefault(stmt string) bool {
+	for _, key := range defaults.Keys() {
+		if strings.Contains(stmt, key) {
+			return true
+		}
+	}
+	return false
+}
+
 // resetSettings restores the settings table to exactly what a fresh
-// migration run produces: it clears the table, then replays every
+// migration run produces, apart from defaults-managed rows, which are
+// per-database state and are left alone (#0618): it clears the rest, then replays every
 // `INSERT INTO settings ...;` statement settingsSeedStatements finds in
 // migrations/*.up.sql. This isolates each settings test from values left by
 // earlier tests (the auth suite flips the registrations_enabled row;
@@ -163,7 +183,7 @@ func resetSettings(t *testing.T, pool *pgxpool.Pool) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), handlersDBOpTimeout)
 	defer cancel()
-	if _, err := pool.Exec(ctx, `DELETE FROM settings`); err != nil {
+	if _, err := pool.Exec(ctx, `DELETE FROM settings WHERE NOT (key = ANY($1))`, defaults.Keys()); err != nil {
 		t.Fatalf("clear settings: %v", err)
 	}
 	for _, stmt := range stmts {
@@ -882,4 +902,63 @@ func (gateMailer) SendVerification(context.Context, string, string) error { retu
 func (gateMailer) SendRecovery(context.Context, string, string) error     { return nil }
 func (gateMailer) SendSessionsRevoked(context.Context, string, time.Time) error {
 	return nil
+}
+
+func TestAdminSettings_PatchDefaultEventTypeRefused(t *testing.T) {
+	pool := settingsTestPool(t)
+	ctx := context.Background()
+	admin := seedAdmin(t, pool, "settings-default-refused@example.com")
+	seedSession(t, pool, admin, "settings-default-refused-token")
+	h := NewSettingsHandler(auth.NewStore(pool), audit.New(pool))
+	requireSession := middleware.RequireSession(auth.NewStore(pool))
+	mux := http.NewServeMux()
+	mux.Handle("PATCH /admin/settings", requireSession(middleware.RequireAdmin(http.HandlerFunc(h.Patch))))
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var before string
+	if err := pool.QueryRow(ctx, `SELECT value FROM settings WHERE key = $1`, defaults.KeyEventType).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	var auditBefore int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = $1`, audit.ActionSettingsUpdated).Scan(&auditBefore); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"key":%q,"value":"999999"}`, defaults.KeyEventType)
+	resp := doJSON(t, srv.Client(), http.MethodPatch, srv.URL+"/admin/settings", "settings-default-refused-token", body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", resp.StatusCode)
+	}
+	var after string
+	if err := pool.QueryRow(ctx, `SELECT value FROM settings WHERE key = $1`, defaults.KeyEventType).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Errorf("value = %q, want unchanged %q", after, before)
+	}
+	var auditAfter int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = $1`, audit.ActionSettingsUpdated).Scan(&auditAfter); err != nil {
+		t.Fatal(err)
+	}
+	if auditAfter != auditBefore {
+		t.Errorf("settings.updated rows = %d, want %d", auditAfter, auditBefore)
+	}
+}
+
+func TestResetSettings_KeepsManagedDefaults(t *testing.T) {
+	pool := settingsTestPool(t)
+	ctx := context.Background()
+	var before string
+	if err := pool.QueryRow(ctx, `SELECT value FROM settings WHERE key = $1`, defaults.KeyEventType).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	resetSettings(t, pool)
+	var after string
+	if err := pool.QueryRow(ctx, `SELECT value FROM settings WHERE key = $1`, defaults.KeyEventType).Scan(&after); err != nil {
+		t.Fatalf("managed row gone after reset: %v", err)
+	}
+	if after != before {
+		t.Errorf("value = %q, want %q", after, before)
+	}
 }
