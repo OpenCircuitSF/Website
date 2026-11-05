@@ -26,6 +26,7 @@ import type {
   FlyerTitlePosition,
   FlyerView,
   OutreachPost,
+  OutreachSectionResult,
   OutreachResults,
   OutreachResultsSummary,
   OutreachSummary,
@@ -1448,6 +1449,16 @@ export function scheduleOutreachPost(id: number, scheduledAt: string): Promise<O
 /** POST /admin/outreach-posts/{id}/unschedule — a scheduled post goes back to draft (#0545). */
 export function unscheduleOutreachPost(id: number): Promise<OutreachPost> {
   return apiPost<OutreachPost>(`/admin/outreach-posts/${id}/unschedule`);
+}
+
+/** POST /admin/workshops/{id}/outreach/schedule — one time for a whole section's automatic posts (#0640); all or nothing on the server. */
+export function scheduleOutreachSection(workshopId: number, wave: string, scheduledAt: string): Promise<OutreachSectionResult> {
+  return apiPost<OutreachSectionResult>(`/admin/workshops/${workshopId}/outreach/schedule`, { wave, scheduled_at: scheduledAt });
+}
+
+/** POST /admin/workshops/{id}/outreach/unschedule — every scheduled automatic post of a section back to draft (#0640). */
+export function unscheduleOutreachSection(workshopId: number, wave: string): Promise<OutreachSectionResult> {
+  return apiPost<OutreachSectionResult>(`/admin/workshops/${workshopId}/outreach/unschedule`, { wave });
 }
 
 /** DELETE /admin/outreach-posts/{id} — delete a post that has not been posted. */

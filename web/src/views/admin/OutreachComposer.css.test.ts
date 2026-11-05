@@ -8,9 +8,8 @@ import { describe, expect, it } from 'vitest';
 const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'OutreachComposer.svelte'), 'utf-8');
 
 describe('OutreachComposer layout CSS (#0627)', () => {
-  it('the action row and the picker wrap on a phone', () => {
+  it('the action row wraps on a phone', () => {
     expect(src).toContain('class="row actions"');
     expect(src).toMatch(/\.actions\s*\{[^}]*flex-wrap:\s*wrap/);
-    expect(src).toMatch(/\.schedule\s*\{[^}]*flex-wrap:\s*wrap/);
   });
 });

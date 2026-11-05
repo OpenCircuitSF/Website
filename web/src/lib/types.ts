@@ -836,6 +836,12 @@ export interface OutreachUtm {
 
 export type OutreachPostStatus = 'draft' | 'scheduled' | 'queued' | 'posted' | 'failed' | 'manual';
 
+/** What a section schedule or unschedule did (#0640): the posts it changed, and the automatic ones it left alone with why. */
+export interface OutreachSectionResult {
+  posts: OutreachPost[];
+  left_alone: { channel: string; channel_label: string; reason: 'posted' | 'posting_now' | 'not_connected' }[];
+}
+
 export interface OutreachPost {
   id: number;
   outreach_id: number;

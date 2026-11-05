@@ -169,8 +169,6 @@ export function boardRows(view: Pick<WorkshopOutreach, 'channels' | 'waves' | 'p
 export interface CardButtons {
   edit: boolean;
   postNow: boolean;
-  schedule: boolean;
-  unschedule: boolean;
   retry: boolean;
   /** Copy text only (#0626): needs no link, so it does not wait for one. */
   copyText: boolean;
@@ -184,7 +182,7 @@ export interface CardButtons {
 
 /** Which buttons a card shows; the rules themselves come from composerActions. */
 export function cardButtons(post: OutreachPost | null, channel: OutreachChannel, available: boolean): CardButtons {
-  const none: CardButtons = { edit: false, postNow: false, schedule: false, unschedule: false, retry: false, copyText: false, markPosted: false, unmark: false, takedown: false, draft: false };
+  const none: CardButtons = { edit: false, postNow: false, retry: false, copyText: false, markPosted: false, unmark: false, takedown: false, draft: false };
   if (post === null) return { ...none, draft: available };
   const a = composerActions(post, channel, available);
   const auto = sendsItself(channel);
@@ -194,8 +192,6 @@ export function cardButtons(post: OutreachPost | null, channel: OutreachChannel,
     ...none,
     edit: !posted,
     postNow: auto && a.canPostNow,
-    schedule: auto && a.canSchedule && !a.canRetry,
-    unschedule: auto && a.canUnschedule,
     retry: auto && a.canRetry,
     copyText: !auto && !posted && !queued,
     markPosted: !auto && a.canMarkPosted,

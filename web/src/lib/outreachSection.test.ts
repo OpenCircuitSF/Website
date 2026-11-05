@@ -113,6 +113,12 @@ describe('scheduleTargets', () => {
     expect(scheduleTargets(v, 'reminder').map((t) => t.channel.name)).toEqual(['bluesky', 'mastodon']);
     expect(unscheduleTargets(v, 'reminder').map((t) => t.channel.name)).toEqual(['bluesky']);
   });
+  it('unscheduleTargets takes a scheduled post on a disconnected channel, never a hand one', () => {
+    const off = ch('mastodon', 'Mastodon', true, false);
+    const v = view([post('bluesky', sched()), post('mastodon', sched()), post('instagram', sched())], [bsky, off, ig]);
+    expect(scheduleTargets(v, 'reminder').map((t) => t.channel.name)).toEqual(['bluesky']);
+    expect(unscheduleTargets(v, 'reminder').map((t) => t.channel.name)).toEqual(['bluesky', 'mastodon']);
+  });
 });
 
 describe('sectionTimeText', () => {

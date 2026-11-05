@@ -12,14 +12,14 @@ import type { OutreachPost, WorkshopOutreach } from '../../lib/types';
 const updateOutreachPost = vi.fn();
 const sendOutreachPost = vi.fn();
 const draftAllOutreach = vi.fn();
-const scheduleOutreachPost = vi.fn();
-const unscheduleOutreachPost = vi.fn();
+const scheduleOutreachSection = vi.fn();
+const unscheduleOutreachSection = vi.fn();
 vi.mock('../../lib/api', () => ({
   updateOutreachPost: (id: number, b: unknown) => updateOutreachPost(id, b),
   sendOutreachPost: (id: number) => sendOutreachPost(id),
   draftAllOutreach: (id: number, w: string[]) => draftAllOutreach(id, w),
-  scheduleOutreachPost: (id: number, at: string) => scheduleOutreachPost(id, at),
-  unscheduleOutreachPost: (id: number) => unscheduleOutreachPost(id),
+  scheduleOutreachSection: (w: number, wave: string, at: string) => scheduleOutreachSection(w, wave, at),
+  unscheduleOutreachSection: (w: number, wave: string) => unscheduleOutreachSection(w, wave),
   prepareOutreachPost: vi.fn(),
   deleteOutreachPost: vi.fn(),
   ApiError: class ApiError extends Error {},
@@ -29,7 +29,7 @@ const { default: OutreachAnnouncement } = await import('./OutreachAnnouncement.s
 
 afterEach(() => {
   cleanup();
-  for (const m of [updateOutreachPost, sendOutreachPost, draftAllOutreach, scheduleOutreachPost, unscheduleOutreachPost]) m.mockReset();
+  for (const m of [updateOutreachPost, sendOutreachPost, draftAllOutreach, scheduleOutreachSection, unscheduleOutreachSection]) m.mockReset();
 });
 
 const ch = (name: string, limit: number, account: string) => ({
@@ -134,7 +134,7 @@ describe('OutreachAnnouncement', () => {
     expect(screen.getByRole('article', { name: 'Bluesky Announce preview' }).textContent).toContain('@club.test');
     expect(screen.getByRole('article', { name: 'Mastodon Announce preview' }).textContent).toContain(MURL);
     expect(screen.getByRole('button', { name: 'Post to Bluesky and Mastodon' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Schedule for later…' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Schedule…' })).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Save message' }) as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -183,12 +183,13 @@ describe('OutreachAnnouncement', () => {
     expect(screen.getByRole('article', { name: 'Mastodon Announce preview' }).textContent).toContain('Customized');
   });
 
-  it('Customize… opens the editor with the picker closed (#0627)', async () => {
+  it('Customize… opens an editor with no schedule controls (#0640)', async () => {
     mountView([bPost(), mPost()]);
     const card = screen.getByRole('article', { name: 'Mastodon Announce preview' });
     await fireEvent.click(within(card).getByRole('button', { name: 'Customize…' }));
+    expect(card.querySelector('textarea')).toBeTruthy();
     expect(card.querySelector('input[type="datetime-local"]')).toBeNull();
-    expect(within(card).getByRole('button', { name: 'Schedule…' }).getAttribute('aria-expanded')).toBe('false');
+    for (const gone of ['Schedule…', 'Change time…', 'Unschedule']) expect(within(card).queryByRole('button', { name: gone })).toBeNull();
   });
 
   it('Use shared message hands a customized post back with customized:false and its own tail', async () => {
@@ -248,32 +249,86 @@ describe('OutreachAnnouncement', () => {
     expect(screen.getByText('Save the message before posting or scheduling.')).toBeTruthy();
   });
 
-  it('Schedule for later… schedules every postable post at one time', async () => {
-    mountView([bPost(), mPost()]);
-    scheduleOutreachPost.mockImplementation((id: number, at: string) =>
-      Promise.resolve(post({ id, channel: id === 1 ? 'bluesky' : 'mastodon', status: 'scheduled', scheduled_at: at })),
+  it('Schedule… sends one call for the section with one time, then reloads (#0640)', async () => {
+    const m = mountView([post({ wave: 'reminder' }), post({ id: 2, wave: 'reminder', channel: 'mastodon', body: mast, short_url: MURL })], 'reminder');
+    scheduleOutreachSection.mockImplementation((_w: number, _wave: string, at: string) =>
+      Promise.resolve({ posts: [post({ wave: 'reminder', status: 'scheduled', scheduled_at: at }), post({ id: 2, wave: 'reminder', channel: 'mastodon', status: 'scheduled', scheduled_at: at })], left_alone: [] }),
     );
-    await fireEvent.click(screen.getByRole('button', { name: 'Schedule for later…' }));
-    await fireEvent.input(screen.getByLabelText('Schedule for (Pacific time)'), { target: { value: '2099-11-28T10:00' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Schedule…' }));
+    await fireEvent.input(screen.getByLabelText('Post on (Pacific time)'), { target: { value: '2099-11-28T10:00' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
-    await waitFor(() => expect(scheduleOutreachPost).toHaveBeenCalledTimes(2));
-    expect(scheduleOutreachPost.mock.calls.map((c) => c[0])).toEqual([1, 2]);
-    expect(scheduleOutreachPost.mock.calls[0][1]).toBe(scheduleOutreachPost.mock.calls[1][1]);
-    expect(scheduleOutreachPost.mock.calls[0][1]).toBe('2099-11-28T18:00:00Z');
-    expect(await screen.findByRole('button', { name: 'Unschedule' })).toBeTruthy();
+    await waitFor(() => expect(scheduleOutreachSection).toHaveBeenCalledTimes(1));
+    expect(scheduleOutreachSection).toHaveBeenCalledWith(5, 'reminder', '2099-11-28T18:00:00Z');
+    await waitFor(() => expect(m.reload).toHaveBeenCalled());
+    expect(screen.getByRole('status').textContent).toMatch(/^Scheduled for .* on Bluesky and Mastodon\.$/);
+    expect(screen.queryByLabelText('Post on (Pacific time)')).toBeNull();
   });
 
-  it('Unschedule returns every scheduled post to draft (#0582 review)', async () => {
+  it('says a channel already posted was left alone', async () => {
+    mountView([post({ wave: 'reminder', status: 'posted', posted_at: '2026-11-01T18:00:00Z' }), post({ id: 2, wave: 'reminder', channel: 'mastodon', body: mast, short_url: MURL })], 'reminder');
+    scheduleOutreachSection.mockResolvedValue({
+      posts: [post({ id: 2, wave: 'reminder', channel: 'mastodon', status: 'scheduled', scheduled_at: '2099-11-28T18:00:00Z' })],
+      left_alone: [{ channel: 'bluesky', channel_label: 'Bluesky', reason: 'posted' }],
+    });
+    await fireEvent.click(screen.getByRole('button', { name: 'Schedule…' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toMatch(/on Mastodon\. Bluesky was already posted and was left alone\.$/));
+  });
+
+  it('Unschedule sends one call for the section and reloads', async () => {
+    const at = '2099-11-28T18:00:00Z';
+    const m = mountView([post({ status: 'scheduled', scheduled_at: at }), post({ id: 2, channel: 'mastodon', body: mast, short_url: MURL, status: 'scheduled', scheduled_at: at })]);
+    unscheduleOutreachSection.mockResolvedValue({ posts: [bPost(), mPost()], left_alone: [] });
+    await fireEvent.click(screen.getByRole('button', { name: 'Unschedule' }));
+    await waitFor(() => expect(unscheduleOutreachSection).toHaveBeenCalledTimes(1));
+    expect(unscheduleOutreachSection).toHaveBeenCalledWith(5, 'announce');
+    expect(await screen.findByText('Back to draft.')).toBeTruthy();
+    expect(m.reload).toHaveBeenCalled();
+  });
+
+  it('a scheduled section reads Scheduled for … on Bluesky and Mastodon with Change time…, Unschedule and Post', () => {
     const at = '2099-11-28T18:00:00Z';
     mountView([post({ status: 'scheduled', scheduled_at: at }), post({ id: 2, channel: 'mastodon', body: mast, short_url: MURL, status: 'scheduled', scheduled_at: at })]);
-    unscheduleOutreachPost.mockImplementation((id: number) =>
-      Promise.resolve(id === 1 ? bPost() : mPost()),
-    );
-    await fireEvent.click(screen.getByRole('button', { name: 'Unschedule' }));
-    await waitFor(() => expect(unscheduleOutreachPost).toHaveBeenCalledTimes(2));
-    expect(unscheduleOutreachPost.mock.calls.map((c) => c[0])).toEqual([1, 2]);
-    expect(await screen.findByText('Back to draft.')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Unschedule' })).toBeNull();
+    expect(document.querySelector('.when-line')!.textContent).toMatch(/^Scheduled for .* on Bluesky and Mastodon\.$/);
+    const row = document.querySelector('.when-line')!.nextElementSibling!;
+    expect(Array.from(row.querySelectorAll('button')).map((b) => b.textContent?.trim())).toEqual(['Change time…', 'Unschedule', 'Post to Bluesky and Mastodon']);
+  });
+
+  it("shows the server's message naming the channel when the section cannot be scheduled", async () => {
+    const { ApiError } = await import('../../lib/api');
+    mountView([post({ wave: 'reminder' }), post({ id: 2, wave: 'reminder', channel: 'mastodon', body: mast, short_url: MURL })], 'reminder');
+    scheduleOutreachSection.mockRejectedValue(new (ApiError as unknown as new (m: string) => Error)('Mastodon has no link yet'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Schedule…' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Schedule' }));
+    expect(await screen.findByText('Mastodon has no link yet')).toBeTruthy();
+    expect(screen.getByLabelText('Post on (Pacific time)')).toBeTruthy();
+  });
+
+  it('shows no time under a scheduled preview; the block holds it', () => {
+    const at = '2099-11-28T18:00:00Z';
+    mountView([post({ status: 'scheduled', scheduled_at: at }), post({ id: 2, channel: 'mastodon', body: mast, short_url: MURL, status: 'scheduled', scheduled_at: at })]);
+    for (const a of screen.getAllByRole('article')) expect(a.querySelector('.status')).toBeNull();
+    expect(document.body.textContent).not.toMatch(/Posts automatically/);
+  });
+
+  it('Reminder leads with Schedule…, Announce with Post', () => {
+    mountView([post({ wave: 'reminder' }), post({ id: 2, wave: 'reminder', channel: 'mastodon', body: mast, short_url: MURL })], 'reminder');
+    expect(screen.getByRole('button', { name: 'Schedule…' }).className).toMatch(/primary/);
+    expect(screen.getByRole('button', { name: 'Post to Bluesky and Mastodon' }).className).not.toMatch(/primary/);
+    cleanup();
+    mountView([bPost(), mPost()]);
+    expect(screen.getByRole('button', { name: 'Schedule…' }).className).not.toMatch(/primary/);
+    expect(screen.getByRole('button', { name: 'Post to Bluesky and Mastodon' }).className).toMatch(/primary/);
+  });
+
+  it('the When it goes out block sits between Save message and How it will look', () => {
+    mountView([bPost(), mPost()]);
+    const save = screen.getByRole('button', { name: 'Save message' });
+    const when = screen.getByRole('heading', { name: 'When it goes out' });
+    const how = screen.getByRole('heading', { name: 'How it will look' });
+    expect(save.compareDocumentPosition(when) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(when.compareDocumentPosition(how) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(document.querySelector('.when-line')!.textContent).toBe('Not scheduled. Bluesky and Mastodon go out together.');
   });
 
   it('with no posts, shows the empty state and Write the announcement drafts and reloads', async () => {
@@ -370,6 +425,19 @@ describe('OutreachAnnouncement with a switched-off channel', () => {
     const { container } = mountOff([post({ id: 3, channel: 'instagram', status: 'manual' })], [instagram]);
     expect(container.textContent).toContain('No post yet for Bluesky.');
     expect(container.textContent).not.toContain('Mastodon');
+  });
+  it('keeps Unschedule for a scheduled post on a disconnected channel (#0640)', () => {
+    render(OutreachAnnouncement, {
+      view: {
+        available: true, unavailable_reason: '',
+        workshop: { id: 5, slug: 's', title: 'Soldering 101', status: 'published', starts_at: '2026-12-05T18:00:00Z' },
+        outreach: { id: 9, workshop_id: 9, campaign_slug: 's', created_at: '' },
+        channels: [channels[0], { ...channels[1], configured: false }], waves,
+        posts: [bPost(), post({ id: 2, channel: 'mastodon', body: mast, short_url: MURL, status: 'scheduled', scheduled_at: '2099-11-28T18:00:00Z' })],
+      } as WorkshopOutreach,
+      results: null, wave: 'announce', workshopId: 5, reload: vi.fn(), onChange: vi.fn(),
+    });
+    expect(screen.getByRole('button', { name: 'Unschedule' })).toBeTruthy();
   });
   it('keeps Unschedule on a scheduled post of an off channel (#0628)', () => {
     mountOff([post({ id: 2, channel: 'mastodon', body: mast, short_url: MURL, status: 'scheduled', scheduled_at: '2099-11-28T18:00:00Z' })]);

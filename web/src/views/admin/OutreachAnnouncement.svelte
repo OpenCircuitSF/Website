@@ -4,10 +4,12 @@
   field holds the text every automatic post shares; Save message writes it to
   each post that is not customized (lib/outreachMessage.ts decides what is
   written), "How it will look" shows each post as it will go out, and one
-  button posts them all through the same in-app dialog the cards use.
+  button posts them all through the same in-app dialog the cards use. "When it
+  goes out" holds the section's one time (#0640): Schedule… sets it for every
+  automatic post in one call, Unschedule takes them all back to draft.
   Customize… opens the composer for a single post and marks it customized, so
   a later Save message leaves it alone until "Use shared message" hands it
-  back. Schedule for later… takes one time for every postable post. Once no
+  back. Once no
   automatic post can change any more the Message box goes and the section shows
   what was posted (#0626).
 
@@ -20,8 +22,8 @@
   import {
     draftAllOutreach,
     updateOutreachPost,
-    scheduleOutreachPost,
-    unscheduleOutreachPost,
+    scheduleOutreachSection,
+    unscheduleOutreachSection,
     takedownOutreachPost,
     ApiError,
   } from '../../lib/api';
@@ -29,9 +31,11 @@
     composerActions,
     defaultScheduleAt,
     fromLocalInputValue,
+    scheduleHint,
     toLocalInputValue,
   } from '../../lib/outreach';
-  import { cardButtons, onChannels, postableAutomatic, sendsItself, statusLine, visibleNotice, type CardNotice } from '../../lib/outreachCards';
+  import { scheduleTargets, sectionLine, sectionTimeText, unscheduleTargets } from '../../lib/outreachSection';
+  import { cardButtons, onChannels, postableAutomatic, sendsItself, statusLine, visibleNotice, weekdayTime, type CardNotice } from '../../lib/outreachCards';
   import { composeBody, messageTargets, planSaveMessage, restoredTail, sharedMessage } from '../../lib/outreachMessage';
   import { postAll } from '../../lib/outreachPostAll';
   import { identicalAutomaticBodies } from '../../lib/outreachPreview';
@@ -94,8 +98,12 @@
   const canSave = $derived(dirty && plan.length > 0 && trimmed !== '' && !anyOver);
   const customizedLeft = $derived(autos.filter((a) => a.post.customized && a.post.status !== 'posted' && a.post.status !== 'queued'));
   const postable = $derived(postableAutomatic(view, wave));
-  const scheduleTargets = $derived(autos.filter((a) => cardButtons(a.post, a.channel, view.available).schedule));
-  const unscheduleTargets = $derived(autos.filter((a) => cardButtons(a.post, a.channel, view.available).unschedule));
+  const canSchedule = $derived(scheduleTargets(view, wave).length > 0);
+  const canUnschedule = $derived(unscheduleTargets(view, wave).length > 0);
+  const scheduledNow = $derived(canUnschedule);
+  // Reminder and Final lead with Schedule…; Announce, which has no set day, with Post.
+  const primarySchedule = $derived(defaultScheduleAt(wave, view.waves, new Date()) !== null);
+  const timeText = $derived(sectionTimeText(view, wave));
 
   let busy = $state(false);
   let status = $state('');
@@ -119,8 +127,13 @@
   let scheduleLocal = $state(initialSchedule());
 
   function initialSchedule(): string {
-    const iso = defaultScheduleAt(wave, view.waves, new Date());
+    const own = sectionLine(view, wave).at;
+    const iso = scheduledNow && own ? own : defaultScheduleAt(wave, view.waves, new Date());
     return iso ? toLocalInputValue(iso) : '';
+  }
+  function openSchedule(): void {
+    scheduleLocal = initialSchedule();
+    scheduling = true;
   }
 
   function msg(err: unknown, fallback: string): string {
@@ -217,19 +230,19 @@
         errorText = 'Pick a date and time to schedule.';
         return;
       }
-      const done: string[] = [];
-      for (const { post, channel } of scheduleTargets) {
-        onChange(await scheduleOutreachPost(post.id, iso));
-        done.push(channel.label);
-      }
+      const r = await scheduleOutreachSection(workshopId, wave, iso);
       scheduling = false;
-      status = `Scheduled on ${names(done)}.`;
+      status =
+        `Scheduled for ${weekdayTime(iso)} on ${names(r.posts.map((p) => view.channels.find((c) => c.name === p.channel)?.label ?? p.channel))}.` +
+        r.left_alone.filter((l) => l.reason === 'posted').map((l) => ` ${l.channel_label} was already posted and was left alone.`).join('');
+      reload();
     });
 
   const unschedule = () =>
     guarded('Could not unschedule. Please try again.', async () => {
-      for (const { post } of unscheduleTargets) onChange(await unscheduleOutreachPost(post.id));
+      await unscheduleOutreachSection(workshopId, wave);
       status = 'Back to draft.';
+      reload();
     });
 
   // What each post would go out with, so the warning follows unsaved typing too.
@@ -290,6 +303,32 @@
       {/if}
     {/if}
 
+    <h4 class="when">When it goes out</h4>
+    <p class="when-line">{timeText}</p>
+    <p class="row">
+      {#if canSchedule && !scheduling}
+        <Button variant={primarySchedule ? 'primary' : undefined} onclick={openSchedule} disabled={busy || dirty}>{scheduledNow ? 'Change time…' : 'Schedule…'}</Button>
+      {/if}
+      {#if canUnschedule}<Button onclick={unschedule} disabled={busy}>Unschedule</Button>{/if}
+      {#if postable.length > 0}
+        <Button variant={primarySchedule ? undefined : 'primary'} onclick={openPost} disabled={busy || dirty}>Post to {names(postable.map((i) => i.channel.label))}</Button>
+      {/if}
+    </p>
+    {#if dirty && !locked}<p class="text-muted">Save the message before posting or scheduling.</p>{/if}
+    {#if scheduling}
+      <div class="schedule">
+        <label class="field">
+          <span class="field-label">Post on (Pacific time)</span>
+          <input type="datetime-local" bind:value={scheduleLocal} />
+        </label>
+        <p class="row">
+          <Button variant="primary" onclick={schedule} disabled={busy || !scheduleLocal}>Schedule</Button>
+          <Button onclick={() => (scheduling = false)} disabled={busy}>Cancel</Button>
+        </p>
+        {#if !scheduleLocal}<p class="text-muted">{scheduleHint(wave, view.waves)}</p>{/if}
+      </div>
+    {/if}
+
     <h4 class="how">{allPosted ? 'What was posted' : 'How it will look'}</h4>
     {#if sameText}<p class="text-warn">Bluesky and Mastodon will get exactly the same text.</p>{/if}
     {#each autos as { channel, post } (post.id)}
@@ -317,7 +356,7 @@
           {/key}
         {:else}
           <OutreachPostPreview {view} {channel} {post} {body} />
-          <p class="status status-{line.kind}">{line.text}</p>
+          {#if line.kind === 'posted' || line.kind === 'failed' || line.kind === 'queued'}<p class="status status-{line.kind}">{line.text}</p>{/if}
           <p class="row">
             {#if post.status !== 'posted' && post.status !== 'queued'}
               <Button onclick={() => (customizingId = post.id)} disabled={busy || customizingId !== null}>Customize…</Button>
@@ -333,30 +372,6 @@
       </article>
     {/each}
 
-    <p class="row">
-      {#if postable.length > 0}
-        <Button variant="primary" onclick={openPost} disabled={busy || dirty}>Post to {names(postable.map((i) => i.channel.label))}</Button>
-      {/if}
-      {#if scheduleTargets.length > 0 && !scheduling}
-        <Button onclick={() => (scheduling = true)} disabled={busy || dirty}>Schedule for later…</Button>
-      {/if}
-      {#if unscheduleTargets.length > 0}
-        <Button onclick={unschedule} disabled={busy}>Unschedule</Button>
-      {/if}
-    </p>
-    {#if dirty && !locked}<p class="text-muted">Save the message before posting or scheduling.</p>{/if}
-    {#if scheduling}
-      <div class="schedule">
-        <label class="field">
-          <span class="field-label">Schedule for (Pacific time)</span>
-          <input type="datetime-local" bind:value={scheduleLocal} />
-        </label>
-        <p class="row">
-          <Button variant="primary" onclick={schedule} disabled={busy || !scheduleLocal}>Schedule</Button>
-          <Button onclick={() => (scheduling = false)} disabled={busy}>Cancel</Button>
-        </p>
-      </div>
-    {/if}
   {/if}
 
   <p class="text-muted" role="status">{status || shownPostLine}</p>
@@ -404,6 +419,18 @@
     width: 100%;
     font-family: var(--font);
     font-size: var(--fs-base);
+  }
+  .when {
+    margin: var(--space-4) 0 var(--space-2);
+  }
+  .when-line {
+    margin: 0 0 var(--space-2);
+  }
+  .schedule {
+    margin: var(--space-2) 0;
+  }
+  .schedule input {
+    max-width: 100%;
   }
   .how {
     margin: var(--space-4) 0 var(--space-2);

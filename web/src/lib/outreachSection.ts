@@ -105,9 +105,15 @@ export function scheduleTargets(view: View, wave: string): Target[] {
   return out;
 }
 
-/** The scheduled subset of scheduleTargets. */
+/** Scheduled automatic posts the section Unschedule stops, including one on a channel since disconnected: stopping is always safe (#0640). */
 export function unscheduleTargets(view: View, wave: string): Target[] {
-  return scheduleTargets(view, wave).filter((t) => t.post.status === 'scheduled');
+  const out: Target[] = [];
+  for (const channel of view.channels) {
+    if (!channel.automatic) continue;
+    const post = postOf(view, channel.name, wave);
+    if (post?.status === 'scheduled') out.push({ post, channel });
+  }
+  return out;
 }
 
 /** The section block's time line (#0640, used from 0640d). */

@@ -10,16 +10,16 @@
   link, Copy text only and Copy link; each flips to "Copied" for two seconds,
   and when the browser refuses, the exact text is selected in a box instead. The
   notice itself is held by the list so a both-networks post can write to two
-  cards. A hand-posted row's status line (#0635) sits beside its title and says
-  when to post, a day and an instruction, so it cannot read as an automatic
-  schedule; its link and buttons share one row, two across on a phone.
+  cards. A hand-posted row's title carries only "Posted <when> · view post" once
+  it is posted; the day to post it is said once on the group line (#0640). Its
+  link and buttons share one row, two across on a phone. Scheduling is not
+  here: a section's one time is set from its "When it goes out" block.
 -->
 <script lang="ts">
   import { onDestroy, tick, untrack } from 'svelte';
   import {
     createOutreachPost,
     sendOutreachPost,
-    unscheduleOutreachPost,
     prepareOutreachPost,
     markOutreachPosted,
     unmarkOutreachPosted,
@@ -27,7 +27,7 @@
     ApiError,
   } from '../../lib/api';
   import { composerActions } from '../../lib/outreach';
-  import { handChannelLabel, handCopies, handLinkLabel, handPostWhen, isVideoChannel, writeClipboard } from '../../lib/outreachHandCopy';
+  import { handChannelLabel, handCopies, handLinkLabel, isVideoChannel, writeClipboard } from '../../lib/outreachHandCopy';
   import { copyablePostLink } from '../../lib/outreachPreview';
   import {
     cardButtons,
@@ -90,8 +90,7 @@
   const status = $derived(statusLine(p, c.channel));
   const btn = $derived(cardButtons(p, c.channel, available));
   const hand = $derived(!sendsItself(c.channel));
-  const usesWhen = $derived(hand && (status.kind === 'manual' || status.kind === 'not_drafted'));
-  const statusText = $derived(usesWhen ? handPostWhen(view, c.wave.name) : status.text);
+  const statusText = $derived(status.text);
   const title = $derived(hand ? handChannelLabel(c.channel) : c.channel.label);
   const copies = $derived(p ? handCopies(p) : null);
   const canPrepare = $derived(p ? composerActions(p, c.channel, available).canPrepare : false);
@@ -102,8 +101,6 @@
   let dialog = $state<PostDialogMode | null>(null);
   let dialogError = $state<string | null>(null);
   let copyTimer: ReturnType<typeof setTimeout> | undefined;
-  // Which button opened the editor (#0627): each one sets this again on its next click.
-  let scheduleFirst = $state(false);
 
   onDestroy(() => clearTimeout(copyTimer));
 
@@ -128,13 +125,6 @@
       if (outreachId === null) return;
       await createOutreachPost(outreachId, c.channel.name, c.wave.name);
       reload();
-    });
-
-  const unschedule = (post: OutreachPost) =>
-    run('unschedule', async () => {
-      const updated = await unscheduleOutreachPost(post.id);
-      onChange(updated);
-      onNotice({ text: 'Back to draft.', kind: 'status', status: updated.status });
     });
 
   function openDialog(mode: PostDialogMode): void {
@@ -240,7 +230,7 @@
   {/snippet}
   <div class="card-head">
     <h5 class="card-title">{title} &middot; {waveLabel}{p?.stale ? ' (stale)' : ''}</h5>
-    {#if hand && !editing}{@render statusEl()}{/if}
+    {#if hand && !editing && status.kind === 'posted'}{@render statusEl()}{/if}
   </div>
   {#if p && editing}
     {#key p.id}
@@ -253,7 +243,6 @@
         {onDeleted}
         onClose={() => onCloseEditor(p.id)}
         {onDirtyChange}
-        openSchedule={scheduleFirst}
       />
     {/key}
   {:else}
@@ -298,12 +287,6 @@
         {#if btn.retry}
           <Button variant="primary" onclick={() => openDialog('retry')} disabled={busy}>Retry</Button>
         {/if}
-        {#if btn.schedule}
-          <Button onclick={() => { scheduleFirst = true; onEdit(p); }} disabled={busy}>Schedule…</Button>
-        {/if}
-        {#if btn.unschedule}
-          <Button onclick={() => unschedule(p)} disabled={busy}>Unschedule</Button>
-        {/if}
         {#if btn.copyText && copies}
           <Button onclick={() => copy('withlink', copies.withLink ?? '')} disabled={busy || copies.withLink === null}>{copyLabel('Copy with link', copied === 'withlink')}</Button>
           <Button onclick={() => copy('text', copies.textOnly)} disabled={busy || copies.textOnly === ''}>{copyLabel('Copy text only', copied === 'text')}</Button>
@@ -321,7 +304,7 @@
           <Button onclick={() => openDialog('takedown')} disabled={busy}>Delete and redo…</Button>
         {/if}
         {#if btn.edit}
-          <Button onclick={() => { scheduleFirst = false; onEdit(p); }} data-edit-for={p.id}>Edit</Button>
+          <Button onclick={() => onEdit(p)} data-edit-for={p.id}>Edit</Button>
         {/if}
       {/if}
     </div>

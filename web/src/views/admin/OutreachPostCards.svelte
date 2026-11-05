@@ -1,31 +1,20 @@
 <!--
-  The posts list on a workshop's outreach page (#0569): one card per channel
-  x wave, grouped by wave. Each card (OutreachPostCard.svelte, #0581) shows the
-  full post text as it will be posted, one plain status line and the actions
-  that apply, and carries its own feedback line. This file owns what spans
-  cards: the grouping, which card is being edited, the "discard changes"
-  confirmation, the Announce "Post to Bluesky and Mastodon" button with its one
-  confirmation, and the per-card notices. Edit opens the existing
-  OutreachComposer inline in the card. No native browser dialog: every confirmation is
-  an in-app dialog. With `channelFilter` only the matching channels' cards are
-  listed. With `wave` (#0626) only that section's cards are, under the section's
-  own strip, in a Video group and a Post by hand group.
+  The hand-posted rows of one section on a workshop's outreach page (#0569,
+  #0626): one card per channel that is posted by hand, in a Video group and a
+  Post by hand group. Each card (OutreachPostCard.svelte, #0581) shows the
+  full post text, its status and the actions that apply, and carries its own
+  feedback line. This file owns what spans cards: the grouping, which card is
+  being edited, the "discard changes" confirmation and the per-card notices.
+  The automatic posts are not here: OutreachAnnouncement.svelte posts and
+  schedules them (#0640). Edit opens the existing OutreachComposer inline in
+  the card. No native browser dialog: every confirmation is an in-app dialog.
 -->
 <script lang="ts">
   import { tick, untrack } from 'svelte';
-  import { isVideoChannel, sectionVideoId } from '../../lib/outreachHandCopy';
-  import { postAll } from '../../lib/outreachPostAll';
-  import {
-    groupByWave,
-    postableAutomatic,
-    visibleNotice,
-    type CardNotice,
-    type PostCard,
-  } from '../../lib/outreachCards';
-  import type { OutreachChannel, OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
-  import Button from '../../lib/Button.svelte';
+  import { handPostWhen, isVideoChannel, sectionVideoId } from '../../lib/outreachHandCopy';
+  import { groupByWave, sendsItself, type CardNotice, type PostCard } from '../../lib/outreachCards';
+  import type { OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
   import OutreachPostCard from './OutreachPostCard.svelte';
-  import OutreachPostDialog from './OutreachPostDialog.svelte';
   import OutreachConfirmDialog from './OutreachConfirmDialog.svelte';
 
   interface Props {
@@ -34,42 +23,25 @@
     onChange: (post: OutreachPost) => void;
     /** Refetch the whole view (after a draft is created or a post is deleted). */
     reload: () => void;
-    /** Only these channels get cards. */
-    channelFilter?: (channel: OutreachChannel) => boolean;
     /** Where the Instagram card's flyer link goes (#0588). */
     flyer?: { href: string; label: string };
-    /** Only this section's cards, with no heading of its own (#0626). */
-    wave?: string;
+    /** The section whose hand-posted cards are listed, with no heading of its own (#0626). */
+    wave: string;
     /** Whether a card's editor holds typing not saved yet (#0626). */
     onUnsavedChange?: (unsaved: boolean) => void;
   }
-  let { view, results, onChange, reload, channelFilter, flyer, wave, onUnsavedChange }: Props = $props();
+  let { view, results, onChange, reload, flyer, wave, onUnsavedChange }: Props = $props();
 
   let editingId = $state<number | null>(null);
   let pendingEditId = $state<number | null>(null);
   let notices = $state<Record<number, CardNotice | null>>({});
-  // The both-networks result line, and the posts it reported on (#0581).
-  let listText = $state('');
-  let listIds = $state<number[]>([]);
-  let bothOpen = $state(false);
-  let bothBusy = $state(false);
-  let bothError = $state<string | null>(null);
-  // Fixed when the dialog opens: each send updates the view, which would shrink the live list mid-flight.
-  let bothSnapshot = $state<{ post: OutreachPost; channel: OutreachChannel }[]>([]);
-
-  // Same rule as the cards: the line goes once none of the posts it reported on
-  // still shows its notice, so "Bluesky: queued" clears when polling brings
-  // back posted (visibleNotice), while a failure stays with its unposted card.
-  const listStatus = $derived(
-    listIds.some((id) => visibleNotice(notices[id] ?? null, view.posts.find((p) => p.id === id) ?? null) !== '') ? listText : '',
-  );
   // An off channel's empty card would offer a Draft button that only gets a 409 (#0628).
   const off = $derived(view.off_channels ?? []);
   const groups = $derived(
-    groupByWave(view).filter((g) => !wave || g.wave.name === wave).map((g) => ({ ...g, cards: (channelFilter ? g.cards.filter((c) => channelFilter(c.channel)) : g.cards).filter((c) => c.post !== null || !off.some((o) => o.name === c.channel.name)) })),
+    groupByWave(view)
+      .filter((g) => g.wave.name === wave)
+      .map((g) => ({ ...g, cards: g.cards.filter((c) => !sendsItself(c.channel) && (c.post !== null || !off.some((o) => o.name === c.channel.name))) })),
   );
-  const bothItems = $derived(postableAutomatic(view, 'announce').filter((i) => !channelFilter || channelFilter(i.channel)));
-  const bothLabel = $derived(`Post to ${bothItems.map((i) => i.channel.label).join(' and ')}`);
 
   let editorDirty = $state(false);
   $effect(() => {
@@ -100,31 +72,9 @@
     reload();
   }
 
-  function openBoth(): void {
-    bothSnapshot = bothItems;
-    bothError = null;
-    bothOpen = true;
-  }
-
-  /** Post both Announce cards from one dialog, one after the other, reporting both on one line. */
-  async function postBoth(): Promise<void> {
-    bothBusy = true;
-    bothError = null;
-    const r = await postAll(bothSnapshot, onChange);
-    notices = { ...notices, ...r.notices };
-    listText = r.line;
-    listIds = Object.keys(r.notices).map(Number);
-    bothBusy = false;
-    bothOpen = false;
-  }
 </script>
 
-<section class="cards" aria-labelledby={channelFilter ? undefined : 'outreach-posts-heading'} aria-label={channelFilter ? 'Post by hand' : undefined}>
-  {#if !channelFilter}<h3 id="outreach-posts-heading">Posts</h3>{/if}
-  <!-- The both-networks result (D6). Always rendered (a persistent live
-       region), and at the top, beside the Announce heading and its button,
-       not after the last card (C5, M3). -->
-  <p class="text-muted" role="status">{listStatus}</p>
+<section class="cards" aria-label="Post by hand">
   {#snippet card(c: PostCard, wave: { label: string })}
     <OutreachPostCard
       card={c}
@@ -148,40 +98,18 @@
   {#each groups.filter((g) => g.cards.length > 0) as group (group.wave.name)}
     {@const video = group.cards.filter((c) => isVideoChannel(c.channel))}
     {@const other = group.cards.filter((c) => !isVideoChannel(c.channel))}
-    {#if !wave}<h4 class="wave">{group.wave.label}</h4>{/if}
-    {#if group.wave.name === 'announce' && bothItems.length >= 2}
-      <p class="row">
-        <Button variant="primary" onclick={openBoth}>{bothLabel}</Button>
-      </p>
-    {/if}
-    {#if wave}
-      {#if video.length > 0}
-        <h4 class="group" id={sectionVideoId(group.wave.name)} tabindex="-1">Video</h4>
-        <p class="text-muted">One video, posted in each place by hand. Each has its own link.</p>
-        {#each video as c (c.channel.name)}{@render card(c, group.wave)}{/each}
-      {/if}
-      {#if other.length > 0}
-        <h4 class="group">Post by hand</h4>
-        {#each other as c (c.channel.name)}{@render card(c, group.wave)}{/each}
-      {/if}
-    {:else}
-      {#each other as c (c.channel.name)}{@render card(c, group.wave)}{/each}
+    {#if video.length > 0}
+      <h4 class="group" id={sectionVideoId(group.wave.name)} tabindex="-1">Video</h4>
+      <p class="text-muted">One video, posted in each place by hand. {handPostWhen(view, wave)} Each has its own link.</p>
       {#each video as c (c.channel.name)}{@render card(c, group.wave)}{/each}
+    {/if}
+    {#if other.length > 0}
+      <h4 class="group">Post by hand</h4>
+      {#each other as c (c.channel.name)}{@render card(c, group.wave)}{/each}
     {/if}
   {/each}
 </section>
 
-{#if bothOpen}
-  <OutreachPostDialog
-    mode="post"
-    {view}
-    items={bothSnapshot}
-    inFlight={bothBusy}
-    errorMessage={bothError}
-    onConfirm={() => void postBoth()}
-    onClose={() => !bothBusy && (bothOpen = false)}
-  />
-{/if}
 {#if pendingEditId !== null}
   <OutreachConfirmDialog
     title="Discard your unsaved changes?"
@@ -197,17 +125,11 @@
 {/if}
 
 <style>
-  .wave {
-    margin: var(--space-4) 0 var(--space-2);
-  }
   .group {
     margin: var(--space-4) 0 var(--space-2);
     scroll-margin-top: 5.5rem;
   }
   .group:focus {
     outline: none;
-  }
-  [role='status']:empty {
-    display: none;
   }
 </style>

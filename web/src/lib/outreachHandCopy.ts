@@ -113,22 +113,28 @@ export function handLinkLabel(channel: Pick<OutreachChannel, 'name' | 'automatic
 
 /**
  * When to post a hand-posted row (#0635): the section's first automatic post
- * still to come, else its suggested day. A day and an instruction, so it never
- * reads as something the site will send.
+ * still to come, else, once they all went out, that day (#0640), else the
+ * suggested day. A day and an instruction, so it never reads as something the
+ * site will send. Said once, on the Video group line (#0640).
  */
 export function handPostWhen(view: Pick<WorkshopOutreach, 'channels' | 'waves' | 'posts'>, wave: string, now: Date = new Date()): string {
-  const scheduled = view.posts
-    .filter((p) => p.wave === wave && p.status === 'scheduled' && p.scheduled_at && !p.held && view.channels.some((c) => c.name === p.channel && sendsItself(c)))
+  const auto = view.posts.filter((p) => p.wave === wave && view.channels.some((c) => c.name === p.channel && sendsItself(c)));
+  const scheduled = auto
+    .filter((p) => p.status === 'scheduled' && p.scheduled_at && !p.held)
     .map((p) => p.scheduled_at as string)
     .sort()[0];
+  if (!scheduled && auto.length > 0 && auto.every((p) => p.status === 'posted')) {
+    const went = auto.map((p) => p.posted_at).filter((t): t is string => t !== null).sort().pop();
+    return went ? `The automatic posts went out ${formatPacificWeekday(went)}; post the video soon.` : 'The automatic posts went out; post the video soon.';
+  }
   const iso = scheduled ?? view.waves.find((w) => w.name === wave)?.suggested_at ?? null;
   const day = iso ? toPacificInput(iso).slice(0, 10) : '';
   if (!iso || !day) return 'No set day: post when you are ready.';
   const label = formatPacificWeekday(iso);
   const today = toPacificInput(now.toISOString()).slice(0, 10);
-  if (day < today) return `The day for this was ${label}. Post it soon if it still helps.`;
+  if (day < today) return `The day for this was ${label}; post it soon if it still helps.`;
   const alongside = scheduled ? ', with the automatic posts' : '';
-  return day === today ? `Aim to post today${alongside}.` : `Aim to post on ${label}${alongside}.`;
+  return day === today ? `Aim for today${alongside}.` : `Aim for ${label}${alongside}.`;
 }
 
 export function sectionVideoId(name: string): string {

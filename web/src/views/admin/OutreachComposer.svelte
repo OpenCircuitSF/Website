@@ -1,10 +1,10 @@
 <!--
   The composer for one outreach post (#0544): the text with an exact character
   count against the channel limit, the tracked link and its UTM chips under a
-  "Link details" disclosure (#0582), and one action row: Save, Cancel, Create
-  link, Schedule… or Change time…, and Unschedule (#0545) sit together and wrap
-  on a phone, with Delete set apart at the far end (#0591). The schedule picker
-  stays closed until asked for (#0627). Regenerate sits with its warning. It
+  "Link details" disclosure (#0582), and one action row: Save, Cancel and
+  Create link sit together and wrap on a phone, with Delete set apart at the
+  far end (#0591). Scheduling is not here: since #0640 a section's one time is
+  set from its "When it goes out" block. Regenerate sits with its warning. It
   always replaces a card's display
   and always has Cancel; the card owns Post now, Retry and Mark posted behind
   their confirmation dialog (#0581), and since #0582 nothing in this file posts
@@ -15,24 +15,18 @@
   Regenerate would write and saves nothing until Save.
 -->
 <script lang="ts">
-  import { tick, untrack } from 'svelte';
+  import { untrack } from 'svelte';
   import {
     updateOutreachPost,
     prepareOutreachPost,
     deleteOutreachPost,
-    scheduleOutreachPost,
-    unscheduleOutreachPost,
     ApiError,
   } from '../../lib/api';
   import {
     channelStatusNote,
     composerActions,
     countCharacters,
-    defaultScheduleAt,
-    fromLocalInputValue,
     isOverLimit,
-    scheduleHint,
-    toLocalInputValue,
     utmChips,
   } from '../../lib/outreach';
   import type { OutreachChannel, OutreachPost, OutreachWave } from '../../lib/types';
@@ -53,10 +47,8 @@
     markCustomized?: boolean;
     /** Reports whether the text has unsaved edits, so the card list can ask before discarding them. */
     onDirtyChange?: (dirty: boolean) => void;
-    /** The card's Schedule… button opened this editor, so show the picker straight away (#0627). */
-    openSchedule?: boolean;
   }
-  let { post, channel, wave, available, onChange, onDeleted, onClose, markCustomized = false, onDirtyChange, openSchedule = false }: Props = $props();
+  let { post, channel, wave, available, onChange, onDeleted, onClose, markCustomized = false, onDirtyChange }: Props = $props();
 
   // svelte-ignore state_referenced_locally
   let body = $state(post.body);
@@ -78,18 +70,6 @@
       }
     });
   });
-
-  // The schedule picker: the post's own time when scheduled, otherwise the
-  // wave's suggestion when it is still in the future (#0545).
-  function initialScheduleValue(): string {
-    const iso = post.scheduled_at ?? defaultScheduleAt(wave.name, [wave], new Date());
-    return iso ? toLocalInputValue(iso) : '';
-  }
-  // svelte-ignore state_referenced_locally
-  let scheduleLocal = $state(initialScheduleValue());
-  // svelte-ignore state_referenced_locally
-  let scheduleOpen = $state(openSchedule);
-  let root = $state<HTMLDivElement | undefined>();
 
   const actions = $derived(composerActions(post, channel, available));
   const channelNote = $derived(channelStatusNote(channel));
@@ -161,26 +141,6 @@
       onChange(await prepareOutreachPost(post.id));
       notice = 'Short link created.';
     });
-  const schedule = () =>
-    run('schedule', async () => {
-      // The picker is Pacific time, converted per-date (lib/pacificTime.ts).
-      const iso = fromLocalInputValue(scheduleLocal);
-      if (iso === null) {
-        error = 'Pick a date and time to schedule.';
-        return;
-      }
-      onChange(await scheduleOutreachPost(post.id, iso));
-      notice = 'Scheduled.';
-      // The Schedule button has just disappeared, so focus has to go somewhere.
-      scheduleOpen = false;
-      await tick();
-      root?.querySelector<HTMLElement>('[data-schedule-toggle]')?.focus({ preventScroll: true });
-    });
-  const unschedule = () =>
-    run('unschedule', async () => {
-      onChange(await unscheduleOutreachPost(post.id));
-      notice = 'Back to draft.';
-    });
   const remove = () =>
     run('delete', async () => {
       await deleteOutreachPost(post.id);
@@ -188,7 +148,7 @@
     });
 </script>
 
-<div class="composer" bind:this={root}>
+<div class="composer">
   {#if actions.canRegenerate}
     <p class="text-warn">
       The event's title, date or place changed since this was drafted.
@@ -238,9 +198,6 @@
   {#if post.status === 'queued'}
     <p class="text-notice">Queued to post. It is locked until it is sent{post.last_error ? ' or fails' : ''}.</p>
   {/if}
-  {#if post.status === 'scheduled' && post.scheduled_at}
-    <p class="text-notice">Scheduled for {formatDateTime(post.scheduled_at)}.</p>
-  {/if}
 
   {#if post.status === 'posted'}
     <p class="text-notice">
@@ -257,30 +214,12 @@
     {#if actions.canPrepare}
       <Button onclick={prepare} disabled={busy || dirty}>Create link</Button>
     {/if}
-    {#if actions.canSchedule}
-      <Button data-schedule-toggle aria-expanded={scheduleOpen ? 'true' : 'false'} onclick={() => (scheduleOpen = !scheduleOpen)}>{post.status === 'scheduled' ? 'Change time…' : 'Schedule…'}</Button>
-    {/if}
-    {#if actions.canUnschedule}
-      <Button onclick={unschedule} disabled={busy}>Unschedule</Button>
-    {/if}
     {#if actions.canDelete}
       <span class="danger-end"><Button variant="danger" onclick={remove} disabled={busy}>Delete</Button></span>
     {/if}
   </div>
-  {#if actions.canSchedule && scheduleOpen}
-    <div class="schedule">
-      <label class="field">
-        <span class="field-label">Schedule for (Pacific time)</span>
-        <input type="datetime-local" bind:value={scheduleLocal} />
-      </label>
-      <Button onclick={schedule} disabled={busy || dirty || over || !scheduleLocal}>Schedule</Button>
-      {#if !scheduleLocal}
-        <p class="text-muted">{scheduleHint(wave.name, [wave])}</p>
-      {/if}
-    </div>
-  {/if}
   {#if dirty && !locked}
-    <p class="text-muted">Save your edits before creating the link or scheduling.</p>
+    <p class="text-muted">Save your edits before creating the link.</p>
   {/if}
 
   {#if error}
@@ -330,23 +269,6 @@
   }
   .actions {
     flex-wrap: wrap;
-  }
-  .schedule {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-end;
-    gap: var(--space-2);
-    margin-top: var(--space-2);
-  }
-  .schedule .field {
-    margin-bottom: 0;
-  }
-  .schedule input {
-    max-width: 100%;
-  }
-  .schedule .text-muted {
-    flex-basis: 100%;
-    margin: 0;
   }
   .link-box {
     margin: var(--space-3) 0;

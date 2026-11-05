@@ -167,36 +167,41 @@ describe('handPostWhen', () => {
   const past: OutreachWave[] = [{ name: 'reminder', label: 'Reminder', suggested_at: '2026-11-10T18:00:00Z' }];
 
   it('gives the suggested day when nothing is scheduled', () => {
-    expect(when([])).toBe('Aim to post on Sat, Nov 28.');
+    expect(when([])).toBe('Aim for Sat, Nov 28.');
   });
   it('uses the first automatic post still to come, and says so', () => {
-    expect(when([scheduled('2026-11-27T18:00:00Z'), scheduled('2026-11-26T18:00:00Z', { id: 2, channel: 'mastodon' })])).toBe('Aim to post on Thu, Nov 26, with the automatic posts.');
+    expect(when([scheduled('2026-11-27T18:00:00Z'), scheduled('2026-11-26T18:00:00Z', { id: 2, channel: 'mastodon' })])).toBe('Aim for Thu, Nov 26, with the automatic posts.');
   });
   it('says today on the Pacific day, not the UTC day', () => {
     // 11 PM Pacific Nov 27 and 1 AM UTC Nov 28 are the same Pacific date.
     const waves: OutreachWave[] = [{ name: 'reminder', label: 'Reminder', suggested_at: '2026-11-27T20:00:00Z' }];
-    expect(when([], 'reminder', new Date('2026-11-28T07:00:00Z'), waves)).toBe('Aim to post today.');
-    expect(when([], 'reminder', new Date('2026-11-28T09:00:00Z'), waves)).toBe('The day for this was Fri, Nov 27. Post it soon if it still helps.');
+    expect(when([], 'reminder', new Date('2026-11-28T07:00:00Z'), waves)).toBe('Aim for today.');
+    expect(when([], 'reminder', new Date('2026-11-28T09:00:00Z'), waves)).toBe('The day for this was Fri, Nov 27; post it soon if it still helps.');
   });
   it('a past day does not read as upcoming', () => {
     const text = when([], 'reminder', NOW, past);
-    expect(text).toBe('The day for this was Tue, Nov 10. Post it soon if it still helps.');
+    expect(text).toBe('The day for this was Tue, Nov 10; post it soon if it still helps.');
     expect(text.startsWith('Aim')).toBe(false);
   });
   it('a past scheduled time reads as past', () => {
-    expect(when([scheduled('2026-11-10T18:00:00Z')])).toBe('The day for this was Tue, Nov 10. Post it soon if it still helps.');
+    expect(when([scheduled('2026-11-10T18:00:00Z')])).toBe('The day for this was Tue, Nov 10; post it soon if it still helps.');
   });
   it('an on-hold post does not count as scheduled', () => {
-    expect(when([scheduled('2026-11-26T18:00:00Z', { held: true })])).toBe('Aim to post on Sat, Nov 28.');
+    expect(when([scheduled('2026-11-26T18:00:00Z', { held: true })])).toBe('Aim for Sat, Nov 28.');
   });
   it('a hand channel with a scheduled_at does not count', () => {
-    expect(when([scheduled('2026-11-26T18:00:00Z', { channel: 'tiktok' })])).toBe('Aim to post on Sat, Nov 28.');
+    expect(when([scheduled('2026-11-26T18:00:00Z', { channel: 'tiktok' })])).toBe('Aim for Sat, Nov 28.');
   });
   it('Announce with nothing scheduled has no set day', () => {
     expect(when([], 'announce')).toBe('No set day: post when you are ready.');
   });
   it('an undated event has no set day', () => {
     expect(when([], 'reminder', NOW, [{ name: 'reminder', label: 'Reminder', suggested_at: null }])).toBe('No set day: post when you are ready.');
+  });
+  it('after the automatic posts went out it says so', () => {
+    const out = (id: number, channel: string, at: string) => handPost({ id, channel, status: 'posted', posted_at: at });
+    expect(when([out(1, 'bluesky', '2026-11-18T18:00:00Z'), out(2, 'mastodon', '2026-11-18T18:01:00Z')])).toBe('The automatic posts went out Wed, Nov 18; post the video soon.');
+    expect(when([out(1, 'bluesky', '2026-11-18T18:00:00Z'), handPost({ id: 2, channel: 'mastodon' })])).toBe('Aim for Sat, Nov 28.');
   });
   it('never gives a clock time', () => {
     const texts = [when([]), when([scheduled('2026-11-26T18:00:00Z')]), when([], 'reminder', NOW, past), when([], 'announce')];

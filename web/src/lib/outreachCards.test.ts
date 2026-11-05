@@ -47,22 +47,17 @@ describe('statusLine', () => {
 });
 
 describe('cardButtons', () => {
-  it('automatic draft: edit, post now, schedule', () => {
+  it('automatic draft: edit, post now', () => {
     const b = cardButtons(post(), auto, true);
-    expect([b.edit, b.postNow, b.schedule, b.markPosted]).toEqual([true, true, true, false]);
-  });
-  it('scheduled: unschedule', () => {
-    const b = cardButtons(post({ status: 'scheduled', scheduled_at: '2026-10-17T20:00:00Z' }), auto, true);
-    expect(b.unschedule).toBe(true);
+    expect([b.edit, b.postNow, b.markPosted]).toEqual([true, true, false]);
   });
   it('failed: retry', () => {
     const b = cardButtons(post({ status: 'failed' }), auto, true);
     expect(b.retry).toBe(true);
-    expect(b.schedule).toBe(false);
   });
   it('manual: copy text and mark posted, never post now', () => {
     const b = cardButtons(post({ status: 'manual', channel: 'reddit' }), manual, true);
-    expect([b.edit, b.copyText, b.markPosted, b.postNow, b.schedule]).toEqual([true, true, true, false, false]);
+    expect([b.edit, b.copyText, b.markPosted, b.postNow]).toEqual([true, true, true, false]);
   });
   it('undrafted: draft only', () => {
     const b = cardButtons(null, auto, true);

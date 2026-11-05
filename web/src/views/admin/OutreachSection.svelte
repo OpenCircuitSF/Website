@@ -54,7 +54,7 @@
   <OutreachAnnouncement {view} {results} wave={wave.name} {workshopId} {onChange} {reload} onUnsavedChange={(u) => { messageUnsaved = u; report(); }} />
   {#if handChannels.length > 0}
     {#if written}
-      <OutreachPostCards {view} {results} {onChange} {reload} wave={wave.name} channelFilter={(c) => !sendsItself(c)} {flyer} onUnsavedChange={(u) => { handUnsaved = u; report(); }} />
+      <OutreachPostCards {view} {results} {onChange} {reload} wave={wave.name} {flyer} onUnsavedChange={(u) => { handUnsaved = u; report(); }} />
     {:else if handOn.length > 0}
       <p class="text-muted">The text for {handOn.map((c) => handChannelLabel(c)).join(', ')} appears here once this section is written.</p>
     {/if}
