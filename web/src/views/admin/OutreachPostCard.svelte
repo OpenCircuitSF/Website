@@ -10,7 +10,9 @@
   link, Copy text only and Copy link; each flips to "Copied" for two seconds,
   and when the browser refuses, the exact text is selected in a box instead. The
   notice itself is held by the list so a both-networks post can write to two
-  cards.
+  cards. A hand-posted row's status line (#0635) sits beside its title and says
+  when to post, a day and an instruction, so it cannot read as an automatic
+  schedule; its link and buttons share one row, two across on a phone.
 -->
 <script lang="ts">
   import { onDestroy, tick, untrack } from 'svelte';
@@ -25,7 +27,7 @@
     ApiError,
   } from '../../lib/api';
   import { composerActions } from '../../lib/outreach';
-  import { handChannelLabel, handCopies, handLinkLabel, isVideoChannel, writeClipboard } from '../../lib/outreachHandCopy';
+  import { handChannelLabel, handCopies, handLinkLabel, handPostWhen, isVideoChannel, writeClipboard } from '../../lib/outreachHandCopy';
   import { copyablePostLink } from '../../lib/outreachPreview';
   import {
     cardButtons,
@@ -88,6 +90,8 @@
   const status = $derived(statusLine(p, c.channel));
   const btn = $derived(cardButtons(p, c.channel, available));
   const hand = $derived(!sendsItself(c.channel));
+  const usesWhen = $derived(hand && (status.kind === 'manual' || status.kind === 'not_drafted'));
+  const statusText = $derived(usesWhen ? handPostWhen(view, c.wave.name) : status.text);
   const title = $derived(hand ? handChannelLabel(c.channel) : c.channel.label);
   const copies = $derived(p ? handCopies(p) : null);
   const canPrepare = $derived(p ? composerActions(p, c.channel, available).canPrepare : false);
@@ -228,7 +232,16 @@
 </script>
 
 <article class="card" aria-label="{title} {waveLabel}">
-  <h5 class="card-title">{title} &middot; {waveLabel}{p?.stale ? ' (stale)' : ''}</h5>
+  {#snippet statusEl()}
+    <p class="status status-{status.kind}">
+      {#if status.kind === 'queued'}<span class="spinner" aria-hidden="true"></span>{/if}
+      {statusText}{#if status.kind === 'queued'}{' '}usually under ten seconds{/if}{#if status.kind === 'posted' && status.href && isSafeLinkHref(status.href)}{' · '}<a href={status.href} rel="noopener noreferrer">view post</a>{/if}
+    </p>
+  {/snippet}
+  <div class="card-head">
+    <h5 class="card-title">{title} &middot; {waveLabel}{p?.stale ? ' (stale)' : ''}</h5>
+    {#if hand && !editing}{@render statusEl()}{/if}
+  </div>
   {#if p && editing}
     {#key p.id}
       <OutreachComposer
@@ -249,34 +262,32 @@
         <!-- Focusable so a keyboard user can scroll it. -->
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
         <div class="hand-text" tabindex="0" role="group" aria-label="{title} text">
-          <OutreachPostPreview {view} channel={c.channel} post={p} body={copies.withLink ?? copies.textOnly} />
+          <OutreachPostPreview {view} channel={c.channel} post={p} body={copies.withLink ?? copies.textOnly} hideCount />
         </div>
       {:else}
         <OutreachPostPreview {view} channel={c.channel} post={p} />
       {/if}
     {/if}
-    <p class="status status-{status.kind}">
-      {#if status.kind === 'queued'}<span class="spinner" aria-hidden="true"></span>{/if}
-      {status.text}{#if status.kind === 'queued'}{' '}usually under ten seconds{/if}{#if status.kind === 'posted' && status.href && isSafeLinkHref(status.href)}{' · '}<a href={status.href} rel="noopener noreferrer">view post</a>{/if}
-    </p>
+    {#if !hand}{@render statusEl()}{/if}
     {#if p && cellClicksLabel(p, results)}<p class="text-muted">{cellClicksLabel(p, results)}</p>{/if}
     {#if p && cellReactionsLabel(p, results)}<p class="text-muted">{cellReactionsLabel(p, results)}</p>{/if}
-    {#if p && hand}
-      {#if p.short_url}
+    {#if p && hand && !p.short_url}
+      <p class="text-warn no-link">
+        This post has no ShortLink yet, so it cannot be copied with a link or marked posted. Copy text only still works.
+        {#if canPrepare}<Button onclick={() => createLink(p)} disabled={busy}>Create link</Button>{/if}
+      </p>
+    {/if}
+    <div class="row" class:hand-buttons={hand}>
+      {#if p && hand && p.short_url}
         <p class="link-row">
           <span class="link-label">{handLinkLabel(c.channel)}</span>
           <span class="mono short">{p.short_url}</span>
-          <Button onclick={() => copy('link', p.short_url ?? '')} disabled={busy}>{copyLabel('Copy link', copied === 'link')}</Button>
-        </p>
-      {:else}
-        <p class="text-warn no-link">
-          This post has no ShortLink yet, so it cannot be copied with a link or marked posted. Copy text only still works.
-          {#if canPrepare}<Button onclick={() => createLink(p)} disabled={busy}>Create link</Button>{/if}
         </p>
       {/if}
-    {/if}
-    <div class="row">
       {#if c.channel.name === 'instagram'}<a class="open-flyer" href={flyer.href}>{flyer.label}</a>{/if}
+      {#if p && hand && p.short_url}
+        <Button onclick={() => copy('link', p.short_url ?? '')} disabled={busy}>{copyLabel('Copy link', copied === 'link')}</Button>
+      {/if}
       {#if btn.draft}
         <Button variant="primary" onclick={draft} disabled={busy}>Draft</Button>
       {/if}
@@ -355,15 +366,43 @@
     margin-bottom: var(--space-3);
   }
   .card-title {
-    margin: 0 0 var(--space-2);
+    margin: 0;
     font-size: var(--fs-base);
+  }
+  .card-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    column-gap: var(--space-3);
+    margin-bottom: var(--space-2);
+  }
+  .card-head .status {
+    margin: 0;
+    font-weight: 400;
+  }
+  .hand-buttons {
+    flex-wrap: wrap;
   }
   .link-row {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
-    margin: 0 0 var(--space-2);
+  }
+  /* Beats app.css's article.card > .row > * at a phone width, and its p margin. */
+  .hand-buttons .link-row {
+    margin: 0;
+    text-align: left;
+  }
+  @media (max-width: 480px) {
+    .row.hand-buttons {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .hand-buttons .link-row {
+      grid-column: 1 / -1;
+    }
   }
   .link-label {
     font-weight: 600;

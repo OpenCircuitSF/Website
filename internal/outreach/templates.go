@@ -145,6 +145,19 @@ func draftParts(ch Channel, w Wave, f Facts) (lead, cta string, keepSummary bool
 		}
 		return s + "."
 	}
+	// The hand-posted channels' lead by section (#0635). It carries the date,
+	// never "tomorrow" or "one week": a hand post has no fixed day and a caption
+	// stays up.
+	handLead := func() (string, bool) {
+		switch w.Name {
+		case "reminder":
+			return sentence("Coming up: " + title), true
+		case "last-call":
+			return sentence("Last call for " + title), false
+		default:
+			return sentence("Join us for " + title), true
+		}
+	}
 	switch ch.Name {
 	case "bluesky":
 		keepSummary = w.Name != "last-call"
@@ -179,31 +192,13 @@ func draftParts(ch Channel, w Wave, f Facts) (lead, cta string, keepSummary bool
 			cta = "Spots are limited, so you can sign up here: " + LinkToken
 		}
 	case "instagram":
-		keepSummary = true
-		lead = titleWithDetails(title, on, venue)
+		lead, keepSummary = handLead()
 		cta = "Sign up at the link in our bio."
 	default: // tiktok, youtube: a description block to paste under a video
-		keepSummary = true
-		lead = titleWithDetails(title, on, venue)
+		lead, keepSummary = handLead()
 		cta = "Sign up: " + LinkToken + "\n\nOpen Circuit SF: " + SiteURL
 	}
 	return lead, cta, keepSummary
-}
-
-// titleWithDetails is "Title: Monday, Oct 19 at Venue.", leaving
-// out whichever of the date and venue is unknown.
-func titleWithDetails(title, on, venue string) string {
-	details := on
-	switch {
-	case venue != "" && on != "":
-		details += " at " + venue
-	case venue != "":
-		details = venue
-	}
-	if details == "" {
-		return title + "."
-	}
-	return title + ": " + details + "."
 }
 
 // paragraph is the workshop's own description: its summary, or the flyer

@@ -13,8 +13,10 @@
     channel: OutreachChannel;
     post: OutreachPost;
     body?: string;
+    /** A video channel has no limit, so its count says nothing (#0635). */
+    hideCount?: boolean;
   }
-  let { view, channel, post, body }: Props = $props();
+  let { view, channel, post, body, hideCount = false }: Props = $props();
 
   const text = $derived(body ?? post.body);
   const counted = $derived(countCharacters(channel, text, post.prepared));
@@ -27,9 +29,11 @@
   <OutreachMastodonPreview {view} {channel} {post} {body} />
 {:else}
   <pre class="body">{text}</pre>
-  <p class={over ? 'text-error' : 'text-muted'}>
-    {counted.exact ? '' : '≈ '}{counted.count}{channel.char_limit > 0 ? ` / ${channel.char_limit}` : ''} characters{over ? ' — over the limit' : ''}
-  </p>
+  {#if !hideCount}
+    <p class={over ? 'text-error' : 'text-muted'}>
+      {counted.exact ? '' : '≈ '}{counted.count}{channel.char_limit > 0 ? ` / ${channel.char_limit}` : ''} characters{over ? ' — over the limit' : ''}
+    </p>
+  {/if}
 {/if}
 
 <style>

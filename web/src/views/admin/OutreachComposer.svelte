@@ -10,7 +10,9 @@
   their confirmation dialog (#0581), and since #0582 nothing in this file posts
   or marks posted. `markCustomized` makes Save record the post as customized,
   so a shared-message save leaves it alone. Which buttons apply is decided in
-  lib/outreach.ts (composerActions); this file is markup and wiring only.
+  lib/outreach.ts (composerActions); this file is markup and wiring only. On a
+  hand-posted post, Use the standard wording (#0635) fills the box with what
+  Regenerate would write and saves nothing until Save.
 -->
 <script lang="ts">
   import { tick, untrack } from 'svelte';
@@ -134,9 +136,18 @@
     }
   }
 
+  const fresh = $derived(post.fresh_body ?? null);
+  const canUseStandard = $derived(fresh !== null && !locked && body !== fresh);
+  function useStandard(): void {
+    if (fresh === null) return;
+    body = fresh;
+    error = null;
+    notice = 'The standard wording is in the box. Nothing changes until you press Save, and Cancel keeps your text.';
+  }
+
   const save = () =>
     run('save', async () => {
-      onChange(await updateOutreachPost(post.id, markCustomized ? { body, customized: true } : { body }));
+      onChange(await updateOutreachPost(post.id, fresh !== null && body === fresh ? { regenerate: true } : markCustomized ? { body, customized: true } : { body }));
       notice = 'Saved.';
       onClose();
     });
@@ -181,7 +192,16 @@
   {#if actions.canRegenerate}
     <p class="text-warn">
       The event's title, date or place changed since this was drafted.
-      <Button onclick={regenerate} disabled={busy}>Regenerate</Button>
+      {#if canUseStandard}
+        <Button onclick={useStandard} disabled={busy}>Use the standard wording</Button>
+      {:else if fresh === null || fresh === post.body}
+        <Button onclick={regenerate} disabled={busy}>Regenerate</Button>
+      {/if}
+    </p>
+  {:else if canUseStandard}
+    <p class="text-muted">
+      This text is not the standard wording for {wave.label}.
+      <Button onclick={useStandard} disabled={busy}>Use the standard wording</Button>
     </p>
   {/if}
 

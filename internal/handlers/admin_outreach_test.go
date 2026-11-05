@@ -317,6 +317,7 @@ type testPost struct {
 	ShortURL       *string `json:"short_url"`
 	ShortLinkKey   *string `json:"short_link_key"`
 	DestinationURL string  `json:"destination_url"`
+	FreshBody      *string `json:"fresh_body"`
 }
 
 // start begins outreach WITHOUT creating the tracked links, so tests that
@@ -789,5 +790,88 @@ func TestAdminOutreach_PanelCarriesCardFacts(t *testing.T) {
 	e.h.baseURL = ""
 	if v = get(); v.BlueskyCard != "short" {
 		t.Errorf("without a base URL bluesky_card = %q, want short", v.BlueskyCard)
+	}
+}
+
+// panelPost is one post as the outreach GET returns it (#0635).
+func (e *outreachEnv) panelPost(t *testing.T, workshopID, postID int64) testPost {
+	t.Helper()
+	code, b := e.do(t, http.MethodGet, fmt.Sprintf("/admin/workshops/%d/outreach", workshopID), "")
+	if code != http.StatusOK {
+		t.Fatalf("get outreach = %d (%s)", code, b)
+	}
+	for _, p := range decodeOutreach[testPanel](t, b).Posts {
+		if p.ID == postID {
+			return p
+		}
+	}
+	t.Fatalf("post %d not in panel: %s", postID, b)
+	return testPost{}
+}
+
+func TestAdminOutreach_HandPostKeepsItsTextAndOffersFreshBody(t *testing.T) {
+	e := newOutreachEnv(t, true)
+	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	o := e.start(t, w).Outreach
+	p := e.createPost(t, o.ID, "instagram", "announce")
+	if code, b := e.do(t, http.MethodPatch, fmt.Sprintf("/admin/outreach-posts/%d", p.ID), `{"body":"mine","customized":true}`); code != http.StatusOK {
+		t.Fatalf("patch = %d (%s)", code, b)
+	}
+	got := e.panelPost(t, w.ID, p.ID)
+	if got.Body != "mine" || got.Stale {
+		t.Errorf("body %q stale %v, want mine and not stale", got.Body, got.Stale)
+	}
+	if got.FreshBody == nil || *got.FreshBody != p.Body {
+		t.Errorf("fresh_body = %v, want the current draft %q", got.FreshBody, p.Body)
+	}
+}
+
+func TestAdminOutreach_FreshBodyHasTheLink(t *testing.T) {
+	e := newOutreachEnv(t, true)
+	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	o := e.start(t, w).Outreach
+	p := e.createPost(t, o.ID, "tiktok", "announce")
+	if code, b := e.do(t, http.MethodPost, fmt.Sprintf("/admin/outreach-posts/%d/prepare", p.ID), ""); code != http.StatusOK {
+		t.Fatalf("prepare = %d (%s)", code, b)
+	}
+	got := e.panelPost(t, w.ID, p.ID)
+	if got.ShortURL == nil || got.FreshBody == nil {
+		t.Fatalf("short_url %v fresh_body %v", got.ShortURL, got.FreshBody)
+	}
+	if !strings.Contains(*got.FreshBody, *got.ShortURL) || strings.Contains(*got.FreshBody, outreach.LinkToken) {
+		t.Errorf("fresh_body = %q, want the link and no token", *got.FreshBody)
+	}
+	code, b := e.do(t, http.MethodPatch, fmt.Sprintf("/admin/outreach-posts/%d", p.ID), `{"regenerate":true}`)
+	if code != http.StatusOK {
+		t.Fatalf("regenerate = %d (%s)", code, b)
+	}
+	if after := decodeOutreach[testPost](t, b); after.Body != *got.FreshBody {
+		t.Errorf("regenerate wrote %q, fresh_body said %q", after.Body, *got.FreshBody)
+	}
+}
+
+func TestAdminOutreach_PostedHandPostHasNoFreshBody(t *testing.T) {
+	e := newOutreachEnv(t, true)
+	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	o := e.start(t, w).Outreach
+	p := e.createPost(t, o.ID, "tiktok", "announce")
+	if code, b := e.do(t, http.MethodPost, fmt.Sprintf("/admin/outreach-posts/%d/prepare", p.ID), ""); code != http.StatusOK {
+		t.Fatalf("prepare = %d (%s)", code, b)
+	}
+	if code, b := e.do(t, http.MethodPost, fmt.Sprintf("/admin/outreach-posts/%d/posted", p.ID), `{}`); code != http.StatusOK {
+		t.Fatalf("mark posted = %d (%s)", code, b)
+	}
+	if got := e.panelPost(t, w.ID, p.ID); got.Status != "posted" || got.FreshBody != nil {
+		t.Errorf("status %q fresh_body %v, want posted and none", got.Status, got.FreshBody)
+	}
+}
+
+func TestAdminOutreach_AutomaticPostHasNoFreshBody(t *testing.T) {
+	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	o := e.start(t, w).Outreach
+	p := e.createPost(t, o.ID, "bluesky", "announce")
+	if got := e.panelPost(t, w.ID, p.ID); got.FreshBody != nil {
+		t.Errorf("fresh_body = %q on an automatic post", *got.FreshBody)
 	}
 }

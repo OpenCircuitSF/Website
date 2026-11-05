@@ -13,7 +13,7 @@
 -->
 <script lang="ts">
   import { tick, untrack } from 'svelte';
-  import { isVideoChannel } from '../../lib/outreachHandCopy';
+  import { isVideoChannel, sectionVideoId } from '../../lib/outreachHandCopy';
   import { postAll } from '../../lib/outreachPostAll';
   import {
     groupByWave,
@@ -156,7 +156,7 @@
     {/if}
     {#if wave}
       {#if video.length > 0}
-        <h4 class="group">Video</h4>
+        <h4 class="group" id={sectionVideoId(group.wave.name)} tabindex="-1">Video</h4>
         <p class="text-muted">One video, posted in each place by hand. Each has its own link.</p>
         {#each video as c (c.channel.name)}{@render card(c, group.wave)}{/each}
       {/if}
@@ -202,6 +202,10 @@
   }
   .group {
     margin: var(--space-4) 0 var(--space-2);
+    scroll-margin-top: 5.5rem;
+  }
+  .group:focus {
+    outline: none;
   }
   [role='status']:empty {
     display: none;

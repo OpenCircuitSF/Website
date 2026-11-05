@@ -3,6 +3,7 @@ import { formatDateTime } from './admin';
 import { weekdayTime } from './outreachCards';
 import {
   formatPacificDateTime,
+  formatPacificWeekday,
   formatPacificWeekdayTime,
   fromPacificInput,
   toPacificInput,
@@ -70,5 +71,15 @@ describe('Pacific input conversion across the 2026-11-01 DST boundary', () => {
     expect(toPacificInput('')).toBe('');
     expect(toPacificInput(null)).toBe('');
     expect(toPacificInput('garbage')).toBe('');
+  });
+});
+
+describe('formatPacificWeekday (#0635)', () => {
+  it('formatPacificWeekday gives the Pacific day with no clock time', () => {
+    expect(formatPacificWeekday(OCT31_630PM_PT)).toBe('Sat, Oct 31');
+    expect(formatPacificWeekday('2026-10-12T19:00:00Z')).toBe('Mon, Oct 12');
+  });
+  it('formatPacificWeekday returns the raw string when it does not parse', () => {
+    expect(formatPacificWeekday('nope')).toBe('nope');
   });
 });

@@ -859,6 +859,8 @@ export interface OutreachPost {
   last_error: string | null;
   created_at: string;
   updated_at: string | null;
+  /** The text Regenerate would write; only on a hand-posted post that can still change (#0635). */
+  fresh_body?: string;
 }
 
 export interface WorkshopOutreach {

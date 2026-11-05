@@ -8,12 +8,14 @@
   "Write it" sits beside the strip, not inside its button; it drafts just this
   section and then selects it. The sticky strip is a direct child of the wrapper
   that also holds the panel, so it pins for the panel's height. Neither may set
-  overflow or contain, which would stop the pin (#0622).
+  overflow or contain, which would stop the pin (#0622). The panel opens with a
+  link down to the section's Video group (#0635), a button because the admin
+  router owns the hash.
 -->
 <script lang="ts">
   import { draftAllOutreach, ApiError } from '../../lib/api';
   import { onChannels, sectionHeadId, sectionPanelId, sectionRowId, sendsItself } from '../../lib/outreachCards';
-  import { handChannelLabel } from '../../lib/outreachHandCopy';
+  import { handChannelLabel, sectionVideoId, videoJumpLabel } from '../../lib/outreachHandCopy';
   import { waveStrip } from '../../lib/outreachMessage';
   import type { OutreachPost, OutreachResults, OutreachWave, WorkshopOutreach } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
@@ -53,6 +55,14 @@
   const handOn = $derived(onChannels(view).filter((c) => !sendsItself(c)));
   const written = $derived(view.posts.some((p) => p.wave === wave.name));
 
+  const videoJump = $derived(videoJumpLabel(view, wave.name));
+  // Safari has no smooth anchoring to rely on, and a real hash link would go through the admin router.
+  function goToVideo(): void {
+    const h = document.getElementById(sectionVideoId(wave.name));
+    h?.scrollIntoView({ block: 'start' });
+    h?.focus({ preventScroll: true });
+  }
+
   async function write(): Promise<void> {
     busy = true;
     errorText = '';
@@ -76,6 +86,7 @@
     {/if}
   </div>
   <div id={sectionPanelId(wave.name)} hidden={!open}>
+    {#if videoJump}<p class="video-jump"><button type="button" class="link-button" onclick={goToVideo}>{videoJump}</button></p>{/if}
     {#if strip.action === 'open' || wave.name === 'announce'}
       <OutreachAnnouncement {view} {results} wave={wave.name} {workshopId} {onChange} {reload} onUnsavedChange={(u) => { messageUnsaved = u; report(); }} />
     {:else}
@@ -100,6 +111,19 @@
     align-items: flex-start;
     justify-content: space-between;
     gap: var(--space-2);
+  }
+  .video-jump {
+    margin: var(--space-2) 0;
+  }
+  .link-button {
+    background: none;
+    border: none;
+    color: var(--accent);
+    cursor: pointer;
+    text-decoration: underline;
+    font-family: var(--font);
+    font-size: var(--fs-base);
+    padding: 0;
   }
   .unsaved-note:empty {
     display: none;

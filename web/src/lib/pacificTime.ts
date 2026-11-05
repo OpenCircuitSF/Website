@@ -103,3 +103,15 @@ export function formatPacificWeekdayTime(iso: string): string {
     minute: '2-digit',
   })} PT`;
 }
+
+/** "Mon, Oct 12" with no clock time, or the raw string when it does not parse. */
+export function formatPacificWeekday(iso: string): string {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return iso;
+  return new Date(t).toLocaleString('en-US', {
+    timeZone: PACIFIC_ZONE,
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
+}

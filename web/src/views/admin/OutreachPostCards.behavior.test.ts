@@ -130,7 +130,7 @@ describe('post cards (#0569)', () => {
     expect(screen.getByText('Reminder body')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'view post' }).getAttribute('href')).toBe('https://bsky.app/p/1');
     expect(screen.getByText(/^Posts automatically /)).toBeTruthy();
-    expect(screen.getByText('Post by hand: copy and paste')).toBeTruthy();
+    expect(screen.getByText('No set day: post when you are ready.')).toBeTruthy();
     expect(screen.getByText('Failed: the post could not be sent')).toBeTruthy();
     const headings = screen.getAllByRole('heading', { level: 4 }).map((h) => h.textContent);
     expect(headings).toEqual(['Announce', 'Reminder']);
@@ -139,7 +139,9 @@ describe('post cards (#0569)', () => {
   it('shows Not scheduled for an automatic draft and Not drafted with a Draft button', async () => {
     setup([post({ id: 1 })]);
     expect(await screen.findByText('Not scheduled')).toBeTruthy();
-    expect(screen.getAllByText('Not drafted').length).toBe(3);
+    // A hand row with no post yet says when to post instead (#0635).
+    expect(screen.getAllByText('Not drafted').length).toBe(1);
+    expect(screen.getAllByText('No set day: post when you are ready.').length).toBe(2);
     expect(screen.getAllByRole('button', { name: 'Draft' }).length).toBe(3);
   });
 
@@ -910,5 +912,111 @@ describe('OutreachPostCards with a switched-off channel', () => {
     expect(screen.getByRole('article', { name: 'Reddit Announce' })).toBeTruthy();
     expect(screen.queryByRole('article', { name: 'Reddit Reminder' })).toBeNull();
     expect(screen.getByRole('article', { name: 'Bluesky Reminder' })).toBeTruthy();
+  });
+});
+
+describe('when to post (#0635)', () => {
+  const tiktok = { name: 'tiktok', label: 'TikTok', utm_source: 'tiktok', utm_medium: 'video', char_limit: 0, automatic: false, configured: false, account: '' };
+  const offBluesky = { ...channels[0], configured: false, char_limit: 300 };
+  const WAVES = [{ name: 'reminder', label: 'Reminder', suggested_at: '2099-11-28T18:00:00Z' }];
+  const handRow = (over: Partial<OutreachPost> = {}) => post({ id: 7, channel: 'tiktok', wave: 'reminder', body: 'Coming up: T.', ...over });
+
+  it('a hand row says when to post', async () => {
+    mountView(viewOf({ channels: [tiktok], waves: WAVES, posts: [handRow()] }));
+    const card = await screen.findByRole('article', { name: 'TikTok Reminder' });
+    expect(card.querySelector('.card-head .status')!.textContent).toMatch(/Aim to post on .*Nov 28\./);
+  });
+  it('a posted hand row says when it was posted, not when to post', async () => {
+    mountView(viewOf({ channels: [tiktok], waves: WAVES, posts: [handRow({ status: 'posted', posted_at: '2026-10-17T20:00:00Z' })] }));
+    const card = await screen.findByRole('article', { name: 'TikTok Reminder' });
+    const text = card.querySelector('.card-head .status')!.textContent!;
+    expect(text).toMatch(/Posted/);
+    expect(text).not.toMatch(/Aim/);
+  });
+  it('an automatic card keeps its status line where it was', async () => {
+    setup([post({ id: 1 })]);
+    const card = await screen.findByRole('article', { name: 'Bluesky Announce' });
+    expect(card.querySelector('.card-head .status')).toBeNull();
+    expect(card.querySelector(':scope > .status')).toBeTruthy();
+  });
+  it('a video row shows no character count', async () => {
+    mountView(viewOf({ channels: [tiktok], waves: WAVES, posts: [handRow()] }));
+    const card = await screen.findByRole('article', { name: 'TikTok Reminder' });
+    expect(card.textContent).not.toMatch(/characters/);
+  });
+  it('an unconnected Bluesky keeps its count and gets the line', async () => {
+    mountView(viewOf({ channels: [offBluesky], waves: WAVES, posts: [post({ id: 8, wave: 'reminder' })] }));
+    const card = await screen.findByRole('article', { name: 'Bluesky Reminder' });
+    expect(card.querySelector('.card-head .status')!.textContent).toMatch(/Aim to post on/);
+    expect(card.textContent).toMatch(/characters/);
+  });
+});
+
+describe('standard wording (#0635)', () => {
+  const tiktok = { name: 'tiktok', label: 'TikTok', utm_source: 'tiktok', utm_medium: 'video', char_limit: 0, automatic: false, configured: false, account: '' };
+  const FRESH = 'Coming up: T.\n\nSign up: https://go.example/abc';
+  const handRow = (over: Partial<OutreachPost> = {}) => post({ id: 7, channel: 'tiktok', body: 'mine', fresh_body: FRESH, ...over });
+  const USE = { name: 'Use the standard wording' };
+  const open = async (posts: OutreachPost[], chans = [tiktok]) => {
+    mountView(viewOf({ channels: chans, posts }));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    return screen.getByLabelText('Post text') as HTMLTextAreaElement;
+  };
+
+  it('an edited hand post offers the standard wording in its editor', async () => {
+    await open([handRow()]);
+    expect(screen.getByRole('button', USE)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Regenerate' })).toBeNull();
+  });
+  it('Use the standard wording fills the box and saves nothing', async () => {
+    const box = await open([handRow()]);
+    await fireEvent.click(screen.getByRole('button', USE));
+    expect(box.value).toBe(FRESH);
+    expect(updateOutreachPost).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', USE)).toBeNull();
+  });
+  it('Cancel after it keeps the saved text', async () => {
+    await open([handRow()]);
+    await fireEvent.click(screen.getByRole('button', USE));
+    await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Discard changes' }));
+    const card = await screen.findByRole('article', { name: 'TikTok Announce' });
+    await waitFor(() => expect(card.querySelector('pre.body')?.textContent).toContain('mine'));
+    expect(updateOutreachPost).not.toHaveBeenCalled();
+  });
+  it('Save after it sends regenerate, not the text', async () => {
+    updateOutreachPost.mockResolvedValue(handRow({ body: FRESH }));
+    await open([handRow()]);
+    await fireEvent.click(screen.getByRole('button', USE));
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateOutreachPost).toHaveBeenCalledWith(7, { regenerate: true }));
+  });
+  it('changing the filled text and saving sends the text', async () => {
+    updateOutreachPost.mockResolvedValue(handRow({ body: 'edited' }));
+    const box = await open([handRow()]);
+    await fireEvent.click(screen.getByRole('button', USE));
+    await fireEvent.input(box, { target: { value: 'edited' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateOutreachPost).toHaveBeenCalledWith(7, { body: 'edited' }));
+  });
+  it('no offer when the text already matches', async () => {
+    await open([handRow({ body: FRESH })]);
+    expect(screen.queryByRole('button', USE)).toBeNull();
+  });
+  it('an automatic post has no offer and keeps Regenerate', async () => {
+    await open([post({ id: 1, stale: true })], [channels[0]]);
+    expect(screen.queryByRole('button', USE)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Regenerate' })).toBeTruthy();
+  });
+  it('a stale hand post offers the standard wording and does not save at once', async () => {
+    await open([handRow({ stale: true })]);
+    await fireEvent.click(screen.getByRole('button', USE));
+    expect(updateOutreachPost).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Regenerate' })).toBeNull();
+  });
+  it('a stale hand post whose text already matches keeps Regenerate', async () => {
+    await open([handRow({ stale: true, body: FRESH })]);
+    expect(screen.queryByRole('button', USE)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Regenerate' })).toBeTruthy();
   });
 });

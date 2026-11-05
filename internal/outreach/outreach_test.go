@@ -1,8 +1,10 @@
 package outreach
 
 import (
+	"encoding/json"
 	"github.com/brennanMKE/OpenCircuitSF/internal/bluesky"
 	"github.com/brennanMKE/OpenCircuitSF/internal/serversettings"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -130,14 +132,21 @@ func TestDraftNeverNamesAType(t *testing.T) {
 
 func TestDraftGolden(t *testing.T) {
 	want := map[string]string{
-		"bluesky/announce":   "We're running Programming LEDs at Sequoia Fabrica on Monday, Oct 19.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\n#SanFrancisco #Electronics",
-		"bluesky/reminder":   "One week out: Programming LEDs is happening at Sequoia Fabrica on Monday, Oct 19.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\nA few seats may still be open.\n\n#SanFrancisco #Electronics",
-		"bluesky/last-call":  "Tomorrow: Programming LEDs at Sequoia Fabrica. Last call to sign up.\n\n#SanFrancisco #Electronics",
-		"mastodon/announce":  "Join us for Programming LEDs at Sequoia Fabrica on Monday, Oct 19.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\nSpots are limited, so you can sign up here: {link}\n\n#SanFrancisco #Electronics",
-		"mastodon/reminder":  "One week to go until Programming LEDs at Sequoia Fabrica on Monday, Oct 19.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\nSign up here: {link}\n\n#SanFrancisco #Electronics",
-		"mastodon/last-call": "Last call for Programming LEDs at Sequoia Fabrica, tomorrow.\n\nSign up here: {link}\n\n#SanFrancisco #Electronics",
-		"instagram/announce": "Programming LEDs: Monday, Oct 19 at Sequoia Fabrica.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\nSign up at the link in our bio.\n\n#SanFrancisco #Electronics",
-		"youtube/announce":   "Programming LEDs: Monday, Oct 19 at Sequoia Fabrica.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something.\n\nSign up: {link}\n\nOpen Circuit SF: https://www.opencircuitsf.com\n\n#SanFrancisco #Electronics",
+		"bluesky/announce":    "We're running Programming LEDs at Sequoia Fabrica on Monday, Oct 19.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\n#SanFrancisco #Electronics",
+		"bluesky/reminder":    "One week out: Programming LEDs is happening at Sequoia Fabrica on Monday, Oct 19.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\nA few seats may still be open.\n\n#SanFrancisco #Electronics",
+		"bluesky/last-call":   "Tomorrow: Programming LEDs at Sequoia Fabrica. Last call to sign up.\n\n#SanFrancisco #Electronics",
+		"mastodon/announce":   "Join us for Programming LEDs at Sequoia Fabrica on Monday, Oct 19.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\nSpots are limited, so you can sign up here: {link}\n\n#SanFrancisco #Electronics",
+		"mastodon/reminder":   "One week to go until Programming LEDs at Sequoia Fabrica on Monday, Oct 19.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\nSign up here: {link}\n\n#SanFrancisco #Electronics",
+		"mastodon/last-call":  "Last call for Programming LEDs at Sequoia Fabrica, tomorrow.\n\nSign up here: {link}\n\n#SanFrancisco #Electronics",
+		"instagram/announce":  "Join us for Programming LEDs at Sequoia Fabrica on Monday, Oct 19.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\nSign up at the link in our bio.\n\n#SanFrancisco #Electronics",
+		"instagram/last-call": "Last call for Programming LEDs at Sequoia Fabrica on Monday, Oct 19.\n\nSign up at the link in our bio.\n\n#SanFrancisco #Electronics",
+		"instagram/reminder":  "Coming up: Programming LEDs at Sequoia Fabrica on Monday, Oct 19.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something. Take the board home.\n\nSign up at the link in our bio.\n\n#SanFrancisco #Electronics",
+		"tiktok/announce":     "Join us for Programming LEDs at Sequoia Fabrica on Monday, Oct 19.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something.\n\nSign up: {link}\n\nOpen Circuit SF: https://www.opencircuitsf.com\n\n#SanFrancisco #Electronics",
+		"tiktok/last-call":    "Last call for Programming LEDs at Sequoia Fabrica on Monday, Oct 19.\n\nSign up: {link}\n\nOpen Circuit SF: https://www.opencircuitsf.com\n\n#SanFrancisco #Electronics",
+		"tiktok/reminder":     "Coming up: Programming LEDs at Sequoia Fabrica on Monday, Oct 19.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something.\n\nSign up: {link}\n\nOpen Circuit SF: https://www.opencircuitsf.com\n\n#SanFrancisco #Electronics",
+		"youtube/announce":    "Join us for Programming LEDs at Sequoia Fabrica on Monday, Oct 19.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something.\n\nSign up: {link}\n\nOpen Circuit SF: https://www.opencircuitsf.com\n\n#SanFrancisco #Electronics",
+		"youtube/last-call":   "Last call for Programming LEDs at Sequoia Fabrica on Monday, Oct 19.\n\nSign up: {link}\n\nOpen Circuit SF: https://www.opencircuitsf.com\n\n#SanFrancisco #Electronics",
+		"youtube/reminder":    "Coming up: Programming LEDs at Sequoia Fabrica on Monday, Oct 19.\n\nWire up a strip of addressable LEDs and write a few lines of code to make them do something.\n\nSign up: {link}\n\nOpen Circuit SF: https://www.opencircuitsf.com\n\n#SanFrancisco #Electronics",
 	}
 	f := ledsFacts()
 	for _, ch := range Channels() {
@@ -151,6 +160,94 @@ func TestDraftGolden(t *testing.T) {
 				if err := ValidateForSend(ch, body); err != nil {
 					t.Errorf("%s/%s: %v", ch.Name, w.Name, err)
 				}
+			}
+		}
+	}
+}
+
+// handChannels are the three the same video goes to by hand (#0635).
+var handChannels = []string{"instagram", "tiktok", "youtube"}
+
+func firstParagraph(s string) string {
+	head, _, _ := strings.Cut(s, "\n\n")
+	return head
+}
+
+func TestHandDraftsOpenDifferentlyBySection(t *testing.T) {
+	want := map[string]string{"announce": "Join us for ", "reminder": "Coming up: ", "last-call": "Last call for "}
+	for _, name := range handChannels {
+		ch, _ := ChannelByName(name)
+		seen := map[string]string{}
+		for _, w := range Waves() {
+			lead := firstParagraph(Draft(ch, w, ledsFacts()))
+			if !strings.HasPrefix(lead, want[w.Name]) {
+				t.Errorf("%s/%s opens %q, want prefix %q", name, w.Name, lead, want[w.Name])
+			}
+			if other, dup := seen[lead]; dup {
+				t.Errorf("%s: %s and %s open the same: %q", name, other, w.Name, lead)
+			}
+			seen[lead] = w.Name
+		}
+	}
+}
+
+func TestHandDraftFinalDropsTheSummary(t *testing.T) {
+	const summary = "Wire up a strip"
+	for _, name := range handChannels {
+		ch, _ := ChannelByName(name)
+		for _, w := range Waves() {
+			d := Draft(ch, w, ledsFacts())
+			if has := strings.Contains(d, summary); has != (w.Name != "last-call") {
+				t.Errorf("%s/%s: summary present = %v: %q", name, w.Name, has, d)
+			}
+			// A caption stays up, so a relative day would become false.
+			low := strings.ToLower(d)
+			if strings.Contains(low, "tomorrow") || strings.Contains(low, "one week") {
+				t.Errorf("%s/%s carries a relative day: %q", name, w.Name, d)
+			}
+		}
+	}
+}
+
+func TestHandDraftUndated(t *testing.T) {
+	f := Facts{Title: "Hack Night", LocationName: strp("Sequoia Fabrica"), Hashtags: "#sf"}
+	for _, name := range handChannels {
+		ch, _ := ChannelByName(name)
+		for _, w := range Waves() {
+			d := Draft(ch, w, f)
+			if w.Name == "reminder" && firstParagraph(d) != "Coming up: Hack Night at Sequoia Fabrica." {
+				t.Errorf("%s/reminder undated = %q", name, d)
+			}
+			if strings.Contains(d, " on ") || strings.Contains(d, "One week") {
+				t.Errorf("%s/%s undated claims a date: %q", name, w.Name, d)
+			}
+		}
+	}
+}
+
+func TestHandDraftsFixture(t *testing.T) {
+	raw, err := os.ReadFile("testdata/hand_drafts.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture map[string]string
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if len(fixture) != 9 {
+		t.Errorf("fixture has %d keys, want 9", len(fixture))
+	}
+	for _, name := range handChannels {
+		ch, _ := ChannelByName(name)
+		for _, w := range Waves() {
+			key := name + "/" + w.Name
+			got, ok := fixture[key]
+			if !ok {
+				t.Errorf("%s is missing from the fixture", key)
+				continue
+			}
+			if want := Draft(ch, w, ledsFacts()); got != want {
+				t.Errorf("%s:\n fixture %q\n   draft %q", key, got, want)
 			}
 		}
 	}

@@ -1,8 +1,10 @@
 // What a hand-posted row copies (#0626): the post with its ShortLink, or the
 // post with no links at all, reading cleanly. Pure, so it is unit-testable.
 import { LINK_TOKEN } from './outreach';
+import { sendsItself } from './outreachCards';
 import { isHashtagParagraph } from './outreachMessage';
-import type { OutreachChannel, OutreachPost } from './types';
+import { formatPacificWeekday, toPacificInput } from './pacificTime';
+import type { OutreachChannel, OutreachPost, WorkshopOutreach } from './types';
 
 /** Instagram's call to action. Pinned by internal/outreach/outreach_test.go. */
 const BIO_CTA = 'Sign up at the link in our bio.';
@@ -12,6 +14,8 @@ const ANY_URL = /(?:https?:\/\/|www\.)[^\s<>"]+/gi;
 const URL_TAIL = /[.,;:!?)\]}'"…]+$/;
 const NOT_A_SENTENCE_END = /(?:^|[\s("'])(?:mr|mrs|ms|dr|st|vs|jr|sr|approx)$|[^\s]\.[^\s]*$/i;
 const DANGLING = /(?::|→|->|⇒|👇|⬇️?|-|–|—)$|^(?:sign[ -]?up|register|rsvp|tickets?|details|more info|learn more|links?)(?: (?:here|below|now))?[.!]?$/iu;
+const LEAD_IN = /\b(?:sign[ -]?up|rsvp)(?: (?:now|today))? (?:below|here)[.!:]?$/i;
+const pointsAtLink = (s: string): boolean => DANGLING.test(s) || LEAD_IN.test(s);
 
 function markLinks(line: string, shortUrl: string | null): string {
   let s = line.split(LINK_TOKEN).join(MARK);
@@ -44,7 +48,7 @@ function withoutLinks(line: string): string {
     }
     const after = s.slice(s.lastIndexOf(MARK) + 1).trim();
     if (isHashtagParagraph(after)) kept.push(after);
-    else if (kept.length > 0 && DANGLING.test(kept[kept.length - 1])) kept.pop();
+    else if (kept.length > 0 && pointsAtLink(kept[kept.length - 1])) kept.pop();
   }
   return kept.join(' ');
 }
@@ -67,7 +71,7 @@ export function textOnly(body: string, shortUrl: string | null): string {
     }
     while (out.length > 0 && out[out.length - 1].trim() === '') out.pop();
     const prior = out.length > 0 ? sentences(out[out.length - 1].trim()) : [];
-    if (prior.length > 0 && DANGLING.test(prior[prior.length - 1])) {
+    if (prior.length > 0 && pointsAtLink(prior[prior.length - 1])) {
       prior.pop();
       out[out.length - 1] = prior.join(' ');
     }
@@ -105,6 +109,40 @@ export function handChannelLabel(channel: Pick<OutreachChannel, 'name' | 'label'
 export function handLinkLabel(channel: Pick<OutreachChannel, 'name' | 'automatic'>): string {
   if (channel.automatic) return 'Link to paste';
   return channel.name === 'instagram' ? 'Put this in your bio' : 'ShortLink';
+}
+
+/**
+ * When to post a hand-posted row (#0635): the section's first automatic post
+ * still to come, else its suggested day. A day and an instruction, so it never
+ * reads as something the site will send.
+ */
+export function handPostWhen(view: Pick<WorkshopOutreach, 'channels' | 'waves' | 'posts'>, wave: string, now: Date = new Date()): string {
+  const scheduled = view.posts
+    .filter((p) => p.wave === wave && p.status === 'scheduled' && p.scheduled_at && !p.held && view.channels.some((c) => c.name === p.channel && sendsItself(c)))
+    .map((p) => p.scheduled_at as string)
+    .sort()[0];
+  const iso = scheduled ?? view.waves.find((w) => w.name === wave)?.suggested_at ?? null;
+  const day = iso ? toPacificInput(iso).slice(0, 10) : '';
+  if (!iso || !day) return 'No set day: post when you are ready.';
+  const label = formatPacificWeekday(iso);
+  const today = toPacificInput(now.toISOString()).slice(0, 10);
+  if (day < today) return `The day for this was ${label}. Post it soon if it still helps.`;
+  const alongside = scheduled ? ', with the automatic posts' : '';
+  return day === today ? `Aim to post today${alongside}.` : `Aim to post on ${label}${alongside}.`;
+}
+
+export function sectionVideoId(name: string): string {
+  return `outreach-section-${name}-video`;
+}
+
+/** The link to a section's Video group, '' when the section shows none. Counted as the rows are: an off channel with no post has no row. */
+export function videoJumpLabel(view: Pick<WorkshopOutreach, 'channels' | 'posts' | 'off_channels'>, wave: string): string {
+  if (!view.posts.some((p) => p.wave === wave)) return '';
+  const inSection = (name: string) => view.posts.find((p) => p.channel === name && p.wave === wave) ?? null;
+  const rows = view.channels.filter((c) => isVideoChannel(c) && (inSection(c.name) !== null || !(view.off_channels ?? []).some((o) => o.name === c.name)));
+  if (rows.length === 0) return '';
+  const left = rows.filter((c) => inSection(c.name)?.status !== 'posted').length;
+  return left === 0 ? 'Go to Video: all posted' : `Go to Video: ${left} left to post`;
 }
 
 /** False when the browser has no clipboard or refuses. Call it directly from the click: Safari needs that. */

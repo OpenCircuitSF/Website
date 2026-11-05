@@ -431,12 +431,25 @@ type outreachPostView struct {
 	LastError      *string         `json:"last_error"`
 	CreatedAt      string          `json:"created_at"`
 	UpdatedAt      *string         `json:"updated_at"`
+	// FreshBody: the text Regenerate would write, for a hand-posted post that can still change (#0635).
+	FreshBody *string `json:"fresh_body,omitempty"`
+}
+
+// regeneratedBody is what Regenerate writes: today's template with the post's link in place.
+func regeneratedBody(p outreach.Post, f outreach.Facts) string {
+	ch, _ := outreach.ChannelByName(p.Channel)
+	wv, _ := outreach.WaveByName(p.Wave)
+	body := outreach.Draft(ch, wv, f)
+	if p.ShortURL != nil {
+		body = strings.ReplaceAll(body, outreach.LinkToken, *p.ShortURL)
+	}
+	return body
 }
 
 func (h *AdminOutreachHandler) postView(p outreach.Post, f outreach.Facts, workshopStatus string) outreachPostView {
 	ch, _ := outreach.ChannelByName(p.Channel)
 	wv, _ := outreach.WaveByName(p.Wave)
-	return outreachPostView{
+	v := outreachPostView{
 		ID: p.ID, OutreachID: p.OutreachID, Channel: p.Channel, Wave: p.Wave, Body: p.Body,
 		Status: p.Status, Prepared: p.Prepared(), Customized: p.Customized,
 		Stale:        p.Status != "posted" && p.SourceFingerprint != outreach.Fingerprint(f),
@@ -447,6 +460,11 @@ func (h *AdminOutreachHandler) postView(p outreach.Post, f outreach.Facts, works
 		ScheduledAt:    rfc3339(p.ScheduledAt), PostedAt: rfc3339(p.PostedAt), RemoteURL: p.RemoteURL, LastError: p.LastError,
 		CreatedAt: p.CreatedAt.UTC().Format(time.RFC3339), UpdatedAt: rfc3339(p.UpdatedAt),
 	}
+	if p.Status != "posted" && p.Status != "queued" && !(ch.Automatic && h.channelConfigured(ch.Name)) {
+		fresh := regeneratedBody(p, f)
+		v.FreshBody = &fresh
+	}
+	return v
 }
 
 // outreachChannelView is a channel plus whether the site can post to it
@@ -944,12 +962,7 @@ func (h *AdminOutreachHandler) PatchPost(w http.ResponseWriter, r *http.Request)
 	var updated outreach.Post
 	var err error
 	if regen {
-		ch, _ := outreach.ChannelByName(p.Channel)
-		wv, _ := outreach.WaveByName(p.Wave)
-		body := outreach.Draft(ch, wv, f)
-		if p.ShortURL != nil {
-			body = strings.ReplaceAll(body, outreach.LinkToken, *p.ShortURL)
-		}
+		body := regeneratedBody(p, f)
 		fp := outreach.Fingerprint(f)
 		updated, err = h.store.UpdatePostBody(r.Context(), id, body, &fp, nil)
 	} else {

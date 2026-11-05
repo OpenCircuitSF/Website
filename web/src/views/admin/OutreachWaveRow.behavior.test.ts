@@ -238,3 +238,51 @@ describe('OutreachWaveRow with a switched-off channel', () => {
     expect(container.textContent).not.toMatch(/The text for [^.]*TikTok/);
   });
 });
+
+describe('OutreachWaveRow: the Video link (#0635)', () => {
+  const tiktok = { name: 'tiktok', label: 'TikTok', utm_source: 'tiktok', utm_medium: 'video', char_limit: 0, automatic: false, configured: false, account: '' };
+  const videoPost = (): OutreachPost => ({ ...reminderPost(), id: 4, channel: 'tiktok', body: 'Coming up: W.' });
+  const mount = (posts: OutreachPost[]) =>
+    render(OutreachWaveRow, { view: { ...view(posts), channels: [bluesky, tiktok] }, results: null, wave, workshopId: 5, open: true, onSelect: vi.fn(), onChange: vi.fn(), reload: vi.fn() });
+  const link = () => screen.queryByRole('button', { name: /^Go to Video/ });
+
+  it('the Video link comes before the Message box in the panel', () => {
+    mount([reminderPost(), videoPost()]);
+    const panel = document.getElementById('outreach-section-reminder-panel')!;
+    expect(link()!.textContent).toBe('Go to Video: 1 left to post');
+    expect(panel.firstElementChild!.contains(link())).toBe(true);
+  });
+  it('the Video link moves focus to the Video heading', async () => {
+    const scrollIntoView = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      mount([reminderPost(), videoPost()]);
+      await fireEvent.click(link()!);
+      const heading = document.getElementById('outreach-section-reminder-video')!;
+      expect(heading.textContent).toBe('Video');
+      expect(document.activeElement).toBe(heading);
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' });
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+  it('a section not written has no Video link', () => {
+    mount([]);
+    expect(link()).toBeNull();
+  });
+  it('the Video link does not change the location hash', async () => {
+    const scrollIntoView = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrollIntoView;
+    try {
+      mount([reminderPost(), videoPost()]);
+      const before = window.location.hash;
+      expect(link()!.tagName).toBe('BUTTON');
+      await fireEvent.click(link()!);
+      expect(window.location.hash).toBe(before);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+});
