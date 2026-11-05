@@ -352,3 +352,27 @@ describe('OutreachAnnouncement: what a finished section shows (#0626)', () => {
     expect(screen.getByRole('button', { name: 'Write the announcement' })).toBeTruthy();
   });
 });
+
+describe('OutreachAnnouncement with a switched-off channel', () => {
+  const off = [{ name: 'mastodon', label: 'Mastodon', automatic: true }];
+  const mountOff = (posts: OutreachPost[], extra: typeof channels = []) => render(OutreachAnnouncement, {
+    view: {
+      available: true, unavailable_reason: '',
+      workshop: { id: 5, slug: 's', title: 'Soldering 101', status: 'published', starts_at: '2026-12-05T18:00:00Z' },
+      outreach: { id: 9, workshop_id: 9, campaign_slug: 's', created_at: '' },
+      channels: [...channels, ...extra], waves, posts, off_channels: off,
+    } as WorkshopOutreach,
+    results: null, wave: 'announce', workshopId: 5, reload: vi.fn(), onChange: vi.fn(),
+  });
+
+  it('does not say No post yet for an off channel (#0628)', () => {
+    const instagram = { ...ch('instagram', 0, ''), label: 'Instagram', automatic: false, configured: false };
+    const { container } = mountOff([post({ id: 3, channel: 'instagram', status: 'manual' })], [instagram]);
+    expect(container.textContent).toContain('No post yet for Bluesky.');
+    expect(container.textContent).not.toContain('Mastodon');
+  });
+  it('keeps Unschedule on a scheduled post of an off channel (#0628)', () => {
+    mountOff([post({ id: 2, channel: 'mastodon', body: mast, short_url: MURL, status: 'scheduled', scheduled_at: '2099-11-28T18:00:00Z' })]);
+    expect(screen.getByRole('button', { name: 'Unschedule' })).toBeTruthy();
+  });
+});

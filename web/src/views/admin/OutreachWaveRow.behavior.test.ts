@@ -217,3 +217,24 @@ describe('OutreachWaveRow: hand-posted rows (#0626)', () => {
     expect(link?.getAttribute('href')).toBe('#/outreach?view=flyers&flyer=7');
   });
 });
+
+describe('OutreachWaveRow with a switched-off channel', () => {
+  it('does not promise text for an off channel (#0628)', () => {
+    const tiktok = { ...bluesky, name: 'tiktok', label: 'TikTok', automatic: false, configured: false };
+    const instagram = { ...tiktok, name: 'instagram', label: 'Instagram' };
+    const posted: OutreachPost = { ...reminderPost(), channel: 'tiktok', wave: 'announce', status: 'posted' };
+    const off = [{ name: 'tiktok', label: 'TikTok', automatic: false }];
+    const mountWith = (channels: typeof bluesky[]) => render(OutreachWaveRow, {
+      view: { ...view([posted]), channels, off_channels: off }, results: null, wave, workshopId: 5, open: true, onSelect: vi.fn(), onChange: vi.fn(), reload: vi.fn(),
+    });
+
+    const only = mountWith([bluesky, tiktok]);
+    expect(only.container.textContent).not.toContain('appears here');
+    only.unmount();
+
+    const { container } = mountWith([bluesky, tiktok, instagram]);
+    expect(container.textContent).toContain('appears here');
+    expect(container.textContent).toMatch(/The text for [^.]*Instagram/);
+    expect(container.textContent).not.toMatch(/The text for [^.]*TikTok/);
+  });
+});

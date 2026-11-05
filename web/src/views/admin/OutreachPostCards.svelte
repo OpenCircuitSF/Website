@@ -63,8 +63,10 @@
   const listStatus = $derived(
     listIds.some((id) => visibleNotice(notices[id] ?? null, view.posts.find((p) => p.id === id) ?? null) !== '') ? listText : '',
   );
+  // An off channel's empty card would offer a Draft button that only gets a 409 (#0628).
+  const off = $derived(view.off_channels ?? []);
   const groups = $derived(
-    groupByWave(view).filter((g) => !wave || g.wave.name === wave).map((g) => ({ ...g, cards: channelFilter ? g.cards.filter((c) => channelFilter(c.channel)) : g.cards })),
+    groupByWave(view).filter((g) => !wave || g.wave.name === wave).map((g) => ({ ...g, cards: (channelFilter ? g.cards.filter((c) => channelFilter(c.channel)) : g.cards).filter((c) => c.post !== null || !off.some((o) => o.name === c.channel.name)) })),
   );
   const bothItems = $derived(postableAutomatic(view, 'announce').filter((i) => !channelFilter || channelFilter(i.channel)));
   const bothLabel = $derived(`Post to ${bothItems.map((i) => i.channel.label).join(' and ')}`);

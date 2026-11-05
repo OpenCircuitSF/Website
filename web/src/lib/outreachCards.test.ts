@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { boardCell, boardRows, cardButtons, combinedPostResult, copyLabel, defaultOpenSection, flyerLinkFor, groupByWave, notScheduledNote, pollDelay, postableAutomatic, postDialogCopy, statusLine, weekdayTime, summaryLine, visibleNotice } from './outreachCards';
+import { boardCell, boardOffLine, boardRows, cardButtons, combinedPostResult, copyLabel, defaultOpenSection, flyerLinkFor, groupByWave, notScheduledNote, pollDelay, postableAutomatic, postDialogCopy, onChannels, sectionFullyPosted, statusLine, weekdayTime, summaryLine, visibleNotice } from './outreachCards';
 import type { OutreachChannel, OutreachPost, OutreachResults } from './types';
 
 const auto: OutreachChannel = { name: 'bluesky', label: 'Bluesky', utm_source: 'b', utm_medium: 'social', char_limit: 300, automatic: true, configured: true, account: '' };
@@ -339,5 +339,59 @@ describe('defaultOpenSection (#0625)', () => {
   });
   it('is empty when there are no sections (#0625)', () => {
     expect(defaultOpenSection({ channels, waves: [], posts: [] })).toBe('');
+  });
+});
+
+describe('a switched-off channel (#0628)', () => {
+  const tiktok: OutreachChannel = { ...manual, name: 'tiktok', label: 'TikTok' };
+  const off = (...names: string[]) => names.map((name) => ({ name, label: name === 'tiktok' ? 'TikTok' : name === 'youtube' ? 'YouTube Shorts' : 'Instagram', automatic: false }));
+
+  it('says Off for an empty slot and keeps the words of a real post', () => {
+    expect(boardCell(null, tiktok, true)).toMatchObject({ kind: 'off', status: 'Off', detail: null });
+    const posted = boardCell(post({ channel: 'tiktok', status: 'posted', posted_at: '2026-11-20T18:00:00Z' }), tiktok, true);
+    expect(posted.status).toBe('Posted');
+    expect(posted.detail).toBe(weekdayTime('2026-11-20T18:00:00Z'));
+    const scheduled = boardCell(post({ channel: 'tiktok', status: 'scheduled', scheduled_at: '2026-11-20T18:00:00Z' }), { ...tiktok, automatic: true, configured: true }, true);
+    expect(scheduled.status).toBe('Scheduled');
+    expect(boardCell(null, tiktok).status).toBe('Not written');
+  });
+  it('marks the channel off in the cell label', () => {
+    expect(boardCell(null, tiktok, true).channelLabel).toBe('TikTok (off)');
+    expect(boardCell(post({ channel: 'tiktok', status: 'posted' }), tiktok, true).channelLabel).toBe('TikTok (off)');
+    expect(boardCell(null, tiktok).channelLabel).toBe('TikTok');
+    const [row] = boardRows({ channels: [tiktok], waves, posts: [], off_channels: off('tiktok') });
+    expect(row.cells[0].channelLabel).toBe('TikTok (off)');
+  });
+  it('does not count an off channel as not scheduled', () => {
+    const mast: OutreachChannel = { ...auto, name: 'mastodon', label: 'Mastodon' };
+    const posts = [post({ status: 'scheduled', scheduled_at: '2026-11-20T18:00:00Z' })];
+    expect(notScheduledNote({ channels: [auto, mast], posts }, 'announce')).toBe('1 not scheduled');
+    expect(notScheduledNote({ channels: [auto, mast], posts, off_channels: [{ name: 'mastodon', label: 'Mastodon', automatic: true }] }, 'announce')).toBe('');
+  });
+  it('treats a section as fully posted when only an off channel is missing', () => {
+    const posts = [post({ status: 'posted' })];
+    expect(sectionFullyPosted({ channels: [auto, tiktok], posts }, 'announce')).toBe(false);
+    expect(sectionFullyPosted({ channels: [auto, tiktok], posts, off_channels: off('tiktok') }, 'announce')).toBe(true);
+  });
+  it('keeps a section unfinished while an off channel still has a scheduled post', () => {
+    const posts = [post({ status: 'posted' }), post({ id: 2, channel: 'tiktok', status: 'scheduled', scheduled_at: '2026-11-20T18:00:00Z' })];
+    expect(sectionFullyPosted({ channels: [auto, tiktok], posts, off_channels: off('tiktok') }, 'announce')).toBe(false);
+  });
+  it('names one channel, two channels and three channels in the off line', () => {
+    expect(boardOffLine({ posts: [], off_channels: off('tiktok') })).toBe('TikTok is off in Settings, so new posts and links skip it.');
+    expect(boardOffLine({ posts: [], off_channels: off('tiktok', 'youtube') })).toBe('TikTok and YouTube Shorts are off in Settings, so new posts and links skip them.');
+    expect(boardOffLine({ posts: [], off_channels: off('instagram', 'tiktok', 'youtube') })).toBe('Instagram, TikTok and YouTube Shorts are off in Settings, so new posts and links skip them.');
+  });
+  it('adds that scheduled posts still go out only when one exists', () => {
+    const going = 'Posts already scheduled there still go out.';
+    const of = (status: OutreachPost['status'], channel = 'tiktok') => boardOffLine({ posts: [post({ channel, status })], off_channels: off('tiktok') });
+    expect(of('scheduled')).toContain(going);
+    expect(of('queued')).toContain(going);
+    expect(of('posted')).not.toContain(going);
+    expect(of('scheduled', 'bluesky')).not.toContain(going);
+  });
+  it('leaves onChannels and the off line empty when off_channels is absent', () => {
+    expect(onChannels({ channels: [auto, tiktok] })).toEqual([auto, tiktok]);
+    expect(boardOffLine({ posts: [] })).toBe('');
   });
 });

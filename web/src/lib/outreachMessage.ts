@@ -2,10 +2,10 @@
 // Message field, how it is written into every automatic post, and the status
 // text of the collapsed wave rows. No DOM, so it is unit-testable.
 import { LINK_TOKEN, countCharacters, defaultScheduleAt, isOverLimit } from './outreach';
-import { notScheduledNote, sendsItself, weekdayTime } from './outreachCards';
+import { notScheduledNote, onChannels, sendsItself, weekdayTime } from './outreachCards';
 import type { OutreachChannel, OutreachPost, WorkshopOutreach } from './types';
 
-type View = Pick<WorkshopOutreach, 'channels' | 'waves' | 'posts'>;
+type View = Pick<WorkshopOutreach, 'channels' | 'waves' | 'posts' | 'off_channels'>;
 
 const HASHTAGS = /^(#[\p{L}\p{N}_]+\s*)+$/u;
 
@@ -164,7 +164,7 @@ export function waveRowStatus(view: View, wave: string, now: Date = new Date()):
   });
   const handChannels = view.channels.filter((c) => !sendsItself(c));
   const handPosted = inWave.filter((p) => p.status === 'posted' && handChannels.some((c) => c.name === p.channel));
-  const left = handChannels.length - handPosted.length;
+  const left = onChannels(view).filter((c) => !sendsItself(c) && !handPosted.some((p) => p.channel === c.name)).length;
   const hand = left > 0 ? ` · ${left} left to post by hand` : '';
   const newestOf = (ps: OutreachPost[]) => ps.map((p) => p.posted_at).filter((t): t is string => t !== null).sort().pop();
   if (!view.channels.some(sendsItself)) {

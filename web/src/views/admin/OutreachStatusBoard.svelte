@@ -4,10 +4,12 @@
   rather than scrolling sideways, because the Outreach panel clips overflow and
   a scrolling table would hide channels on a phone. Each cell carries its own
   channel name for that stacked layout. Each row's name is a button that selects
-  that section, and its hit area covers the whole heading cell (#0625).
+  that section, and its hit area covers the whole heading cell (#0625). A line
+  under the table names every switched-off channel and links to Settings (#0628).
 -->
 <script lang="ts">
-  import { boardRows, sectionPanelId } from '../../lib/outreachCards';
+  import { adminSettingsHash } from '../../lib/adminRouter';
+  import { boardRows, boardChannelLabel, boardOffLine, sectionPanelId } from '../../lib/outreachCards';
   import { waveExcerpt } from '../../lib/outreachMessage';
   import type { WorkshopOutreach } from '../../lib/types';
 
@@ -20,6 +22,7 @@
   let { view, openWave, unsaved, onSelect }: Props = $props();
 
   const rows = $derived(boardRows(view));
+  const offLine = $derived(boardOffLine(view));
 </script>
 
 <table class="status-board">
@@ -27,7 +30,7 @@
   <thead>
     <tr>
       <th scope="col" class="board-post-head">Post</th>
-      {#each view.channels as channel (channel.name)}<th scope="col">{channel.label}</th>{/each}
+      {#each view.channels as channel (channel.name)}<th scope="col">{boardChannelLabel(channel.label, (view.off_channels ?? []).some((o) => o.name === channel.name))}</th>{/each}
     </tr>
   </thead>
   <tbody>
@@ -55,6 +58,7 @@
     {/each}
   </tbody>
 </table>
+{#if offLine}<p class="board-off text-muted">{offLine} <a href={adminSettingsHash('outreach')}>Open Settings</a></p>{/if}
 
 <style>
   .status-board { table-layout: fixed; margin-bottom: var(--space-4); }
@@ -72,6 +76,7 @@
   .board-note, .board-status { font-weight: 600; }
   .board-excerpt, .board-detail { font-size: var(--fs-sm); }
   .board-channel { display: none; }
+  .board-off { font-size: var(--fs-sm); margin: 0 0 var(--space-4); }
 
   @media (max-width: 860px) {
     .status-board, .status-board caption, tbody, tr, .board-row-head { display: block; }

@@ -325,3 +325,12 @@ describe('waveExcerpt (#0624)', () => {
     expect(waveExcerpt(view([bPost]), 'reminder')).toBe('');
   });
 });
+
+describe('waveRowStatus with a switched-off channel', () => {
+  it('does not count an off channel as left to post by hand (#0628)', () => {
+    const tiktok = ch('tiktok', false, false);
+    const v = { channels: [...channels, tiktok], waves, posts: [post({ status: 'posted', posted_at: '2026-10-30T20:00:00Z' }), post({ id: 2, channel: 'mastodon', status: 'posted', posted_at: '2026-10-30T20:00:00Z' })] };
+    expect(waveRowStatus(v, 'announce').text).toContain('2 left to post by hand');
+    expect(waveRowStatus({ ...v, off_channels: [{ name: 'tiktok', label: 'tiktok', automatic: false }] }, 'announce').text).toContain('1 left to post by hand');
+  });
+});

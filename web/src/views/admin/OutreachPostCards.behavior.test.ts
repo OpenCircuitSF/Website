@@ -900,3 +900,15 @@ describe('editor layout (#0627)', () => {
     await waitFor(() => expect(card().querySelector('textarea')).toBeNull());
   });
 });
+
+describe('OutreachPostCards with a switched-off channel', () => {
+  it('shows an off channel only where it has a post (#0628)', () => {
+    mountView(viewOf({
+      posts: [post({ id: 2, channel: 'reddit', status: 'posted', posted_at: '2026-11-20T18:00:00Z' })],
+      off_channels: [{ name: 'reddit', label: 'Reddit', automatic: false }],
+    }));
+    expect(screen.getByRole('article', { name: 'Reddit Announce' })).toBeTruthy();
+    expect(screen.queryByRole('article', { name: 'Reddit Reminder' })).toBeNull();
+    expect(screen.getByRole('article', { name: 'Bluesky Reminder' })).toBeTruthy();
+  });
+});

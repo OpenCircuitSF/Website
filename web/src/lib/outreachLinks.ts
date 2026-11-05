@@ -1,6 +1,7 @@
 // Pure wording and decisions for the workshop outreach page (#0568): the links
 // table, Create links, Draft all and Schedule all. No DOM, so it is all
 // unit-testable; the Svelte components stay thin.
+import { onChannels } from './outreachCards';
 import type {
   OutreachDraftAllResult,
   OutreachLinkReport,
@@ -116,8 +117,9 @@ export function canScheduleAll(view: WorkshopOutreach): { ok: boolean; reason: s
   if (view.workshop.status !== 'published') {
     return { ok: false, reason: 'Publish this event in the editor to schedule posts.' };
   }
-  if (!view.channels.some((c) => c.automatic && c.configured)) {
-    return { ok: false, reason: 'Bluesky and Mastodon are not connected. Connect one in Settings to schedule posts.' };
+  if (!onChannels(view).some((c) => c.automatic && c.configured)) {
+    const anyOff = (view.off_channels ?? []).some((c) => c.automatic);
+    return { ok: false, reason: anyOff ? 'Neither Bluesky nor Mastodon can post right now. Turn one on and connect it in Settings to schedule posts.' : 'Bluesky and Mastodon are not connected. Connect one in Settings to schedule posts.' };
   }
   return { ok: true, reason: null };
 }

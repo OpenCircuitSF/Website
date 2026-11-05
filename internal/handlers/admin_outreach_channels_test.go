@@ -278,3 +278,155 @@ func TestAdminOutreach_DisabledAutomaticChannel(t *testing.T) {
 		}
 	}
 }
+
+// testOffPanel decodes only what #0628 adds, leaving testPanel alone.
+type testOffPanel struct {
+	Channels    []struct{ Name string } `json:"channels"`
+	OffChannels []struct{ Name string } `json:"off_channels"`
+	Posts       []struct {
+		Channel string `json:"channel"`
+		Status  string `json:"status"`
+	} `json:"posts"`
+}
+
+func (e *outreachEnv) offPanel(t *testing.T, workshopID int64) testOffPanel {
+	t.Helper()
+	code, b := e.do(t, http.MethodGet, fmt.Sprintf("/admin/workshops/%d/outreach", workshopID), "")
+	if code != http.StatusOK {
+		t.Fatalf("panel = %d %s", code, b)
+	}
+	return decodeOutreach[testOffPanel](t, b)
+}
+
+func offNames(p testOffPanel) string {
+	names := []string{}
+	for _, c := range p.OffChannels {
+		names = append(names, c.Name)
+	}
+	return fmt.Sprint(names)
+}
+
+// #0628: the panel names every switched-off channel before Start and after it,
+// while channels keeps an off channel only for its visible post.
+func TestAdminOutreach_PanelListsOffChannels(t *testing.T) {
+	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	notStarted := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+
+	on := e.offPanel(t, notStarted.ID)
+	if on.OffChannels == nil || len(on.OffChannels) != 0 {
+		t.Errorf("everything on: off_channels = %#v, want [] not null", on.OffChannels)
+	}
+
+	o := e.start(t, w).Outreach
+	tt := e.createPost(t, o.ID, "tiktok", "announce")
+	if code, b := e.do(t, http.MethodPost, fmt.Sprintf("/admin/outreach-posts/%d/prepare", tt.ID), ""); code != http.StatusOK {
+		t.Fatalf("prepare = %d %s", code, b)
+	}
+	if code, b := e.do(t, http.MethodPost, fmt.Sprintf("/admin/outreach-posts/%d/posted", tt.ID), `{"remote_url":"https://tiktok.com/@a/video/1"}`); code != http.StatusOK {
+		t.Fatalf("posted = %d %s", code, b)
+	}
+	e.h.SetEnabledChannels(func() []string { return []string{"bluesky", "mastodon", "instagram"} })
+
+	if got := offNames(e.offPanel(t, notStarted.ID)); got != "[tiktok youtube]" {
+		t.Errorf("before Start: off_channels = %s", got)
+	}
+	p := e.offPanel(t, w.ID)
+	if got := offNames(p); got != "[tiktok youtube]" {
+		t.Errorf("after Start: off_channels = %s", got)
+	}
+	shown := map[string]bool{}
+	for _, c := range p.Channels {
+		shown[c.Name] = true
+	}
+	if !shown["tiktok"] || shown["youtube"] {
+		t.Errorf("channels = %v, want tiktok kept for its post and youtube gone", shown)
+	}
+}
+
+// #0628: a posted row keeps an off channel on the board, and that must not
+// bring back links, drafts or schedule plans for it.
+func TestAdminOutreach_OffChannelWithHistoryGetsNoNewLinksOrDrafts(t *testing.T) {
+	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	w, oid := e.handSetup(t, `{"waves":["reminder"]}`)
+	e.h.SetEnabledChannels(nil)
+	tt := e.createPost(t, oid, "tiktok", "announce")
+	if code, b := e.do(t, http.MethodPost, fmt.Sprintf("/admin/outreach-posts/%d/prepare", tt.ID), ""); code != http.StatusOK {
+		t.Fatalf("prepare = %d %s", code, b)
+	}
+	if code, b := e.do(t, http.MethodPost, fmt.Sprintf("/admin/outreach-posts/%d/posted", tt.ID), `{"remote_url":"https://tiktok.com/@a/video/1"}`); code != http.StatusOK {
+		t.Fatalf("posted = %d %s", code, b)
+	}
+	e.h.SetEnabledChannels(func() []string { return []string{"bluesky", "mastodon", "instagram", "youtube"} })
+
+	rows := func() int {
+		return e.rowCount(t, `SELECT (SELECT count(*) FROM outreach_links WHERE outreach_id = $1 AND channel = 'tiktok') + (SELECT count(*) FROM outreach_posts WHERE outreach_id = $1 AND channel = 'tiktok')`, oid)
+	}
+	before, calls := rows(), len(e.links.links)
+	e.handSync(t, w)
+	for _, q := range e.links.links[calls:] {
+		if q.UTMSource == "tiktok" {
+			t.Errorf("link requested for tiktok: %+v", q)
+		}
+	}
+	if after := rows(); after != before {
+		t.Errorf("tiktok rows = %d, was %d", after, before)
+	}
+	hp := e.handPanel(t, w)
+	if hp.HandLinksPending {
+		t.Error("the off channel left the panel pending")
+	}
+	for _, l := range hp.HandLinks {
+		if l.Channel == "tiktok" {
+			t.Errorf("tiktok hand-link row: %+v", l)
+		}
+	}
+	code, b := e.do(t, http.MethodPost, e.linksPath(w, "schedule-all"), `{"dry_run":true}`)
+	if code != http.StatusOK {
+		t.Fatalf("schedule-all = %d %s", code, b)
+	}
+	d := decodeOutreach[testScheduleAll](t, b)
+	for _, it := range d.ToSchedule {
+		if it.Channel == "tiktok" {
+			t.Errorf("schedule-all plans tiktok: %+v", it)
+		}
+	}
+	for _, s := range d.Skipped {
+		if s.Channel == "tiktok" {
+			t.Errorf("schedule-all lists tiktok: %+v", s)
+		}
+	}
+	kept := false
+	for _, p := range e.offPanel(t, w.ID).Posts {
+		kept = kept || (p.Channel == "tiktok" && p.Status == "posted")
+	}
+	if !kept {
+		t.Error("the posted tiktok row left the panel")
+	}
+}
+
+// #0628: Prepare on a hidden draft would create a ShortLink for a switched-off
+// channel. Switching back on proves the refusal was the guard, not the fixture.
+func TestAdminOutreach_PrepareRefusesHiddenDraft(t *testing.T) {
+	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
+	_, oid := e.handSetup(t, `{"waves":["reminder"]}`)
+	e.h.SetEnabledChannels(nil)
+	yt := e.createPost(t, oid, "youtube", "reminder")
+	e.h.SetEnabledChannels(func() []string { return []string{"bluesky", "mastodon", "instagram", "tiktok"} })
+
+	path := fmt.Sprintf("/admin/outreach-posts/%d/prepare", yt.ID)
+	calls := len(e.links.links)
+	if code, b := e.do(t, http.MethodPost, path, ""); code != http.StatusConflict {
+		t.Fatalf("prepare while off = %d %s, want 409", code, b)
+	}
+	if got := len(e.links.links); got != calls {
+		t.Errorf("links requested while off: %d, was %d", got, calls)
+	}
+	e.h.SetEnabledChannels(nil)
+	if code, b := e.do(t, http.MethodPost, path, ""); code != http.StatusOK {
+		t.Fatalf("prepare once on = %d %s", code, b)
+	}
+	if got := len(e.links.links); got != calls+1 {
+		t.Errorf("links after switching on = %d, want %d", got, calls+1)
+	}
+}

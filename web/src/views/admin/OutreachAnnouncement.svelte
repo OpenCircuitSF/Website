@@ -31,7 +31,7 @@
     fromLocalInputValue,
     toLocalInputValue,
   } from '../../lib/outreach';
-  import { cardButtons, postableAutomatic, sendsItself, statusLine, visibleNotice, type CardNotice } from '../../lib/outreachCards';
+  import { cardButtons, onChannels, postableAutomatic, sendsItself, statusLine, visibleNotice, type CardNotice } from '../../lib/outreachCards';
   import { composeBody, messageTargets, planSaveMessage, restoredTail, sharedMessage } from '../../lib/outreachMessage';
   import { postAll } from '../../lib/outreachPostAll';
   import { identicalAutomaticBodies } from '../../lib/outreachPreview';
@@ -66,7 +66,8 @@
   const locked = $derived(autos.length > 0 && autos.every((a) => a.post.status === 'posted' || a.post.status === 'queued'));
   const allPosted = $derived(autos.length > 0 && autos.every((a) => a.post.status === 'posted'));
   const handWritten = $derived(view.posts.some((p) => p.wave === wave));
-  const hasAutoChannel = $derived(view.channels.some(sendsItself));
+  const autoOn = $derived(onChannels(view).filter(sendsItself));
+  const hasAutoChannel = $derived(autoOn.length > 0);
   const shared = $derived(sharedMessage(view, wave));
   // svelte-ignore state_referenced_locally
   let message = $state(shared);
@@ -254,7 +255,7 @@
   {#if autos.length === 0 && !hasAutoChannel && handWritten}
     <!-- Only hand-posted channels: the rows below are the whole section. -->
   {:else if autos.length === 0}
-    <p class="text-muted">{handWritten ? `No post yet for ${names(view.channels.filter(sendsItself).map((c) => c.label))}.` : `No posts yet. Start with the ${wave === 'announce' ? 'announcement' : `${waveName.toLowerCase()} post`}.`}</p>
+    <p class="text-muted">{handWritten ? `No post yet for ${names(autoOn.map((c) => c.label))}.` : `No posts yet. Start with the ${wave === 'announce' ? 'announcement' : `${waveName.toLowerCase()} post`}.`}</p>
     <p class="row">
       <Button variant="primary" onclick={write} disabled={busy || !view.available}>
         Write the {wave === 'announce' ? 'announcement' : `${waveName.toLowerCase()} post`}

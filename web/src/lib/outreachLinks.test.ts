@@ -169,4 +169,10 @@ describe('canScheduleAll', () => {
     expect(none.ok).toBe(false);
     expect(none.reason).toMatch(/Settings/);
   });
+  it('does not let an off channel with a post open Schedule all, and does not call it not connected (#0628)', () => {
+    const r = canScheduleAll({ ...wo('published', [ch('bluesky', true, true)]), off_channels: [{ name: 'bluesky', label: 'Bluesky', automatic: true }] });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toMatch(/Settings/);
+    expect(r.reason).not.toMatch(/not connected/);
+  });
 });

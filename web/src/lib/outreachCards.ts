@@ -34,6 +34,28 @@ export function sendsItself(channel: Pick<OutreachChannel, 'automatic' | 'config
   return channel.automatic && channel.configured;
 }
 
+/** The channels switched on; view.channels also keeps an off one for its posts (#0628). */
+export function onChannels(view: Pick<WorkshopOutreach, 'channels' | 'off_channels'>): OutreachChannel[] {
+  const off = view.off_channels ?? [];
+  return view.channels.filter((c) => !off.some((o) => o.name === c.name));
+}
+
+/** A board column's name, saying so when the channel is off (#0628). */
+export function boardChannelLabel(label: string, off: boolean): string {
+  return off ? `${label} (off)` : label;
+}
+
+/** The line under the board naming every off channel, '' when none is (#0628). */
+export function boardOffLine(view: Pick<WorkshopOutreach, 'off_channels' | 'posts'>): string {
+  const off = view.off_channels ?? [];
+  if (off.length === 0) return '';
+  const labels = off.map((c) => c.label);
+  const list = labels.length === 1 ? labels[0] : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+  const line = labels.length === 1 ? `${list} is off in Settings, so new posts and links skip it.` : `${list} are off in Settings, so new posts and links skip them.`;
+  const going = view.posts.some((p) => off.some((o) => o.name === p.channel) && (p.status === 'scheduled' || p.status === 'queued'));
+  return going ? `${line} Posts already scheduled there still go out.` : line;
+}
+
 export type StatusKind = 'posted' | 'scheduled' | 'not_scheduled' | 'manual' | 'failed' | 'not_drafted' | 'queued' | 'on_hold';
 export interface StatusLine {
   kind: StatusKind;
@@ -75,7 +97,7 @@ export function statusLine(post: OutreachPost | null, channel: Pick<OutreachChan
 export interface BoardCell {
   channel: string;
   channelLabel: string;
-  kind: StatusKind;
+  kind: StatusKind | 'off';
   /** The state in words: never empty, so colour is never the only cue. */
   status: string;
   /** The date and time where there is one, else a short qualifier or null. */
@@ -93,7 +115,8 @@ export interface BoardRow {
 const when = (iso: string | null | undefined): string | null => (iso ? weekdayTime(iso) : null);
 
 /** One post's cell on the status board. */
-export function boardCell(post: OutreachPost | null, channel: OutreachChannel): BoardCell {
+export function boardCell(post: OutreachPost | null, channel: OutreachChannel, off = false): BoardCell {
+  if (off && post === null) return { channel: channel.name, channelLabel: boardChannelLabel(channel.label, true), kind: 'off', status: 'Off', detail: null };
   const kind = statusLine(post, channel).kind;
   const words: Record<StatusKind, [string, string | null]> = {
     posted: ['Posted', when(post?.posted_at)],
@@ -106,7 +129,7 @@ export function boardCell(post: OutreachPost | null, channel: OutreachChannel): 
     not_drafted: ['Not written', null],
   };
   const [status, detail] = words[kind];
-  return { channel: channel.name, channelLabel: channel.label, kind, status, detail };
+  return { channel: channel.name, channelLabel: boardChannelLabel(channel.label, off), kind, status, detail };
 }
 
 /**
@@ -115,8 +138,8 @@ export function boardCell(post: OutreachPost | null, channel: OutreachChannel): 
  * Empty when nothing has gone out or been scheduled, since the wave's own
  * status already says that, and when a post has failed or is sending only.
  */
-export function notScheduledNote(view: Pick<WorkshopOutreach, 'channels' | 'posts'>, wave: string): string {
-  const own = view.channels.filter(sendsItself).map((c) => view.posts.find((p) => p.channel === c.name && p.wave === wave) ?? null);
+export function notScheduledNote(view: Pick<WorkshopOutreach, 'channels' | 'posts' | 'off_channels'>, wave: string): string {
+  const own = onChannels(view).filter(sendsItself).map((c) => view.posts.find((p) => p.channel === c.name && p.wave === wave) ?? null);
   const under = own.filter((p) => p === null || p.status === 'draft' || p.status === 'manual').length;
   const started = own.some((p) => p !== null && (p.status === 'scheduled' || p.status === 'posted'));
   return under > 0 && started ? `${under} not scheduled` : '';
@@ -127,25 +150,27 @@ export function sectionHeadId(name: string): string { return `outreach-section-$
 export function sectionPanelId(name: string): string { return `outreach-section-${name}-panel`; }
 
 /** True when every channel has a post in this section and all have gone out (#0625). */
-export function sectionFullyPosted(view: Pick<WorkshopOutreach, 'channels' | 'posts'>, section: string): boolean {
-  return view.channels.length > 0 && view.channels.every((c) =>
-    view.posts.some((p) => p.channel === c.name && p.wave === section && p.status === 'posted'));
+export function sectionFullyPosted(view: Pick<WorkshopOutreach, 'channels' | 'posts' | 'off_channels'>, section: string): boolean {
+  const on = onChannels(view);
+  return on.length > 0
+    && on.every((c) => view.posts.some((p) => p.channel === c.name && p.wave === section && p.status === 'posted'))
+    && view.posts.every((p) => p.wave !== section || p.status === 'posted');
 }
 
 /** The section open when the page loads: the first not fully posted, else the last (#0625). */
-export function defaultOpenSection(view: Pick<WorkshopOutreach, 'channels' | 'waves' | 'posts'>): string {
+export function defaultOpenSection(view: Pick<WorkshopOutreach, 'channels' | 'waves' | 'posts' | 'off_channels'>): string {
   const first = view.waves.find((w) => !sectionFullyPosted(view, w.name));
   return first?.name ?? view.waves[view.waves.length - 1]?.name ?? '';
 }
 
 /** The status board: one row per wave, one cell per channel, in the server's order. */
-export function boardRows(view: Pick<WorkshopOutreach, 'channels' | 'waves' | 'posts'>): BoardRow[] {
+export function boardRows(view: Pick<WorkshopOutreach, 'channels' | 'waves' | 'posts' | 'off_channels'>): BoardRow[] {
   return groupByWave(view).map(({ wave, cards }, i) => ({
     wave: wave.name,
     ordinal: i + 1,
     label: wave.label,
     note: notScheduledNote(view, wave.name),
-    cells: cards.map((c) => boardCell(c.post, c.channel)),
+    cells: cards.map((c) => boardCell(c.post, c.channel, (view.off_channels ?? []).some((o) => o.name === c.channel.name))),
   }));
 }
 

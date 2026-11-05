@@ -893,6 +893,8 @@ export interface WorkshopOutreach {
   can_reset?: boolean;
   /** Set only on Start's response (#0568). */
   link_report?: OutreachLinkReport;
+  /** #0628: every switched-off channel, in channel order. */
+  off_channels?: Pick<OutreachChannel, 'name' | 'label' | 'automatic'>[];
   /** #0623: one row per switched-on hand-posted channel by wave. */
   hand_links?: OutreachHandLink[];
   /** #0623: outreach is available and a row in hand_links has no URL. */

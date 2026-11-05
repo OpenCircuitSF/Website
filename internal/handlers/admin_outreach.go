@@ -321,6 +321,18 @@ func (h *AdminOutreachHandler) shownChannels(posts []outreach.Post) []outreach.C
 	return out
 }
 
+// offChannels is every switched-off channel, in channel order (#0628), so
+// the board can name one that has no post and therefore no column.
+func (h *AdminOutreachHandler) offChannels() []outreach.Channel {
+	out := []outreach.Channel{}
+	for _, ch := range outreach.Channels() {
+		if !h.channelEnabled(ch.Name) {
+			out = append(out, ch)
+		}
+	}
+	return out
+}
+
 // SetCardURL sets the source of the Bluesky card URL choice, "short" or
 // "canonical" (#0583). Read per request; unset, the card is "short".
 func (h *AdminOutreachHandler) SetCardURL(fn func() string) { h.cardFn = fn }
@@ -519,6 +531,8 @@ type outreachPanelView struct {
 	HandLinks []outreachHandLinkView `json:"hand_links"`
 	// HandLinksPending is true when outreach is available and a row has no URL.
 	HandLinksPending bool `json:"hand_links_pending"`
+	// OffChannels is every switched-off channel, in channel order (#0628).
+	OffChannels []outreach.Channel `json:"off_channels"`
 }
 
 func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop, o *outreach.Outreach) (outreachPanelView, error) {
@@ -533,6 +547,7 @@ func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop,
 		Waves:       []outreachWaveView{},
 		Posts:       []outreachPostView{},
 		HandLinks:   []outreachHandLinkView{},
+		OffChannels: h.offChannels(),
 	}
 	switch {
 	case !h.linksEnabled():
@@ -997,6 +1012,11 @@ func (h *AdminOutreachHandler) Prepare(w http.ResponseWriter, r *http.Request) {
 	}
 	p, wk, ok := h.postContext(w, r, id)
 	if !ok {
+		return
+	}
+	if !h.postVisible(p) {
+		ch, _ := outreach.ChannelByName(p.Channel)
+		writeError(w, http.StatusConflict, ch.Label+" is switched off in Settings")
 		return
 	}
 	f := h.facts(wk)

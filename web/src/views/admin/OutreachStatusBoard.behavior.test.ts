@@ -132,3 +132,55 @@ describe('OutreachStatusBoard (#0624)', () => {
     expect(screen.getByRole('button', { name: /Reminder/ }).getAttribute('aria-controls')).toBe(sectionPanelId('reminder'));
   });
 });
+
+describe('OutreachStatusBoard with a switched-off channel', () => {
+  const offOf = (...names: string[]) => channels.filter((c) => names.includes(c.name)).map(({ name, label, automatic }) => ({ name, label, automatic }));
+  const onlyWith = (off: string[], kept: string[], posts: OutreachPost[]): WorkshopOutreach => ({
+    ...view(posts), channels: channels.filter((c) => !off.includes(c.name) || kept.includes(c.name)), off_channels: offOf(...off),
+  });
+  const line = (c: HTMLElement) => c.querySelector('.board-off');
+
+  it('shows an off channel with no post in the line and not as a column (#0628)', () => {
+    const { container } = mount(onlyWith(['youtube_shorts'], [], []));
+    expect(line(container)!.textContent).toContain('YouTube Shorts is off in Settings, so new posts and links skip it.');
+    expect(screen.queryByRole('columnheader', { name: /YouTube/ })).toBeNull();
+    expect(cell(container, 'announce', 'youtube_shorts')).toBeNull();
+  });
+  it('heads an off channel with a post as off and fills its empty slots with Off (#0628)', () => {
+    const { container } = mount(onlyWith(['tiktok'], ['tiktok'], [post('tiktok', 'announce', { status: 'posted', posted_at: TIME })]));
+    expect(screen.getByRole('columnheader', { name: 'TikTok (off)' })).toBeTruthy();
+    const empty = cell(container, 'reminder', 'tiktok');
+    expect(empty.dataset.kind).toBe('off');
+    expect(empty.querySelector('.board-status')!.textContent).toBe('Off');
+    expect(empty.querySelector('.board-channel')!.textContent).toBe('TikTok (off)');
+    expect(container.textContent).toContain('Not written');
+    expect(empty.textContent).not.toContain('Not written');
+  });
+  it('keeps Posted and Scheduled with their times on an off channel (#0628)', () => {
+    const { container } = mount(onlyWith(['bluesky'], ['bluesky'], [
+      post('bluesky', 'announce', { status: 'posted', posted_at: TIME }),
+      post('bluesky', 'reminder', { status: 'scheduled', scheduled_at: TIME }),
+    ]));
+    const posted = cell(container, 'announce', 'bluesky');
+    expect(posted.querySelector('.board-status')!.textContent).toBe('Posted');
+    expect(posted.querySelector('.board-detail')!.textContent).toBe(weekdayTime(TIME));
+    const scheduled = cell(container, 'reminder', 'bluesky');
+    expect(scheduled.querySelector('.board-status')!.textContent).toBe('Scheduled');
+    expect(scheduled.querySelector('.board-detail')!.textContent).toBe(weekdayTime(TIME));
+    expect(line(container)!.textContent).toContain('Posts already scheduled there still go out.');
+  });
+  it('links the line to the Outreach part of Settings (#0628)', () => {
+    mount(onlyWith(['tiktok'], [], []));
+    expect(screen.getByRole('link', { name: 'Open Settings' }).getAttribute('href')).toBe('#/settings?section=outreach');
+  });
+  it('shows no line when every channel is on (#0628)', () => {
+    const { container } = mount({ ...view([]), off_channels: [] });
+    expect(line(container)).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Open Settings' })).toBeNull();
+  });
+  it('still explains itself when every channel is off (#0628)', () => {
+    const { container } = mount({ ...view([]), channels: [], off_channels: offOf(...channels.map((c) => c.name)) });
+    expect(line(container)!.textContent).toContain('Bluesky, Mastodon, Instagram, TikTok and YouTube Shorts are off in Settings');
+    expect(screen.getByRole('link', { name: 'Open Settings' })).toBeTruthy();
+  });
+});

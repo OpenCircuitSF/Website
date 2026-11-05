@@ -12,7 +12,7 @@
 -->
 <script lang="ts">
   import { draftAllOutreach, ApiError } from '../../lib/api';
-  import { sectionHeadId, sectionPanelId, sectionRowId, sendsItself } from '../../lib/outreachCards';
+  import { onChannels, sectionHeadId, sectionPanelId, sectionRowId, sendsItself } from '../../lib/outreachCards';
   import { handChannelLabel } from '../../lib/outreachHandCopy';
   import { waveStrip } from '../../lib/outreachMessage';
   import type { OutreachPost, OutreachResults, OutreachWave, WorkshopOutreach } from '../../lib/types';
@@ -50,6 +50,7 @@
     onUnsavedChange?.(unsaved);
   }
   const handChannels = $derived(view.channels.filter((c) => !sendsItself(c)));
+  const handOn = $derived(onChannels(view).filter((c) => !sendsItself(c)));
   const written = $derived(view.posts.some((p) => p.wave === wave.name));
 
   async function write(): Promise<void> {
@@ -83,8 +84,8 @@
     {#if handChannels.length > 0}
       {#if written}
         <OutreachPostCards {view} {results} {onChange} {reload} wave={wave.name} channelFilter={(c) => !sendsItself(c)} {flyer} onUnsavedChange={(u) => { handUnsaved = u; report(); }} />
-      {:else}
-        <p class="text-muted">The text for {handChannels.map((c) => handChannelLabel(c)).join(', ')} appears here once this section is written.</p>
+      {:else if handOn.length > 0}
+        <p class="text-muted">The text for {handOn.map((c) => handChannelLabel(c)).join(', ')} appears here once this section is written.</p>
       {/if}
     {/if}
   </div>
