@@ -49,7 +49,7 @@ describe('statusLine', () => {
 describe('cardButtons', () => {
   it('automatic draft: edit, post now, schedule', () => {
     const b = cardButtons(post(), auto, true);
-    expect([b.edit, b.postNow, b.schedule, b.copy, b.markPosted]).toEqual([true, true, true, false, false]);
+    expect([b.edit, b.postNow, b.schedule, b.markPosted]).toEqual([true, true, true, false]);
   });
   it('scheduled: unschedule', () => {
     const b = cardButtons(post({ status: 'scheduled', scheduled_at: '2026-10-17T20:00:00Z' }), auto, true);
@@ -60,9 +60,9 @@ describe('cardButtons', () => {
     expect(b.retry).toBe(true);
     expect(b.schedule).toBe(false);
   });
-  it('manual: copy and mark posted, never post now', () => {
+  it('manual: copy text and mark posted, never post now', () => {
     const b = cardButtons(post({ status: 'manual', channel: 'reddit' }), manual, true);
-    expect([b.edit, b.copy, b.markPosted, b.postNow, b.schedule]).toEqual([true, true, true, false, false]);
+    expect([b.edit, b.copyText, b.markPosted, b.postNow, b.schedule]).toEqual([true, true, true, false, false]);
   });
   it('undrafted: draft only', () => {
     const b = cardButtons(null, auto, true);
@@ -165,7 +165,6 @@ describe('Unmark and the bio link (#0588)', () => {
   it('offers Copy text only before a hand post has its link', () => {
     const b = cardButtons(post({ status: 'manual', prepared: false, short_url: null }), manual, true);
     expect(b.copyText).toBe(true);
-    expect(b.copy).toBe(false);
     expect(cardButtons(post(), auto, true).copyText).toBe(false);
     expect(cardButtons(null, manual, true).copyText).toBe(false);
   });
@@ -173,7 +172,6 @@ describe('Unmark and the bio link (#0588)', () => {
   it('offers no copy once a hand post is posted', () => {
     const b = cardButtons(post({ status: 'posted' }), manual, true);
     expect(b.copyText).toBe(false);
-    expect(b.copy).toBe(false);
   });
 
   it('the flyer link opens this workshop\'s newest flyer, else makes one for it', () => {
@@ -226,18 +224,27 @@ describe('boardCell (#0624)', () => {
     const c = boardCell(post({ status: 'scheduled', scheduled_at: TIME, held: true }), auto);
     expect([c.kind, c.status, c.detail]).toEqual(['on_hold', 'On hold', weekdayTime(TIME)]);
   });
-  it('says draft and not scheduled for an automatic draft', () => {
+  it('says drafted for an automatic draft (#0640)', () => {
     const c = boardCell(post(), auto);
-    expect([c.kind, c.status, c.detail]).toEqual(['not_scheduled', 'Draft', 'Not scheduled']);
+    expect([c.kind, c.status, c.detail]).toEqual(['not_scheduled', 'Drafted', null]);
   });
-  it('says post by hand for a hand-posted channel, as a draft or as manual', () => {
+  it('says drafted by hand for a hand-posted channel, as a draft or as manual (#0640)', () => {
     for (const status of ['draft', 'manual'] as const) {
       const c = boardCell(post({ status }), manual);
-      expect([c.kind, c.status, c.detail]).toEqual(['manual', 'Post by hand', null]);
+      expect([c.kind, c.status, c.detail]).toEqual(['manual', 'Drafted', 'by hand']);
     }
   });
-  it('says post by hand for an automatic channel with no credentials', () => {
-    expect(boardCell(post(), unconfigured).status).toBe('Post by hand');
+  it('says drafted by hand for an automatic channel with no credentials', () => {
+    expect(boardCell(post(), unconfigured)).toMatchObject({ status: 'Drafted', detail: 'by hand' });
+  });
+  it('a scheduled cell shows its time only on a mixed or different-times row', () => {
+    expect(boardCell(post({ status: 'scheduled', scheduled_at: TIME }), auto, false, false).detail).toBeNull();
+    const rows = boardRows({ channels: [auto, mast], waves, posts: [post({ status: 'scheduled', scheduled_at: TIME }), post({ id: 2, channel: 'mastodon', status: 'scheduled', scheduled_at: TIME })] });
+    expect(rows[0].line.kind).toBe('scheduled');
+    expect(rows[0].cells.map((c) => c.detail)).toEqual([null, null]);
+    const mixed = boardRows({ channels: [auto, mast], waves, posts: [post({ status: 'scheduled', scheduled_at: TIME }), post({ id: 2, channel: 'mastodon' })] });
+    expect(mixed[0].line.kind).toBe('mixed');
+    expect(mixed[0].cells.map((c) => c.detail)).toEqual([weekdayTime(TIME), null]);
   });
   it('says failed and posting now with no time', () => {
     expect(boardCell(post({ status: 'failed' }), auto)).toMatchObject({ status: 'Failed', detail: null });
@@ -271,13 +278,13 @@ describe('boardRows (#0624)', () => {
   it('covers all five channels, whether or not they have posts', () => {
     const rows = boardRows({ channels: five, waves: three, posts: [post()] });
     for (const r of rows) expect(r.cells).toHaveLength(5);
-    expect(rows[0].cells[0].status).toBe('Draft');
+    expect(rows[0].cells[0].status).toBe('Drafted');
     expect(rows[0].cells[1].status).toBe('Not written');
   });
   it('shows not written everywhere when there are no posts', () => {
     const rows = boardRows({ channels: five, waves: three, posts: [] });
     expect(rows.flatMap((r) => r.cells).every((c) => c.status === 'Not written')).toBe(true);
-    expect(rows.every((r) => r.note === '')).toBe(true);
+    expect(rows.every((r) => r.line.kind === 'not_written')).toBe(true);
   });
 });
 

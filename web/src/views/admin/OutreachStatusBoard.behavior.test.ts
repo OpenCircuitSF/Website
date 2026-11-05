@@ -50,7 +50,7 @@ describe('OutreachStatusBoard (#0624)', () => {
     expect(within(table).getAllByRole('columnheader')).toHaveLength(6);
   });
   it("states each cell's channel, status and time in text", () => {
-    const { container } = mount(view([post('bluesky', 'announce', { status: 'scheduled', scheduled_at: TIME })]));
+    const { container } = mount(view([post('bluesky', 'announce', { status: 'scheduled', scheduled_at: TIME }), post('mastodon', 'announce')]));
     const text = cell(container, 'announce', 'bluesky').textContent ?? '';
     expect(text).toContain('Bluesky');
     expect(text).toContain('Scheduled');
@@ -59,13 +59,32 @@ describe('OutreachStatusBoard (#0624)', () => {
   it('gives each hand-posted platform its own state', () => {
     const { container } = mount(view([post('tiktok', 'announce', { status: 'posted', posted_at: TIME }), post('youtube_shorts', 'announce', { status: 'manual' })]));
     expect(cell(container, 'announce', 'tiktok').querySelector('.board-status')?.textContent).toBe('Posted');
-    expect(cell(container, 'announce', 'youtube_shorts').querySelector('.board-status')?.textContent).toBe('Post by hand');
+    expect(cell(container, 'announce', 'youtube_shorts').querySelector('.board-status')?.textContent).toBe('Drafted');
+    expect(cell(container, 'announce', 'youtube_shorts').querySelector('.board-detail')?.textContent).toBe('by hand');
   });
-  it('says 1 not scheduled on a partly scheduled row and nothing on a fully scheduled one', () => {
+  it('writes the row line once and the cells as words: Scheduled, Scheduled, Drafted · by hand', () => {
     const sched = { status: 'scheduled', scheduled_at: TIME } as const;
-    const { container } = mount(view([post('bluesky', 'reminder', sched), post('mastodon', 'reminder'), post('bluesky', 'announce', sched), post('mastodon', 'announce', sched)]));
-    expect(container.querySelector('tr[data-wave="reminder"] .board-note')?.textContent).toBe('1 not scheduled');
-    expect(container.querySelector('tr[data-wave="announce"] .board-note')).toBeNull();
+    const { container } = mount(view([post('bluesky', 'announce', sched), post('mastodon', 'announce', sched), post('instagram', 'announce')]));
+    const row = container.querySelector('tr[data-wave="announce"]') as HTMLElement;
+    expect(row.querySelector('.board-line')?.textContent).toBe(`Scheduled ${weekdayTime(TIME)} · 3 left to post by hand`);
+    expect(row.textContent?.split(weekdayTime(TIME)).length).toBe(2);
+    const words = ['bluesky', 'mastodon', 'instagram'].map((c) => cell(container, 'announce', c).querySelector('.board-cell')?.textContent?.replace(/\s+/g, ' ').trim());
+    expect(words).toEqual(['Scheduled', 'Scheduled', 'Drafted by hand']);
+  });
+  it('a mixed row names each channel in its line and times the scheduled cell', () => {
+    const { container } = mount(view([post('bluesky', 'reminder', { status: 'posted', posted_at: TIME }), post('mastodon', 'reminder', { status: 'scheduled', scheduled_at: TIME })]));
+    expect(container.querySelector('tr[data-wave="reminder"] .board-line')?.textContent).toContain(`Bluesky posted · Mastodon scheduled ${weekdayTime(TIME)}`);
+    expect(cell(container, 'reminder', 'mastodon').querySelector('.board-detail')?.textContent).toBe(weekdayTime(TIME));
+  });
+  it('says the video channels are posted by hand under the board', () => {
+    const { container } = mount(view([]));
+    expect(container.querySelector('.board-hand')?.textContent).toBe('Instagram Reels, TikTok and YouTube Shorts are posted by hand; the site never posts them.');
+    expect(screen.getByRole('columnheader', { name: 'Instagram Reels' })).toBeTruthy();
+  });
+  it('keeps PT on the same line as the time', () => {
+    const sched = { status: 'scheduled', scheduled_at: TIME } as const;
+    const { container } = mount(view([post('bluesky', 'announce', sched), post('mastodon', 'announce', sched)]));
+    expect(container.querySelector('tr[data-wave="announce"] .board-when')?.textContent).toMatch(/[AP]M PT$/);
   });
   it('labels the third row Final', () => {
     const { container } = mount(view([]));
@@ -166,7 +185,6 @@ describe('OutreachStatusBoard with a switched-off channel', () => {
     expect(posted.querySelector('.board-detail')!.textContent).toBe(weekdayTime(TIME));
     const scheduled = cell(container, 'reminder', 'bluesky');
     expect(scheduled.querySelector('.board-status')!.textContent).toBe('Scheduled');
-    expect(scheduled.querySelector('.board-detail')!.textContent).toBe(weekdayTime(TIME));
     expect(line(container)!.textContent).toContain('Posts already scheduled there still go out.');
   });
   it('links the line to the Outreach part of Settings (#0628)', () => {

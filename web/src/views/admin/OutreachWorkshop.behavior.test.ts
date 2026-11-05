@@ -116,8 +116,9 @@ describe('OutreachWorkshop', () => {
     const { container } = render(OutreachWorkshop, { workshopId: 5 });
     const board = await screen.findByRole('table', { name: 'Posts and when they go out' });
     expect(container.querySelector('p.summary')).toBeNull();
-    expect(within(board).getByRole('columnheader', { name: 'Instagram' })).toBeTruthy();
-    expect(board.querySelector('tr[data-wave="announce"] td[data-channel="bluesky"]')?.textContent).toContain(weekdayTime(at));
+    expect(within(board).getByRole('columnheader', { name: 'Instagram Reels' })).toBeTruthy();
+    expect(board.querySelector('tr[data-wave="announce"] td[data-channel="bluesky"]')?.textContent).toContain('Scheduled');
+    expect(board.querySelector('tr[data-wave="announce"] .board-line')?.textContent).toContain(weekdayTime(at));
   });
 
   it('has no tracked-links table, Draft all or Start outreach on the page (#0582)', async () => {

@@ -9,17 +9,22 @@ import { describe, expect, it } from 'vitest';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(path.join(here, 'OutreachStatusBoard.svelte'), 'utf-8');
 const style = src.slice(src.indexOf('<style>'));
-const narrow = style.slice(style.indexOf('@media (max-width: 860px)'));
+const narrow = style.slice(style.indexOf('@media (max-width: 880px)'));
 
 describe('the status board styles (#0624)', () => {
   it('stacks at narrow widths and hides the column headers', () => {
-    expect(style).toContain('@media (max-width: 860px)');
+    expect(style).toContain('@media (max-width: 880px)');
     expect(narrow).toMatch(/thead\s*\{\s*display:\s*none/);
   });
   it("shows each cell's channel only when stacked", () => {
     const wide = style.slice(0, style.indexOf('@media'));
     expect(wide).toMatch(/\.board-channel\s*\{\s*display:\s*none/);
-    expect(narrow).toMatch(/\.board-channel\s*\{\s*display:\s*block/);
+    expect(narrow).toMatch(/\.board-channel\s*\{\s*display:\s*inline/);
+  });
+  it('cells run inline on a phone with a dot between them', () => {
+    expect(narrow).toMatch(/\btd\s*\{\s*display:\s*inline;\s*padding:\s*0/);
+    expect(narrow).toMatch(/td \+ td::before\s*\{\s*content:\s*' · '/);
+    expect(narrow).not.toContain('grid-template-columns');
   });
   it('fits the width instead of scrolling sideways', () => {
     expect(style).toMatch(/table-layout:\s*fixed/);

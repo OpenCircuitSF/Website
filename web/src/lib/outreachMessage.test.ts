@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { composeBody, isHashtagParagraph, messageTargets, planSaveMessage, restoredTail, sharedMessage, splitBody, waveExcerpt, waveRowStatus, waveStrip } from './outreachMessage';
-import { boardRows, sectionFullyPosted, weekdayTime } from './outreachCards';
+import { notScheduledNote, sectionFullyPosted, weekdayTime } from './outreachCards';
 import type { OutreachChannel, OutreachPost, OutreachWave } from './types';
 
 const ch = (name: string, automatic: boolean, configured: boolean, limit = 0): OutreachChannel => ({
@@ -241,7 +241,7 @@ describe('a partly scheduled section (#0624)', () => {
   });
   it('the strip and the board row give the same count', () => {
     const v = { channels: autoChannels, waves, posts: [sched({ wave: 'reminder' }), post({ id: 2, channel: 'mastodon', wave: 'reminder' })] };
-    const note = boardRows(v)[1].note;
+    const note = notScheduledNote(v, 'reminder');
     expect(note).not.toBe('');
     expect(waveStrip(v, 'reminder').text.endsWith(note)).toBe(true);
   });
@@ -373,7 +373,7 @@ describe('waveRowStatus with a switched-off channel', () => {
       ],
     };
     expect(waveRowStatus(v, 'reminder', NOW).text).toBe(`Posts automatically ${weekdayTime(T)} · 1 not scheduled`);
-    expect(boardRows(v).find((r) => r.wave === 'reminder')?.note).toBe('1 not scheduled');
+    expect(notScheduledNote(v, 'reminder')).toBe('1 not scheduled');
   });
 
   it("keeps the not scheduled note when an off channel's post has gone out (#0628)", () => {
@@ -384,6 +384,6 @@ describe('waveRowStatus with a switched-off channel', () => {
       posts: [post({ id: 2, channel: 'mastodon', wave: 'reminder', status: 'posted', posted_at: T })],
     };
     expect(waveRowStatus(v, 'reminder', NOW).text).toBe(`Posted ${weekdayTime(T)} · 1 not scheduled`);
-    expect(boardRows(v).find((r) => r.wave === 'reminder')?.note).toBe('1 not scheduled');
+    expect(notScheduledNote(v, 'reminder')).toBe('1 not scheduled');
   });
 });

@@ -5,6 +5,7 @@ import { formatDateTime } from './admin';
 import { formatPacificWeekdayTime } from './pacificTime';
 import { composerActions } from './outreach';
 import { adminOutreachFlyersHash } from './adminRouter';
+import { sectionLine, type SectionLine } from './outreachSection';
 import type { FlyerRow, OutreachChannel, OutreachPost, OutreachResults, OutreachWave, WorkshopOutreach } from './types';
 
 export interface PostCard {
@@ -107,25 +108,26 @@ export interface BoardRow {
   wave: string;
   ordinal: number;
   label: string;
-  /** "1 not scheduled" on a partly scheduled row, else empty. */
-  note: string;
+  /** The section's one line (#0640). */
+  line: SectionLine;
   cells: BoardCell[];
 }
 
 const when = (iso: string | null | undefined): string | null => (iso ? weekdayTime(iso) : null);
 
-/** One post's cell on the status board. */
-export function boardCell(post: OutreachPost | null, channel: OutreachChannel, off = false): BoardCell {
+/** One post's cell on the status board. A scheduled cell names its time only
+ * when the row's line does not already say it (`showTime`, #0640). */
+export function boardCell(post: OutreachPost | null, channel: OutreachChannel, off = false, showTime = true): BoardCell {
   if (off && post === null) return { channel: channel.name, channelLabel: boardChannelLabel(channel.label, true), kind: 'off', status: 'Off', detail: null };
   const kind = statusLine(post, channel).kind;
   const words: Record<StatusKind, [string, string | null]> = {
     posted: ['Posted', when(post?.posted_at)],
-    scheduled: ['Scheduled', when(post?.scheduled_at)],
+    scheduled: ['Scheduled', showTime ? when(post?.scheduled_at) : null],
     on_hold: ['On hold', when(post?.scheduled_at)],
     queued: ['Posting now', null],
     failed: ['Failed', null],
-    not_scheduled: ['Draft', 'Not scheduled'],
-    manual: ['Post by hand', null],
+    not_scheduled: ['Drafted', null],
+    manual: ['Drafted', 'by hand'],
     not_drafted: ['Not written', null],
   };
   const [status, detail] = words[kind];
@@ -166,13 +168,17 @@ export function defaultOpenSection(view: Pick<WorkshopOutreach, 'channels' | 'wa
 
 /** The status board: one row per wave, one cell per channel, in the server's order. */
 export function boardRows(view: Pick<WorkshopOutreach, 'channels' | 'waves' | 'posts' | 'off_channels'>): BoardRow[] {
-  return groupByWave(view).map(({ wave, cards }, i) => ({
-    wave: wave.name,
-    ordinal: i + 1,
-    label: wave.label,
-    note: notScheduledNote(view, wave.name),
-    cells: cards.map((c) => boardCell(c.post, c.channel, (view.off_channels ?? []).some((o) => o.name === c.channel.name))),
-  }));
+  return groupByWave(view).map(({ wave, cards }, i) => {
+    const line = sectionLine(view, wave.name);
+    const showTime = line.kind === 'mixed' || line.kind === 'different_times';
+    return {
+      wave: wave.name,
+      ordinal: i + 1,
+      label: wave.label,
+      line,
+      cells: cards.map((c) => boardCell(c.post, c.channel, (view.off_channels ?? []).some((o) => o.name === c.channel.name), showTime)),
+    };
+  });
 }
 
 export interface CardButtons {
@@ -181,8 +187,6 @@ export interface CardButtons {
   schedule: boolean;
   unschedule: boolean;
   retry: boolean;
-  /** Copy with link. */
-  copy: boolean;
   /** Copy text only (#0626): needs no link, so it does not wait for one. */
   copyText: boolean;
   markPosted: boolean;
@@ -195,7 +199,7 @@ export interface CardButtons {
 
 /** Which buttons a card shows; the rules themselves come from composerActions. */
 export function cardButtons(post: OutreachPost | null, channel: OutreachChannel, available: boolean): CardButtons {
-  const none: CardButtons = { edit: false, postNow: false, schedule: false, unschedule: false, retry: false, copy: false, copyText: false, markPosted: false, unmark: false, takedown: false, draft: false };
+  const none: CardButtons = { edit: false, postNow: false, schedule: false, unschedule: false, retry: false, copyText: false, markPosted: false, unmark: false, takedown: false, draft: false };
   if (post === null) return { ...none, draft: available };
   const a = composerActions(post, channel, available);
   const auto = sendsItself(channel);
@@ -208,7 +212,6 @@ export function cardButtons(post: OutreachPost | null, channel: OutreachChannel,
     schedule: auto && a.canSchedule && !a.canRetry,
     unschedule: auto && a.canUnschedule,
     retry: auto && a.canRetry,
-    copy: !auto && !posted && !queued && post.prepared,
     copyText: !auto && !posted && !queued,
     markPosted: !auto && a.canMarkPosted,
     unmark: !auto && posted,
