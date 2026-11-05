@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cardButtons, combinedPostResult, copyLabel, flyerLinkFor, groupByWave, showBioLink, pollDelay, postableAutomatic, postDialogCopy, statusLine, summaryLine, visibleNotice } from './outreachCards';
+import { boardCell, boardRows, cardButtons, combinedPostResult, copyLabel, flyerLinkFor, groupByWave, notScheduledNote, showBioLink, pollDelay, postableAutomatic, postDialogCopy, statusLine, weekdayTime, summaryLine, visibleNotice } from './outreachCards';
 import type { OutreachChannel, OutreachPost, OutreachResults } from './types';
 
 const auto: OutreachChannel = { name: 'bluesky', label: 'Bluesky', utm_source: 'b', utm_medium: 'social', char_limit: 300, automatic: true, configured: true, account: '' };
@@ -197,5 +197,110 @@ describe('Delete and redo (#0604)', () => {
     expect(c.title).toBe('Delete this post from Bluesky?');
     expect(c.warning).toBe('It will be removed for everyone, and the post goes back to draft so you can post it again.');
     expect(c.confirmLabel).toBe('Delete post');
+  });
+});
+
+const TIME = '2026-10-17T20:00:00Z';
+const mast: OutreachChannel = { ...auto, name: 'mastodon', label: 'Mastodon', char_limit: 500 };
+const thread: OutreachChannel = { ...auto, name: 'threads', label: 'Threads' };
+const unconfigured: OutreachChannel = { ...auto, name: 'mastodon', label: 'Mastodon', configured: false };
+
+describe('boardCell (#0624)', () => {
+  it('says posted with the date and time, automatic or by hand', () => {
+    for (const ch of [auto, manual]) {
+      const c = boardCell(post({ status: 'posted', posted_at: TIME }), ch);
+      expect([c.kind, c.status, c.detail]).toEqual(['posted', 'Posted', weekdayTime(TIME)]);
+      expect(c.channelLabel).toBe(ch.label);
+    }
+  });
+  it('says scheduled with the date and time', () => {
+    const c = boardCell(post({ status: 'scheduled', scheduled_at: TIME }), auto);
+    expect([c.kind, c.status, c.detail]).toEqual(['scheduled', 'Scheduled', weekdayTime(TIME)]);
+  });
+  it('says on hold with the time it is waiting for', () => {
+    const c = boardCell(post({ status: 'scheduled', scheduled_at: TIME, held: true }), auto);
+    expect([c.kind, c.status, c.detail]).toEqual(['on_hold', 'On hold', weekdayTime(TIME)]);
+  });
+  it('says draft and not scheduled for an automatic draft', () => {
+    const c = boardCell(post(), auto);
+    expect([c.kind, c.status, c.detail]).toEqual(['not_scheduled', 'Draft', 'Not scheduled']);
+  });
+  it('says post by hand for a hand-posted channel, as a draft or as manual', () => {
+    for (const status of ['draft', 'manual'] as const) {
+      const c = boardCell(post({ status }), manual);
+      expect([c.kind, c.status, c.detail]).toEqual(['manual', 'Post by hand', null]);
+    }
+  });
+  it('says post by hand for an automatic channel with no credentials', () => {
+    expect(boardCell(post(), unconfigured).status).toBe('Post by hand');
+  });
+  it('says failed and posting now with no time', () => {
+    expect(boardCell(post({ status: 'failed' }), auto)).toMatchObject({ status: 'Failed', detail: null });
+    expect(boardCell(post({ status: 'queued' }), auto)).toMatchObject({ status: 'Posting now', detail: null });
+  });
+  it('says not written when there is no post', () => {
+    expect(boardCell(null, auto)).toMatchObject({ kind: 'not_drafted', status: 'Not written', detail: null });
+  });
+  it('takes its kind from statusLine for every post state', () => {
+    const posts = [
+      null, post(), post({ status: 'manual' }), post({ status: 'failed' }), post({ status: 'queued' }),
+      post({ status: 'posted', posted_at: TIME }), post({ status: 'scheduled', scheduled_at: TIME }),
+      post({ status: 'scheduled', scheduled_at: TIME, held: true }),
+    ];
+    for (const p of posts) {
+      for (const ch of [auto, manual, unconfigured]) {
+        expect(boardCell(p, ch).kind).toBe(statusLine(p, ch).kind);
+      }
+    }
+  });
+});
+
+describe('boardRows (#0624)', () => {
+  const five: OutreachChannel[] = [auto, mast, ...['instagram', 'tiktok', 'youtube_shorts'].map((n) => ({ ...manual, name: n, label: n }))];
+  const three = [...waves, { name: 'last-call', label: 'Final', suggested_at: null }];
+  it("gives one numbered row per wave and one cell per channel, in the server's order", () => {
+    const rows = boardRows({ channels: [mast, auto], waves: three, posts: [] });
+    expect(rows.map((r) => [r.ordinal, r.wave, r.label])).toEqual([[1, 'announce', 'Announce'], [2, 'reminder', 'Reminder'], [3, 'last-call', 'Final']]);
+    for (const r of rows) expect(r.cells.map((c) => c.channel)).toEqual(['mastodon', 'bluesky']);
+  });
+  it('covers all five channels, whether or not they have posts', () => {
+    const rows = boardRows({ channels: five, waves: three, posts: [post()] });
+    for (const r of rows) expect(r.cells).toHaveLength(5);
+    expect(rows[0].cells[0].status).toBe('Draft');
+    expect(rows[0].cells[1].status).toBe('Not written');
+  });
+  it('shows not written everywhere when there are no posts', () => {
+    const rows = boardRows({ channels: five, waves: three, posts: [] });
+    expect(rows.flatMap((r) => r.cells).every((c) => c.status === 'Not written')).toBe(true);
+    expect(rows.every((r) => r.note === '')).toBe(true);
+  });
+});
+
+describe('notScheduledNote (#0624)', () => {
+  const channels = [auto, mast];
+  const sched = post({ status: 'scheduled', scheduled_at: TIME });
+  it('counts a draft beside a scheduled post', () => {
+    expect(notScheduledNote({ channels, posts: [sched, post({ id: 2, channel: 'mastodon' })] }, 'announce')).toBe('1 not scheduled');
+  });
+  it('counts a channel with no post beside a scheduled post', () => {
+    expect(notScheduledNote({ channels: [auto, mast, thread], posts: [sched] }, 'announce')).toBe('2 not scheduled');
+  });
+  it('counts a draft beside a posted post', () => {
+    expect(notScheduledNote({ channels, posts: [post({ status: 'posted', posted_at: TIME }), post({ id: 2, channel: 'mastodon' })] }, 'announce')).toBe('1 not scheduled');
+  });
+  it('is empty when nothing is scheduled or posted', () => {
+    expect(notScheduledNote({ channels, posts: [post(), post({ id: 2, channel: 'mastodon' })] }, 'announce')).toBe('');
+    expect(notScheduledNote({ channels, posts: [] }, 'announce')).toBe('');
+  });
+  it('is empty when every automatic channel is scheduled or posted', () => {
+    expect(notScheduledNote({ channels, posts: [sched, post({ id: 2, channel: 'mastodon', status: 'posted', posted_at: TIME })] }, 'announce')).toBe('');
+  });
+  it('ignores hand-posted channels', () => {
+    expect(notScheduledNote({ channels: [auto, manual], posts: [sched, post({ id: 2, channel: 'reddit' })] }, 'announce')).toBe('');
+  });
+  it('does not count a failed or queued post', () => {
+    for (const status of ['failed', 'queued'] as const) {
+      expect(notScheduledNote({ channels, posts: [sched, post({ id: 2, channel: 'mastodon', status })] }, 'announce')).toBe('');
+    }
   });
 });

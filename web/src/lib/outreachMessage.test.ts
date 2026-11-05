@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { composeBody, isHashtagParagraph, manualRowStatus, messageTargets, planSaveMessage, restoredTail, sharedMessage, splitBody, waveRowStatus, waveStrip } from './outreachMessage';
+import { composeBody, isHashtagParagraph, manualRowStatus, messageTargets, planSaveMessage, restoredTail, sharedMessage, splitBody, waveExcerpt, waveRowStatus, waveStrip } from './outreachMessage';
+import { boardRows } from './outreachCards';
 import type { OutreachChannel, OutreachPost, OutreachWave } from './types';
 
 const ch = (name: string, automatic: boolean, configured: boolean, limit = 0): OutreachChannel => ({
@@ -114,7 +115,7 @@ describe('waveRowStatus and manualRowStatus', () => {
     expect(r({ status: 'failed' }).text).toBe('Drafted · a post failed');
     expect(r({ status: 'scheduled', scheduled_at: '2026-11-30T20:00:00Z' }).text).toMatch(/^Posts automatically /);
     expect(r({ status: 'scheduled', scheduled_at: '2026-11-30T20:00:00Z', held: true }).text).toMatch(/^Scheduled .+ · on hold/);
-    expect(r({ status: 'posted' }).text).toBe('Posted 1 of 1');
+    expect(r({ status: 'posted' }).text).toBe('Posted 1 of 1 · 1 not scheduled');
   });
   describe('with real dates (#0622)', () => {
     const now = new Date('2026-11-01T12:00:00Z');
@@ -160,7 +161,7 @@ describe('waveRowStatus and manualRowStatus', () => {
   });
   it('counts only automatic posts', () => {
     const v = view([post({ wave: 'reminder', status: 'posted' }), post({ id: 2, wave: 'reminder', channel: 'mastodon' })]);
-    expect(waveRowStatus(v, 'reminder').text).toBe('Posted 1 of 2');
+    expect(waveRowStatus(v, 'reminder').text).toBe('Posted 1 of 2 · 1 not scheduled');
   });
   it('the manual row counts hand-posted cards', () => {
     expect(manualRowStatus(view([bPost]))).toBe('Nothing drafted');
@@ -213,5 +214,54 @@ describe('restoredTail (#0593)', () => {
   it('makes a plain link line when no sibling carries one', () => {
     const lost = { ...mPost, customized: true, body: 'Only my words.' };
     expect(restoredTail(view([bPost, lost]), lost)).toEqual([`Sign up here: ${MURL}`, '#soldering #sf']);
+  });
+});
+
+describe('a partly scheduled section (#0624)', () => {
+  const TIME = '2026-10-17T20:00:00Z';
+  const three = [ch('bluesky', true, true), ch('mastodon', true, true), ch('threads', true, true)];
+  const sched = (over: Partial<OutreachPost> = {}) => post({ status: 'scheduled', scheduled_at: TIME, ...over });
+  const text = (channels: OutreachChannel[], posts: OutreachPost[]) => waveRowStatus({ channels, waves, posts }, 'announce').text;
+  it('says how many are not scheduled beside the time', () => {
+    expect(text(channels, [sched(), post({ id: 2, channel: 'mastodon' })])).toMatch(/^Posts automatically .+ · 1 not scheduled$/);
+  });
+  it('adds it after the posted count', () => {
+    expect(text(three, [sched(), post({ id: 2, channel: 'mastodon', status: 'posted', posted_at: TIME }), post({ id: 3, channel: 'threads' })]))
+      .toMatch(/^Posts automatically .+ · posted 1 of 3 · 1 not scheduled$/);
+  });
+  it('adds it to an on hold section', () => {
+    expect(text(channels, [sched({ held: true }), post({ id: 2, channel: 'mastodon' })])).toMatch(/^Scheduled .+ · on hold until the event is published · 1 not scheduled$/);
+  });
+  it('does not read as fully posted when a channel has no post', () => {
+    expect(text(channels, [post({ status: 'posted', posted_at: TIME })])).toMatch(/^Posted .+ · 1 not scheduled$/);
+  });
+  it('adds nothing when every channel is scheduled', () => {
+    expect(text(channels, [sched(), sched({ id: 2, channel: 'mastodon' })])).not.toContain('not scheduled');
+  });
+  it("leaves an unscheduled section's wording alone", () => {
+    expect(text(channels, [post({}), post({ id: 2, channel: 'mastodon' })])).toBe('Drafted · not scheduled');
+  });
+  it('the strip and the board row give the same count', () => {
+    const v = { channels, waves, posts: [sched({ wave: 'reminder' }), post({ id: 2, channel: 'mastodon', wave: 'reminder' })] };
+    const note = boardRows(v)[1].note;
+    expect(note).not.toBe('');
+    expect(waveStrip(v, 'reminder').text.endsWith(note)).toBe(true);
+  });
+});
+
+describe('waveExcerpt (#0624)', () => {
+  it("takes the first written post's message on one line, without hashtags or link lines", () => {
+    expect(waveExcerpt(view([mPost]), 'announce')).toBe('Join us for Soldering 101. Learn to solder.');
+  });
+  it('still shows a post that has gone out', () => {
+    expect(waveExcerpt(view([post({ status: 'posted' })]), 'announce')).toBe('Join us for Soldering 101. Learn to solder.');
+  });
+  it('shortens long text with an ellipsis without splitting an emoji', () => {
+    const out = waveExcerpt(view([post({ body: '🔌'.repeat(100) })]), 'announce');
+    expect(Array.from(out)).toHaveLength(80);
+    expect(out.endsWith('🔌…')).toBe(true);
+  });
+  it('is empty for a section with no posts', () => {
+    expect(waveExcerpt(view([bPost]), 'reminder')).toBe('');
   });
 });

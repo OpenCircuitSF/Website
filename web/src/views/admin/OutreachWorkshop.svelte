@@ -1,5 +1,5 @@
 <!--
-  One workshop's outreach page (#0568, #0582): header, then a summary line, the
+  One workshop's outreach page (#0568, #0582): header, then the status board, the
   Announcement (one message, how it will look, one post button), Reminder and
   Final as collapsed rows, Schedule all, then "Post by hand", Flyers and
   "Links and clicks" as collapsed rows with a status and one action each. The
@@ -13,6 +13,7 @@
   import type { FlyerRow, OutreachPost, WorkshopOutreach } from '../../lib/types';
   import Panel from '../../lib/Panel.svelte';
   import OutreachPanel from './OutreachPanel.svelte';
+  import OutreachStatusBoard from './OutreachStatusBoard.svelte';
   import OutreachAnnouncement from './OutreachAnnouncement.svelte';
   import OutreachWaveRow from './OutreachWaveRow.svelte';
   import OutreachBulkActions from './OutreachBulkActions.svelte';
@@ -21,7 +22,7 @@
   import Button from '../../lib/Button.svelte';
   import { onMount } from 'svelte';
   import { resetOutreach, listOutreachFlyers, ApiError } from '../../lib/api';
-  import { flyerLinkFor, sendsItself, summaryLine } from '../../lib/outreachCards';
+  import { flyerLinkFor, sendsItself } from '../../lib/outreachCards';
   import { manualRowStatus } from '../../lib/outreachMessage';
   import { linkReportMessage } from '../../lib/outreachLinks';
   import { resultsSummaryLine } from '../../lib/outreachResults';
@@ -110,7 +111,7 @@
   <OutreachPanel {workshopId} {reloadKey} {onLoaded} onNotFound={() => (notFound = true)} autoStart>
     {#snippet body({ view: v, results, onChange: panelChange })}
       {@const onChange = (p: OutreachPost) => { changed(); panelChange(p); }}
-      <p class="summary">{summaryLine(v, results)}</p>
+      <OutreachStatusBoard view={v} />
       <OutreachAnnouncement view={v} {results} wave="announce" {workshopId} {onChange} reload={reloadAfterChange} />
       {#each v.waves.filter((w) => w.name !== 'announce') as w (w.name)}
         <OutreachWaveRow view={v} {results} wave={w} {workshopId} {onChange} reload={reloadAfterChange} />
@@ -157,9 +158,6 @@
     font-size: var(--fs-lg);
     margin: 0;
     overflow-wrap: anywhere;
-  }
-  .summary {
-    font-weight: 600;
   }
   .row-details {
     border-top: var(--border-w) solid var(--border);

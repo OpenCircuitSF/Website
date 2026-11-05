@@ -1,7 +1,6 @@
 <!--
-  The workshop editor's outreach summary (#0568): one line of state (the same
-  summaryLine as the outreach page, never the campaign slug, #0582) and a
-  prominent link to the workshop's outreach page.
+  The workshop editor's outreach summary (#0568): one line of state
+  (summaryLine, never the campaign slug, #0582) and a prominent link to the workshop's outreach page.
 -->
 <script lang="ts">
   import { untrack } from 'svelte';

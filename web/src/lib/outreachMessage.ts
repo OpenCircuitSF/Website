@@ -2,7 +2,7 @@
 // Message field, how it is written into every automatic post, and the status
 // text of the collapsed wave rows. No DOM, so it is unit-testable.
 import { LINK_TOKEN, countCharacters, defaultScheduleAt, isOverLimit } from './outreach';
-import { sendsItself, weekdayTime } from './outreachCards';
+import { notScheduledNote, sendsItself, weekdayTime } from './outreachCards';
 import type { OutreachChannel, OutreachPost, WorkshopOutreach } from './types';
 
 type View = Pick<WorkshopOutreach, 'channels' | 'waves' | 'posts'>;
@@ -116,6 +116,18 @@ export function sharedMessage(view: View, wave: string): string {
   return first ? splitBody(first.post.body, first.post.short_url).message : '';
 }
 
+/** The start of what a wave says, on one line: the first written post's message, in the server's channel order. */
+export function waveExcerpt(view: Pick<View, 'channels' | 'posts'>, wave: string, max = 80): string {
+  for (const channel of view.channels) {
+    const post = view.posts.find((p) => p.channel === channel.name && p.wave === wave);
+    if (!post) continue;
+    const chars = Array.from(splitBody(post.body, post.short_url).message.replace(/\s+/g, ' ').trim());
+    if (chars.length === 0) continue;
+    return chars.length > max ? `${chars.slice(0, max - 1).join('').trimEnd()}…` : chars.join('');
+  }
+  return '';
+}
+
 export interface SavePlanItem {
   post: OutreachPost;
   channel: OutreachChannel;
@@ -144,6 +156,8 @@ export function waveRowStatus(view: View, wave: string, now: Date = new Date()):
   const ahead = suggested ? ` · suggested ${weekdayTime(suggested)}` : '';
   const inWave = view.posts.filter((p) => p.wave === wave);
   if (inWave.length === 0) return { text: `Not written · not scheduled${ahead}`, action: 'write' };
+  const note = notScheduledNote(view, wave);
+  const rest = note ? ` · ${note}` : '';
   const auto = inWave.filter((p) => {
     const ch = view.channels.find((c) => c.name === p.channel);
     return ch ? sendsItself(ch) : false;
@@ -152,18 +166,18 @@ export function waveRowStatus(view: View, wave: string, now: Date = new Date()):
   const posted = postedPosts.length;
   const newest = postedPosts.map((p) => p.posted_at).filter((t): t is string => t !== null).sort().pop();
   const when = newest ? weekdayTime(newest) : '';
-  if (auto.length > 0 && posted === auto.length) return { text: when ? `Posted ${when}` : `Posted ${posted} of ${auto.length}`, action: 'open' };
+  if (auto.length > 0 && posted === auto.length) return { text: `${when ? `Posted ${when}` : `Posted ${posted} of ${auto.length}`}${rest}`, action: 'open' };
   if (auto.some((p) => p.status === 'queued')) return { text: 'Posting now…', action: 'open' };
   if (auto.some((p) => p.status === 'failed')) return { text: 'Drafted · a post failed', action: 'open' };
   const times = auto.filter((p) => p.status === 'scheduled' && p.scheduled_at).map((p) => p.scheduled_at as string).sort();
   if (times.length > 0) {
     const first = weekdayTime(times[0]);
-    if (auto.some((p) => p.held)) return { text: `Scheduled ${first} · on hold until the event is published`, action: 'open' };
+    if (auto.some((p) => p.held)) return { text: `Scheduled ${first} · on hold until the event is published${rest}`, action: 'open' };
     const from = times[0] !== times[times.length - 1] ? 'from ' : '';
     const count = posted > 0 ? ` · posted ${posted} of ${auto.length}` : '';
-    return { text: `Posts automatically ${from}${first}${count}`, action: 'open' };
+    return { text: `Posts automatically ${from}${first}${count}${rest}`, action: 'open' };
   }
-  if (posted > 0) return { text: `Posted ${posted} of ${auto.length}${when ? ` · ${when}` : ''}`, action: 'open' };
+  if (posted > 0) return { text: `Posted ${posted} of ${auto.length}${when ? ` · ${when}` : ''}${rest}`, action: 'open' };
   return { text: `Drafted · not scheduled${ahead}`, action: 'open' };
 }
 

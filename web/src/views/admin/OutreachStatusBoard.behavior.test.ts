@@ -1,0 +1,104 @@
+// @vitest-environment jsdom
+//
+// #0624: mounts the status board under jsdom. jsdom is not a browser
+// (AGENTS.md §1): structure and words are real, layout is not.
+import { cleanup, render, screen, within } from '@testing-library/svelte';
+import { afterEach, describe, expect, it } from 'vitest';
+import OutreachStatusBoard from './OutreachStatusBoard.svelte';
+import { weekdayTime } from '../../lib/outreachCards';
+import type { OutreachChannel, OutreachPost, WorkshopOutreach } from '../../lib/types';
+
+afterEach(cleanup);
+
+const TIME = '2026-11-20T18:00:00Z';
+const ch = (name: string, label: string, automatic: boolean): OutreachChannel => ({
+  name, label, utm_source: name, utm_medium: 'social', char_limit: 0, automatic, configured: automatic, account: '',
+});
+const channels = [ch('bluesky', 'Bluesky', true), ch('mastodon', 'Mastodon', true), ch('instagram', 'Instagram', false), ch('tiktok', 'TikTok', false), ch('youtube_shorts', 'YouTube Shorts', false)];
+const waves = [
+  { name: 'announce', label: 'Announce', suggested_at: null },
+  { name: 'reminder', label: 'Reminder', suggested_at: null },
+  { name: 'last-call', label: 'Final', suggested_at: null },
+];
+let nextId = 1;
+function post(channel: string, wave: string, over: Partial<OutreachPost> = {}): OutreachPost {
+  return {
+    id: nextId++, outreach_id: 9, channel, wave, body: 'Hello', status: 'draft', prepared: true, stale: false, customized: false, held: false,
+    short_link_key: 'k', short_url: 'https://go.example/k', destination_url: 'https://x', utm: { source: '', medium: '', campaign: '', content: '' },
+    scheduled_at: null, posted_at: null, remote_url: null, last_error: null, created_at: '', updated_at: null, ...over,
+  };
+}
+function view(posts: OutreachPost[]): WorkshopOutreach {
+  return {
+    available: true, unavailable_reason: '',
+    workshop: { id: 5, slug: 's', title: 'S', status: 'published', starts_at: TIME },
+    outreach: { id: 9, workshop_id: 5, campaign_slug: 's', created_at: '' },
+    channels, waves, posts,
+  } as WorkshopOutreach;
+}
+const cell = (c: HTMLElement, wave: string, channel: string) =>
+  c.querySelector(`tr[data-wave="${wave}"] td[data-channel="${channel}"]`) as HTMLElement;
+
+describe('OutreachStatusBoard (#0624)', () => {
+  it('has a row for each section and a column for each channel', () => {
+    render(OutreachStatusBoard, { view: view([]) });
+    const table = screen.getByRole('table', { name: 'Posts and when they go out' });
+    expect(within(table).getAllByRole('rowheader')).toHaveLength(3);
+    expect(within(table).getAllByRole('columnheader')).toHaveLength(6);
+  });
+  it("states each cell's channel, status and time in text", () => {
+    const { container } = render(OutreachStatusBoard, { view: view([post('bluesky', 'announce', { status: 'scheduled', scheduled_at: TIME })]) });
+    const text = cell(container, 'announce', 'bluesky').textContent ?? '';
+    expect(text).toContain('Bluesky');
+    expect(text).toContain('Scheduled');
+    expect(text).toContain(weekdayTime(TIME));
+  });
+  it('gives each hand-posted platform its own state', () => {
+    const { container } = render(OutreachStatusBoard, {
+      view: view([post('tiktok', 'announce', { status: 'posted', posted_at: TIME }), post('youtube_shorts', 'announce', { status: 'manual' })]),
+    });
+    expect(cell(container, 'announce', 'tiktok').querySelector('.board-status')?.textContent).toBe('Posted');
+    expect(cell(container, 'announce', 'youtube_shorts').querySelector('.board-status')?.textContent).toBe('Post by hand');
+  });
+  it('says 1 not scheduled on a partly scheduled row and nothing on a fully scheduled one', () => {
+    const sched = { status: 'scheduled', scheduled_at: TIME } as const;
+    const { container } = render(OutreachStatusBoard, {
+      view: view([post('bluesky', 'reminder', sched), post('mastodon', 'reminder'), post('bluesky', 'announce', sched), post('mastodon', 'announce', sched)]),
+    });
+    expect(container.querySelector('tr[data-wave="reminder"] .board-note')?.textContent).toBe('1 not scheduled');
+    expect(container.querySelector('tr[data-wave="announce"] .board-note')).toBeNull();
+  });
+  it('labels the third row Final', () => {
+    const { container } = render(OutreachStatusBoard, { view: view([]) });
+    const row = container.querySelectorAll('tbody tr')[2];
+    expect(row.querySelector('.board-ordinal')?.textContent).toBe('3');
+    expect(row.querySelector('.board-label')?.textContent).toBe('Final');
+  });
+  it('changes when the view changes', async () => {
+    const { container, rerender } = render(OutreachStatusBoard, { view: view([]) });
+    expect(cell(container, 'announce', 'bluesky').querySelector('.board-status')?.textContent).toBe('Not written');
+    await rerender({ view: view([post('bluesky', 'announce', { status: 'posted', posted_at: TIME })]) });
+    expect(cell(container, 'announce', 'bluesky').querySelector('.board-status')?.textContent).toBe('Posted');
+  });
+  it('gives every cell a status in words, whatever its kind', () => {
+    const { container } = render(OutreachStatusBoard, {
+      view: view([
+        post('bluesky', 'announce', { status: 'posted', posted_at: TIME }),
+        post('mastodon', 'announce', { status: 'scheduled', scheduled_at: TIME }),
+        post('bluesky', 'reminder', { status: 'scheduled', scheduled_at: TIME, held: true }),
+        post('mastodon', 'reminder'),
+        post('bluesky', 'last-call', { status: 'failed' }),
+        post('mastodon', 'last-call', { status: 'queued' }),
+        post('instagram', 'announce', { status: 'manual' }),
+      ]),
+    });
+    const kinds = new Set<string>();
+    const cells = container.querySelectorAll<HTMLElement>('td[data-kind]');
+    expect(cells).toHaveLength(15);
+    for (const td of cells) {
+      kinds.add(td.dataset.kind as string);
+      expect(td.querySelector('.board-status')?.textContent?.trim()).toBeTruthy();
+    }
+    expect([...kinds].sort()).toEqual(['failed', 'manual', 'not_drafted', 'not_scheduled', 'on_hold', 'posted', 'queued', 'scheduled']);
+  });
+});

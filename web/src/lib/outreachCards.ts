@@ -72,6 +72,67 @@ export function statusLine(post: OutreachPost | null, channel: Pick<OutreachChan
   return { kind: 'not_scheduled', text: 'Not scheduled', href: null };
 }
 
+export interface BoardCell {
+  channel: string;
+  channelLabel: string;
+  kind: StatusKind;
+  /** The state in words: never empty, so colour is never the only cue. */
+  status: string;
+  /** The date and time where there is one, else a short qualifier or null. */
+  detail: string | null;
+}
+export interface BoardRow {
+  wave: string;
+  ordinal: number;
+  label: string;
+  /** "1 not scheduled" on a partly scheduled row, else empty. */
+  note: string;
+  cells: BoardCell[];
+}
+
+const when = (iso: string | null | undefined): string | null => (iso ? weekdayTime(iso) : null);
+
+/** One post's cell on the status board. */
+export function boardCell(post: OutreachPost | null, channel: OutreachChannel): BoardCell {
+  const kind = statusLine(post, channel).kind;
+  const words: Record<StatusKind, [string, string | null]> = {
+    posted: ['Posted', when(post?.posted_at)],
+    scheduled: ['Scheduled', when(post?.scheduled_at)],
+    on_hold: ['On hold', when(post?.scheduled_at)],
+    queued: ['Posting now', null],
+    failed: ['Failed', null],
+    not_scheduled: ['Draft', 'Not scheduled'],
+    manual: ['Post by hand', null],
+    not_drafted: ['Not written', null],
+  };
+  const [status, detail] = words[kind];
+  return { channel: channel.name, channelLabel: channel.label, kind, status, detail };
+}
+
+/**
+ * "2 not scheduled" when part of a wave is out or on its way and some of the
+ * channels that post themselves are not: no post yet, or a post with no time.
+ * Empty when nothing has gone out or been scheduled, since the wave's own
+ * status already says that, and when a post has failed or is sending only.
+ */
+export function notScheduledNote(view: Pick<WorkshopOutreach, 'channels' | 'posts'>, wave: string): string {
+  const own = view.channels.filter(sendsItself).map((c) => view.posts.find((p) => p.channel === c.name && p.wave === wave) ?? null);
+  const under = own.filter((p) => p === null || p.status === 'draft' || p.status === 'manual').length;
+  const started = own.some((p) => p !== null && (p.status === 'scheduled' || p.status === 'posted'));
+  return under > 0 && started ? `${under} not scheduled` : '';
+}
+
+/** The status board: one row per wave, one cell per channel, in the server's order. */
+export function boardRows(view: Pick<WorkshopOutreach, 'channels' | 'waves' | 'posts'>): BoardRow[] {
+  return groupByWave(view).map(({ wave, cards }, i) => ({
+    wave: wave.name,
+    ordinal: i + 1,
+    label: wave.label,
+    note: notScheduledNote(view, wave.name),
+    cells: cards.map((c) => boardCell(c.post, c.channel)),
+  }));
+}
+
 export interface CardButtons {
   edit: boolean;
   postNow: boolean;

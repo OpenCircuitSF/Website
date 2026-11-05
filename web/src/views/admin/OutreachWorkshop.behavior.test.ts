@@ -7,6 +7,7 @@
 import { render, cleanup, waitFor, screen, fireEvent, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
+import { weekdayTime } from '../../lib/outreachCards';
 
 const getWorkshopOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const getWorkshopOutreachResults = vi.fn<(id: number) => Promise<OutreachResults>>();
@@ -77,11 +78,11 @@ describe('OutreachWorkshop', () => {
     expect(screen.getByRole('link', { name: 'All outreach' }).getAttribute('href')).toBe('#/outreach');
   });
 
-  it('orders summary, Announcement, wave rows, Schedule all, Post by hand, Flyers, Links and clicks (#0582)', async () => {
+  it('orders the status board, Announcement, wave rows, Schedule all, Post by hand, Flyers, Links and clicks (#0624)', async () => {
     getWorkshopOutreach.mockResolvedValue(view({ waves: allWaves }));
     getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);
     render(OutreachWorkshop, { workshopId: 5 });
-    const summary = await screen.findByText('No posts yet. Start with the announcement.', { selector: 'p.summary' });
+    const board = await screen.findByRole('table', { name: 'Posts and when they go out' });
     const announcement = await screen.findByRole('heading', { name: /Announce/ });
     const reminder = await screen.findByText('Reminder', { selector: 'strong' });
     const lastCall = await screen.findByText('Final', { selector: 'strong' });
@@ -90,11 +91,32 @@ describe('OutreachWorkshop', () => {
     const flyers = await screen.findByText('Flyers', { selector: 'strong' });
     const links = await screen.findByText('Links and clicks', { selector: 'strong' });
     const results = await screen.findByRole('link', { name: 'View results' });
-    const order = [summary, announcement, reminder, lastCall, schedule, byHand, flyers, links, results];
+    const order = [board, announcement, reminder, lastCall, schedule, byHand, flyers, links, results];
     for (let i = 0; i < order.length - 1; i++) {
       expect(order[i].compareDocumentPosition(order[i + 1]) & Node.DOCUMENT_POSITION_FOLLOWING, `element ${i}`).toBeTruthy();
     }
     expect(screen.getByRole('link', { name: 'Open flyers' }).getAttribute('href')).toMatch(/flyers/);
+  });
+
+  it('shows the status board in place of the summary line (#0624)', async () => {
+    const at = '2026-11-20T18:00:00Z';
+    getWorkshopOutreach.mockResolvedValue(view({
+      channels: [...channels, { name: 'instagram', label: 'Instagram', utm_source: 'instagram', utm_medium: 'social', char_limit: 0, automatic: false, configured: false, account: '' }],
+      waves: allWaves,
+      posts: [{
+        id: 1, outreach_id: 9, channel: 'bluesky', wave: 'announce', body: 'Hello', status: 'scheduled', prepared: true, stale: false, customized: false, held: false,
+        short_link_key: 'k', short_url: 'https://go.example/k', destination_url: 'https://x', utm: { source: '', medium: '', campaign: '', content: '' },
+        scheduled_at: at, posted_at: null, remote_url: null, last_error: null, created_at: '', updated_at: null,
+      }],
+    }));
+    getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);
+    const { container } = render(OutreachWorkshop, { workshopId: 5 });
+    const board = await screen.findByRole('table', { name: 'Posts and when they go out' });
+    expect(container.querySelector('p.summary')).toBeNull();
+    expect(within(board).getByRole('columnheader', { name: 'Instagram' })).toBeTruthy();
+    const details = (await screen.findByText('Post by hand', { selector: 'strong' })).closest('details') as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    expect(board.querySelector('tr[data-wave="announce"] td[data-channel="bluesky"]')?.textContent).toContain(weekdayTime(at));
   });
 
   it('has no tracked-links table, Draft all or Start outreach on the page (#0582)', async () => {
