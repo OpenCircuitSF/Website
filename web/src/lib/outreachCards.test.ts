@@ -252,6 +252,10 @@ describe('boardCell (#0624)', () => {
     expect(mixed[0].line.kind).toBe('mixed');
     expect(mixed[0].cells.map((c) => c.detail)).toEqual([weekdayTime(TIME), null]);
   });
+  it('a scheduled cell on a switched-off channel keeps its time; on an on channel it defers to the row (#0628, #0640)', () => {
+    expect(boardCell(post({ status: 'scheduled', scheduled_at: TIME }), auto, true, false).detail).toBe(weekdayTime(TIME));
+    expect(boardCell(post({ status: 'scheduled', scheduled_at: TIME }), auto, false, false).detail).toBeNull();
+  });
   it('says failed and posting now with no time', () => {
     expect(boardCell(post({ status: 'failed' }), auto)).toMatchObject({ status: 'Failed', detail: null });
     expect(boardCell(post({ status: 'queued' }), auto)).toMatchObject({ status: 'Posting now', detail: null });

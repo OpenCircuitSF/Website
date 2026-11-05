@@ -117,14 +117,14 @@ const when = (iso: string | null | undefined): string | null => (iso ? weekdayTi
 
 /** One post's cell on the status board. A scheduled or automatic posted cell
  * names its time only when the row's line does not already say it (`showTime`,
- * #0640); a hand-posted cell always does, and so does a posted cell on a
- * switched-off channel, which the row's line does not count. */
+ * #0640); a hand-posted cell always does, and so does a posted or scheduled
+ * cell on a switched-off channel, which the row's line does not count. */
 export function boardCell(post: OutreachPost | null, channel: OutreachChannel, off = false, showTime = true): BoardCell {
   if (off && post === null) return { channel: channel.name, channelLabel: boardChannelLabel(channel.label, true), kind: 'off', status: 'Off', detail: null };
   const kind = statusLine(post, channel).kind;
   const words: Record<StatusKind, [string, string | null]> = {
     posted: ['Posted', showTime || off || !sendsItself(channel) ? when(post?.posted_at) : null],
-    scheduled: ['Scheduled', showTime ? when(post?.scheduled_at) : null],
+    scheduled: ['Scheduled', showTime || off ? when(post?.scheduled_at) : null],
     on_hold: ['On hold', when(post?.scheduled_at)],
     queued: ['Posting now', null],
     failed: ['Failed', null],

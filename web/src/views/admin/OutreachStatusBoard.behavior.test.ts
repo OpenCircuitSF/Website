@@ -185,6 +185,7 @@ describe('OutreachStatusBoard with a switched-off channel', () => {
     expect(posted.querySelector('.board-detail')!.textContent).toBe(weekdayTime(TIME));
     const scheduled = cell(container, 'reminder', 'bluesky');
     expect(scheduled.querySelector('.board-status')!.textContent).toBe('Scheduled');
+    expect(scheduled.querySelector('.board-detail')!.textContent).toBe(weekdayTime(TIME));
     expect(line(container)!.textContent).toContain('Posts already scheduled there still go out.');
   });
   it('links the line to the Outreach part of Settings (#0628)', () => {
