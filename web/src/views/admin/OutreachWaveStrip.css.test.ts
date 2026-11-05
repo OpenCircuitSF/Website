@@ -25,6 +25,14 @@ describe('the pinned strip (#0622)', () => {
     expect(read('OutreachWaveRow.svelte')).toContain('<div class="wave-pin row-head">');
     expect(read('OutreachAnnouncement.svelte')).not.toContain('wave-pin');
   });
+  it('the failed-reload banner pins above the strip, so it stays on screen (#0625)', () => {
+    const rule = /\.reload-banner\s*\{([^}]*)\}/.exec(styleOf(read('OutreachPanel.svelte')))?.[1] ?? '';
+    const pin = /\.wave-pin\s*\{([^}]*)\}/.exec(read('../../app.css'))?.[1] ?? '';
+    expect(rule).toMatch(/position:\s*sticky/);
+    expect(rule).toMatch(/top:\s*0/);
+    expect(rule).toMatch(/background:\s*var\(--bg-panel\)/);
+    expect(Number(/z-index:\s*(\d+)/.exec(rule)?.[1])).toBeGreaterThan(Number(/z-index:\s*(\d+)/.exec(pin)?.[1]));
+  });
   it('the scroll margin clears the tallest strip (#0625)', () => {
     expect(read('../../app.css')).toMatch(/\.wave-section[^{]*\{\s*scroll-margin-top:\s*5\.5rem/);
   });

@@ -505,6 +505,42 @@ describe('one open section (#0625)', () => {
     expect(row.querySelector('.unsaved-note')?.textContent).toBe('');
   });
 
+  it('a failed reload keeps the page and typed text on screen, and Retry recovers (#0625)', async () => {
+    const v = fullView([], { can_reset: true });
+    const board = await mount(v);
+    const field = panel('announce').querySelector('textarea') as HTMLTextAreaElement;
+    await fireEvent.input(field, { target: { value: 'My unsaved words' } });
+    resetOutreach.mockResolvedValue(v);
+    getWorkshopOutreach.mockRejectedValue(new Error('network'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Reset outreach' }));
+    const dialog = await screen.findByRole('dialog');
+    [...dialog.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Reset outreach')!.click();
+    await screen.findByRole('button', { name: 'Retry' });
+    expect(field.isConnected).toBe(true);
+    expect(field.value).toBe('My unsaved words');
+    expect(board.isConnected).toBe(true);
+    getWorkshopOutreach.mockResolvedValue(v);
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull());
+    expect(field.isConnected).toBe(true);
+    expect(field.value).toBe('My unsaved words');
+  });
+
+  it('a section removed by a reload stops saying it is not saved (#0625)', async () => {
+    const v = fullView([], { can_reset: true });
+    const board = await mount(v);
+    await fireEvent.input(panel('reminder').querySelector('textarea') as HTMLTextAreaElement, { target: { value: 'Typed' } });
+    expect(board.querySelector('tr[data-wave="reminder"] .board-row-head')?.textContent).toContain('Not saved yet');
+    resetOutreach.mockResolvedValue(v);
+    getWorkshopOutreach.mockResolvedValue({ ...v, posts: [] });
+    await fireEvent.click(screen.getByRole('button', { name: 'Reset outreach' }));
+    const dialog = await screen.findByRole('dialog');
+    [...dialog.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Reset outreach')!.click();
+    await waitFor(() => expect(panel('reminder').querySelector('textarea')).toBeNull());
+    await waitFor(() => expect(board.querySelector('tr[data-wave="reminder"] .board-row-head')?.textContent).not.toContain('Not saved yet'));
+    expect(document.querySelector('#outreach-section-reminder .unsaved-note')?.textContent).toBe('');
+  });
+
   it('Reset outreach goes back to the first section (#0625)', async () => {
     const board = await mount(fullView([], { can_reset: true }));
     resetOutreach.mockResolvedValue(fullView([], { can_reset: true }));

@@ -81,6 +81,7 @@
   $effect(() => {
     const u = unsaved;
     untrack(() => onUnsavedChange?.(u));
+    return () => untrack(() => onUnsavedChange?.(false));
   });
   const anyOver = $derived(plan.some((i) => i.over));
   const canSave = $derived(dirty && plan.length > 0 && trimmed !== '' && !anyOver);

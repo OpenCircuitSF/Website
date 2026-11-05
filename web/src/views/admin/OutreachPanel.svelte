@@ -11,6 +11,11 @@
   read-only. Status text goes through always-rendered role="status" /
   role="alert" elements whose content changes, per the live-region convention
   WorkshopEditor.svelte describes.
+
+  A failed reload of the workshop already on screen keeps the body mounted, so
+  typed text survives (#0625). The banner above it stays pinned to the window
+  and stays up until a load succeeds, so the page never passes for current: the
+  button that caused the reload can be a long way below the top of the panel.
 -->
 <script lang="ts">
   import { untrack, type Snippet } from 'svelte';
@@ -49,6 +54,13 @@
   // only sets a status line and never hides the page.
   let results = $state<OutreachResults | null>(null);
   let resultsError = $state<string | null>(null);
+
+  // #0625: only when the body below is this workshop's, shown from an earlier load.
+  const reloadError = $derived(
+    loadError && view?.workshop.id === workshopId
+      ? `${loadError} What is below may be out of date. Anything you typed is still here.`
+      : '',
+  );
 
   const resultsLine = $derived(
     resultsError ?? (results && results.status !== 'not_started' ? (resultsStatusMessage(results.status) ?? '') : ''),
@@ -100,13 +112,15 @@
   }
 
   async function load(): Promise<void> {
-    loadError = null;
     notFound = false;
     try {
       view = await getWorkshopOutreach(workshopId);
+      // Cleared only now, so a Retry in flight does not pass the old page off as current.
+      loadError = null;
       onLoaded?.(view);
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
+        loadError = null;
         notFound = true;
         onNotFound?.();
       } else {
@@ -146,6 +160,7 @@
   async function refreshQuietly(): Promise<void> {
     try {
       view = await getWorkshopOutreach(workshopId);
+      loadError = null;
       onLoaded?.(view);
     } catch {
       /* keep what is on screen */
@@ -170,6 +185,7 @@
     startError = null;
     try {
       view = await startOutreach(workshopId);
+      loadError = null;
       onLoaded?.(view);
       if (view.outreach) await loadResults();
     } catch (err) {
@@ -192,12 +208,16 @@
 </script>
 
 <div class="outreach">
+  <div class="reload-banner">
+    <p class="text-error reload-error" role="alert">{reloadError}</p>
+    {#if reloadError}<p class="reload-retry"><Button onclick={load}>Retry</Button></p>{/if}
+  </div>
   {#if loading}
     <p class="text-muted">Loading outreach…</p>
   {:else if notFound}
     <!-- The page around this panel says so when it passes onNotFound; there is nothing to retry. -->
     {#if !onNotFound}<p class="text-muted">This event no longer exists.</p>{/if}
-  {:else if loadError}
+  {:else if loadError && view?.workshop.id !== workshopId}
     <p class="text-error">{loadError}</p>
     <Button onclick={load}>Retry</Button>
   {:else if view}
@@ -231,6 +251,25 @@
 </div>
 
 <style>
+  /* Above .wave-pin, which pins to the same edge of the window. Empty, it has no height. */
+  .reload-banner {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--bg-panel);
+  }
+  .reload-error {
+    margin: 0;
+    padding-top: var(--space-2);
+  }
+  .reload-error:empty {
+    display: none;
+  }
+  .reload-retry {
+    margin: 0;
+    padding: var(--space-1) 0 var(--space-2);
+    border-bottom: var(--border-w) solid var(--border);
+  }
   .results-status:empty,
   .hand-link-status:empty {
     display: none;

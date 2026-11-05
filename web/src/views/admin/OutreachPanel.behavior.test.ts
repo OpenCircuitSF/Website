@@ -256,3 +256,83 @@ describe('OutreachPanel', () => {
     await waitFor(() => expect(onLoaded).toHaveBeenCalledTimes(2));
   });
 });
+
+describe('OutreachPanel: a failed reload (#0625)', () => {
+  const alertText = () => screen.getAllByRole('alert').map((a) => a.textContent).join('');
+
+  async function failedReload(): Promise<void> {
+    getWorkshopOutreach.mockResolvedValue(view());
+    getWorkshopOutreachResults.mockResolvedValue(resultsFor());
+    const { rerender } = render(OutreachPanel, { workshopId: 5, reloadKey: 0, body });
+    await screen.findByText(/BODY/);
+    getWorkshopOutreach.mockRejectedValue(new Error('network'));
+    await rerender({ workshopId: 5, reloadKey: 1, body });
+    await screen.findByRole('button', { name: 'Retry' });
+  }
+
+  it('announces the failure and says the page may be out of date (#0625)', async () => {
+    await failedReload();
+    expect(alertText()).toContain('Could not load outreach. Please try again.');
+    expect(alertText()).toContain('may be out of date');
+    expect(screen.getByText(/BODY/)).toBeTruthy();
+  });
+
+  it('keeps the warning up while Retry is in flight, and clears it on success (#0625)', async () => {
+    await failedReload();
+    let finish!: (v: WorkshopOutreach) => void;
+    getWorkshopOutreach.mockReturnValue(new Promise((r) => { finish = r; }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(alertText()).toContain('may be out of date');
+    finish(view());
+    await waitFor(() => expect(alertText()).toBe(''));
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.getByText(/BODY/)).toBeTruthy();
+  });
+
+  it('keeps the warning when Retry fails again (#0625)', async () => {
+    await failedReload();
+    const calls = getWorkshopOutreach.mock.calls.length;
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(getWorkshopOutreach.mock.calls.length).toBe(calls + 1));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(alertText()).toContain('may be out of date');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+  });
+
+  it('a successful quiet refresh clears the warning, since the page is current again (#0625)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    getWorkshopOutreach.mockResolvedValue(view({ posts: [post({ status: 'queued' })] }));
+    getWorkshopOutreachResults.mockResolvedValue(resultsFor());
+    const { rerender } = render(OutreachPanel, { workshopId: 5, reloadKey: 0, body });
+    await vi.advanceTimersByTimeAsync(0);
+    getWorkshopOutreach.mockRejectedValueOnce(new Error('network'));
+    await rerender({ workshopId: 5, reloadKey: 1, body });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(alertText()).toContain('may be out of date');
+    const calls = getWorkshopOutreach.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(getWorkshopOutreach.mock.calls.length).toBeGreaterThan(calls);
+    expect(alertText()).toBe('');
+  });
+
+  it('a first load that fails shows the full-page error and no body (#0625)', async () => {
+    getWorkshopOutreach.mockRejectedValue(new Error('network'));
+    render(OutreachPanel, { workshopId: 5, body });
+    await screen.findByRole('button', { name: 'Retry' });
+    expect(screen.getByText('Could not load outreach. Please try again.')).toBeTruthy();
+    expect(screen.queryByText(/BODY/)).toBeNull();
+    expect(alertText()).toBe('');
+  });
+
+  it('never shows another workshop under the failure (#0625)', async () => {
+    getWorkshopOutreach.mockResolvedValue(view());
+    getWorkshopOutreachResults.mockResolvedValue(resultsFor());
+    const { rerender } = render(OutreachPanel, { workshopId: 5, body });
+    await screen.findByText(/BODY/);
+    getWorkshopOutreach.mockRejectedValue(new Error('network'));
+    await rerender({ workshopId: 6, body });
+    await screen.findByRole('button', { name: 'Retry' });
+    expect(screen.queryByText(/BODY/)).toBeNull();
+    expect(alertText()).toBe('');
+  });
+});
