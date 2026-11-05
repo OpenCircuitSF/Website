@@ -65,7 +65,7 @@ export const FIELD_LABELS: Record<string, { label: string; placeholder: string; 
   outreach_post_hour: {
     label: 'Suggested posting hour',
     placeholder: '10',
-    help: 'The hour of day (0 to 23, Pacific time) Reminder and Last call posts are suggested for.',
+    help: 'The hour of day (0 to 23, Pacific time) Reminder and Final posts are suggested for.',
   },
 };
 

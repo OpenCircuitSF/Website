@@ -47,7 +47,7 @@ function wo(over: Partial<WorkshopOutreach> = {}): WorkshopOutreach {
 
 const plan: OutreachScheduleAllResult = {
   dry_run: true,
-  to_schedule: [{ post_id: 11, channel: 'bluesky', channel_label: 'Bluesky', wave: 'last-call', wave_label: 'Last call', scheduled_at: '2026-12-04T18:00:00Z' }],
+  to_schedule: [{ post_id: 11, channel: 'bluesky', channel_label: 'Bluesky', wave: 'last-call', wave_label: 'Final', scheduled_at: '2026-12-04T18:00:00Z' }],
   skipped: [{ post_id: 10, channel: 'bluesky', channel_label: 'Bluesky', wave: 'reminder', wave_label: 'Reminder', reason: 'time_passed', suggested_at: '2026-11-28T18:00:00Z' }],
 };
 
@@ -56,7 +56,7 @@ describe('OutreachBulkActions', () => {
     render(OutreachBulkActions, { workshopId: 5, view: wo(), onDone: vi.fn() });
     expect(screen.queryByRole('button', { name: 'Draft all' })).toBeNull();
     expect(screen.queryByRole('checkbox', { name: 'Reminder' })).toBeNull();
-    expect(screen.queryByRole('checkbox', { name: 'Last call' })).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: 'Final' })).toBeNull();
     expect(screen.queryByText('Also draft')).toBeNull();
     expect(draftAllOutreach).not.toHaveBeenCalled();
   });
@@ -68,7 +68,7 @@ describe('OutreachBulkActions', () => {
     const dialog = await screen.findByRole('dialog');
     expect(scheduleAllOutreach).toHaveBeenCalledTimes(1);
     expect(scheduleAllOutreach).toHaveBeenCalledWith(5, { dry_run: true });
-    expect(dialog.textContent).toContain('Bluesky · Last call');
+    expect(dialog.textContent).toContain('Bluesky · Final');
     expect(dialog.textContent).toContain('Bluesky · Reminder');
     expect(dialog.textContent).toContain('time has passed');
     await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -81,8 +81,8 @@ describe('OutreachBulkActions', () => {
     const onDone = vi.fn();
     render(OutreachBulkActions, { workshopId: 5, view: wo(), onDone });
     await fireEvent.click(screen.getByRole('button', { name: 'Schedule all' }));
-    // A drafted Last call is already opted in (#0587): ticked by default.
-    expect((await within(await screen.findByRole('dialog')).findByRole('checkbox', { name: 'Last call' }) as HTMLInputElement).checked).toBe(true);
+    // A drafted Final is already opted in (#0587): ticked by default.
+    expect((await within(await screen.findByRole('dialog')).findByRole('checkbox', { name: 'Final' }) as HTMLInputElement).checked).toBe(true);
     await fireEvent.click(await screen.findByRole('button', { name: 'Schedule 1 post' }));
     await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
     expect(scheduleAllOutreach).toHaveBeenLastCalledWith(5, { dry_run: false, post_ids: [11] });
@@ -145,7 +145,7 @@ describe('OutreachBulkActions', () => {
     dry_run: true,
     to_schedule: [
       { post_id: 10, channel: 'bluesky', channel_label: 'Bluesky', wave: 'reminder', wave_label: 'Reminder', scheduled_at: '2099-11-28T01:00:00Z' },
-      { post_id: 11, channel: 'bluesky', channel_label: 'Bluesky', wave: 'last-call', wave_label: 'Last call', scheduled_at: '2099-12-04T01:00:00Z' },
+      { post_id: 11, channel: 'bluesky', channel_label: 'Bluesky', wave: 'last-call', wave_label: 'Final', scheduled_at: '2099-12-04T01:00:00Z' },
     ],
     skipped: [],
   };
@@ -159,7 +159,7 @@ describe('OutreachBulkActions', () => {
 
   it('names the waves in the heading and ticks them by default (#0587)', async () => {
     const d = await open();
-    expect(d.getByRole('heading', { name: 'Schedule the Reminder and Last call?' })).toBeTruthy();
+    expect(d.getByRole('heading', { name: 'Schedule the Reminder and Final?' })).toBeTruthy();
     expect((d.getByRole('checkbox', { name: 'Reminder' }) as HTMLInputElement).checked).toBe(true);
     expect(d.getByRole('button', { name: 'Schedule 2 posts' })).toBeTruthy();
   });
@@ -167,7 +167,7 @@ describe('OutreachBulkActions', () => {
   it('never offers Schedule 0 posts while rows are listed; unticking all hides the rows (#0587)', async () => {
     const d = await open();
     await fireEvent.click(d.getByRole('checkbox', { name: 'Reminder' }));
-    await fireEvent.click(d.getByRole('checkbox', { name: 'Last call' }));
+    await fireEvent.click(d.getByRole('checkbox', { name: 'Final' }));
     expect(d.queryByText(/Bluesky · Reminder/)).toBeNull();
     expect(d.queryByRole('button', { name: /Schedule 0 posts/ })).toBeNull();
     expect((d.getByRole('button', { name: 'Nothing chosen' }) as HTMLButtonElement).disabled).toBe(true);

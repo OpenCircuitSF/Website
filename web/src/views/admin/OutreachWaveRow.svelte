@@ -1,17 +1,17 @@
 <!--
-  A collapsed Reminder or Last call row on the workshop outreach page (#0582):
-  the wave's label, its suggested time and one status line, with the full
+  A collapsed Reminder or Final row on the workshop outreach page (#0582):
+  the pinned strip with its number, label and status (#0622), with the full
   message section (OutreachAnnouncement) inside once it is open. "Write it"
   sits beside the disclosure, not inside its summary, so it works while the row
   is collapsed: it drafts just this wave and then opens the row.
 -->
 <script lang="ts">
   import { draftAllOutreach, ApiError } from '../../lib/api';
-  import { weekdayTime } from '../../lib/outreachCards';
-  import { waveRowStatus } from '../../lib/outreachMessage';
+  import { waveStrip } from '../../lib/outreachMessage';
   import type { OutreachPost, OutreachResults, OutreachWave, WorkshopOutreach } from '../../lib/types';
   import Button from '../../lib/Button.svelte';
   import OutreachAnnouncement from './OutreachAnnouncement.svelte';
+  import OutreachWaveStrip from './OutreachWaveStrip.svelte';
 
   interface Props {
     view: WorkshopOutreach;
@@ -27,7 +27,7 @@
   let busy = $state(false);
   let errorText = $state('');
 
-  const status = $derived(waveRowStatus(view, wave.name));
+  const strip = $derived(waveStrip(view, wave.name));
 
   async function write(): Promise<void> {
     busy = true;
@@ -47,18 +47,14 @@
 <div class="wave-row">
   <div class="row-head">
     <details bind:open>
-      <summary>
-        <strong>{wave.label}</strong>
-        {#if wave.suggested_at}<span class="text-muted"> · {weekdayTime(wave.suggested_at)}</span>{/if}
-        <span class="text-muted"> · {status.text}</span>
-      </summary>
-      {#if status.action === 'open'}
+      <summary class="wave-pin"><OutreachWaveStrip {strip} /></summary>
+      {#if strip.action === 'open'}
         <OutreachAnnouncement {view} {results} wave={wave.name} {workshopId} {onChange} {reload} />
       {:else}
         <p class="text-muted">Nothing written for this one yet.</p>
       {/if}
     </details>
-    {#if status.action === 'write'}
+    {#if strip.action === 'write'}
       <Button onclick={write} disabled={busy || !view.available}>Write it</Button>
     {/if}
   </div>

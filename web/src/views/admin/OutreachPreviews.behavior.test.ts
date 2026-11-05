@@ -3,7 +3,7 @@
 // #0583: mounts the Bluesky and Mastodon previews under jsdom. jsdom is not a
 // browser (AGENTS.md section 1): the line clamp and the picture's real layout
 // are not proved here, only what the markup says.
-import { render, cleanup, screen } from '@testing-library/svelte';
+import { render, cleanup, fireEvent, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { OutreachChannel, OutreachPost } from '../../lib/types';
 import OutreachPostPreview from './OutreachPostPreview.svelte';
@@ -26,6 +26,18 @@ const workshop = (over: Record<string, unknown> = {}) => ({
 });
 
 describe('Bluesky preview', () => {
+  it('shows a Bluesky thumbnail and opens it full size', async () => {
+    const { container } = render(OutreachPostPreview, { view: { workshop: workshop(), thumb_ok: true }, channel: bsky, post: post({}) });
+    expect(container.querySelector('.cover.full')).toBeNull();
+    const open = screen.getByRole('button', { name: 'Full-size picture' });
+    expect(open.getAttribute('aria-expanded')).toBe('false');
+    await fireEvent.click(open);
+    expect(container.querySelector('.cover.full')).not.toBeNull();
+    const shrink = screen.getByRole('button', { name: 'Small picture' });
+    expect(shrink.getAttribute('aria-expanded')).toBe('true');
+    await fireEvent.click(shrink);
+    expect(container.querySelector('.cover.full')).toBeNull();
+  });
   it('styles hashtags and links, and draws the card with title, summary and short host', () => {
     const { container } = render(OutreachPostPreview, { view: { workshop: workshop(), thumb_ok: true }, channel: bsky, post: post({}) });
     expect(container.querySelector('.hashtag')?.textContent).toBe('#soldering');
@@ -56,6 +68,16 @@ describe('Bluesky preview', () => {
 });
 
 describe('Mastodon preview', () => {
+  it('keeps the ALT badge on the Mastodon thumbnail', () => {
+    const { container } = render(OutreachPostPreview, { view: { workshop: workshop({ cover_alt: 'A soldering iron' }) }, channel: mast, post: post({ channel: 'mastodon' }) });
+    expect(container.querySelector('.attachment .cover .alt-badge')?.textContent).toBe('ALT');
+    expect(container.querySelector('.cover.full')).toBeNull();
+  });
+  it('shows a thumbnail in the Mastodon link preview', () => {
+    const { container } = render(OutreachPostPreview, { view: { workshop: workshop() }, channel: mast, post: post({ channel: 'mastodon' }) });
+    expect(container.querySelector('.card .cover img')?.getAttribute('src')).toBe('/media/cover.png');
+    expect(screen.getByRole('button', { name: 'Full-size picture' })).toBeTruthy();
+  });
   const mPost = () => post({ id: 2, channel: 'mastodon', body: 'Sign up https://go.example/m #soldering' });
   it('styles links and hashtags and draws a link preview, falling back to the og image', () => {
     const { container } = render(OutreachPostPreview, { view: { workshop: workshop({ cover_image: null }) }, channel: mast, post: mPost() });

@@ -4,13 +4,15 @@
   interface Props {
     title?: string;
     noPadding?: boolean;
+    /** Lets a sticky child pin to the page: overflow hidden would make this panel its scroll container (#0622). */
+    pinnable?: boolean;
     children: Snippet;
   }
 
-  let { title = '', noPadding = false, children }: Props = $props();
+  let { title = '', noPadding = false, pinnable = false, children }: Props = $props();
 </script>
 
-<section class="panel">
+<section class="panel" class:pinnable>
   {#if title}
     <header class="panel-header">{title}</header>
   {/if}
@@ -26,6 +28,9 @@
     border-radius: var(--radius);
     margin-bottom: var(--space-4);
     overflow: hidden;
+  }
+  .panel.pinnable {
+    overflow: clip;
   }
   .panel-header {
     background: var(--bg-header);

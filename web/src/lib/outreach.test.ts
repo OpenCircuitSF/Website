@@ -123,7 +123,7 @@ describe('defaultScheduleAt', () => {
   const waves: OutreachWave[] = [
     { name: 'announce', label: 'Announce', suggested_at: null },
     { name: 'reminder', label: 'Reminder', suggested_at: '2026-11-28T18:00:00Z' },
-    { name: 'last-call', label: 'Last call', suggested_at: '2026-12-04T18:00:00Z' },
+    { name: 'last-call', label: 'Final', suggested_at: '2026-12-04T18:00:00Z' },
   ];
   it('announce has no default', () => {
     expect(defaultScheduleAt('announce', waves, now)).toBeNull();

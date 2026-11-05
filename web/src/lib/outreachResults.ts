@@ -105,8 +105,9 @@ export interface ChartModel {
   rows: { date: string; label: string; values: number[] }[];
 }
 
-/** "last-call" -> "Last call". The server sends wave names, not labels. */
+/** "reminder" -> "Reminder", "last-call" -> "Final" (#0622). The server sends wave names, not labels. */
 export function waveLabel(name: string): string {
+  if (name === 'last-call') return 'Final';
   const s = name.replace(/-/g, ' ');
   return s.charAt(0).toUpperCase() + s.slice(1);
 }

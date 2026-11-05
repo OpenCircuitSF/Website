@@ -105,7 +105,7 @@ describe('dayLabel and waveLabel', () => {
   it('formats', () => {
     expect(dayLabel('2026-10-03')).toBe('Oct 3');
     expect(dayLabel('x')).toBe('x');
-    expect(waveLabel('last-call')).toBe('Last call');
+    expect(waveLabel('last-call')).toBe('Final');
     expect(waveLabel('announce')).toBe('Announce');
   });
 });

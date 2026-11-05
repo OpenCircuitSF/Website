@@ -76,6 +76,31 @@ const message = () => screen.getByLabelText('Message') as HTMLTextAreaElement;
 const type = (v: string) => fireEvent.input(message(), { target: { value: v } });
 
 describe('OutreachAnnouncement', () => {
+  it('titles each preview with its channel and wave, and keeps the account', () => {
+    mountView([bPost(), mPost()]);
+    const title = screen.getByRole('article', { name: 'Bluesky Announce preview' }).querySelector('h5')!;
+    expect(title.textContent).toContain('Bluesky · Announce');
+    expect(title.querySelector('.account')!.textContent).toBe('@club.test');
+  });
+
+  it('titles previews with the wave they belong to in a later section', () => {
+    mountView([post({ wave: 'reminder' })], 'reminder');
+    expect(screen.getByRole('article', { name: 'Bluesky Reminder preview' }).querySelector('h5')!.textContent).toContain('Bluesky · Reminder');
+  });
+
+  it('shows the Announce strip with a status like the other sections', () => {
+    mountView([bPost(), mPost()]);
+    const strip = screen.getByRole('heading', { name: /Announce/, level: 3 });
+    expect(strip.closest('.wave-pin')).not.toBeNull();
+    expect(strip.querySelector('.ordinal')!.textContent).toBe('1');
+    expect(strip.querySelector('.timing')!.textContent).toBe('Drafted · not scheduled');
+  });
+
+  it('shows no strip of its own inside a Reminder section', () => {
+    mountView([post({ wave: 'reminder' })], 'reminder');
+    expect(document.querySelector('.wave-pin')).toBeNull();
+  });
+
   it('previews each network as its platform card and warns when both texts are identical (#0583)', async () => {
     mountView([bPost(), mPost()]);
     expect(document.querySelectorAll('.preview .card').length).toBe(2);
@@ -88,8 +113,8 @@ describe('OutreachAnnouncement', () => {
   it('seeds the one Message field from the posts and previews each network', () => {
     mountView([bPost(), mPost()]);
     expect(message().value).toBe('Join us for Soldering 101.\n\nLearn to solder.');
-    expect(screen.getByRole('article', { name: 'Bluesky preview' }).textContent).toContain('@club.test');
-    expect(screen.getByRole('article', { name: 'Mastodon preview' }).textContent).toContain(MURL);
+    expect(screen.getByRole('article', { name: 'Bluesky Announce preview' }).textContent).toContain('@club.test');
+    expect(screen.getByRole('article', { name: 'Mastodon Announce preview' }).textContent).toContain(MURL);
     expect(screen.getByRole('button', { name: 'Post to Bluesky and Mastodon' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Schedule for later…' })).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Save message' }) as HTMLButtonElement).disabled).toBe(true);
@@ -100,7 +125,7 @@ describe('OutreachAnnouncement', () => {
     updateOutreachPost.mockImplementation((id: number, b: { body: string }) => Promise.resolve(post({ id, channel: id === 1 ? 'bluesky' : 'mastodon', body: b.body })));
     await type('A fresh message.');
     // Live preview of what Save will write.
-    expect(screen.getByRole('article', { name: 'Bluesky preview' }).textContent).toContain('A fresh message.');
+    expect(screen.getByRole('article', { name: 'Bluesky Announce preview' }).textContent).toContain('A fresh message.');
     await fireEvent.click(screen.getByRole('button', { name: 'Save message' }));
     await waitFor(() => expect(updateOutreachPost).toHaveBeenCalledTimes(2));
     expect(updateOutreachPost.mock.calls[0]).toEqual([1, { body: 'A fresh message.\n\n#soldering #sf' }]);
@@ -116,7 +141,7 @@ describe('OutreachAnnouncement', () => {
     await waitFor(() => expect(updateOutreachPost).toHaveBeenCalledTimes(1));
     expect(updateOutreachPost.mock.calls[0][0]).toBe(1);
     await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Saved to Bluesky. Mastodon is customized and was left alone.'));
-    expect(screen.getByRole('article', { name: 'Mastodon preview' }).textContent).toContain('Customized');
+    expect(screen.getByRole('article', { name: 'Mastodon Announce preview' }).textContent).toContain('Customized');
   });
 
   it('Save message is disabled, with a reason, when the message is over a limit', async () => {
@@ -130,20 +155,20 @@ describe('OutreachAnnouncement', () => {
   it('Customize… opens the composer for one post and Save sends customized:true', async () => {
     mountView([bPost(), mPost()]);
     updateOutreachPost.mockImplementation((id: number, b: { body: string }) => Promise.resolve(post({ id, channel: id === 1 ? 'bluesky' : 'mastodon', body: b.body, customized: true })));
-    const card = screen.getByRole('article', { name: 'Mastodon preview' });
+    const card = screen.getByRole('article', { name: 'Mastodon Announce preview' });
     await fireEvent.click(within(card).getByRole('button', { name: 'Customize…' }));
     const box = within(card).getByLabelText('Post text');
     await fireEvent.input(box, { target: { value: 'Mastodon only text' } });
     await fireEvent.click(within(card).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(updateOutreachPost).toHaveBeenCalledWith(2, { body: 'Mastodon only text', customized: true }));
-    await waitFor(() => expect(within(screen.getByRole('article', { name: 'Mastodon preview' })).queryByLabelText('Post text')).toBeNull());
-    expect(screen.getByRole('article', { name: 'Mastodon preview' }).textContent).toContain('Customized');
+    await waitFor(() => expect(within(screen.getByRole('article', { name: 'Mastodon Announce preview' })).queryByLabelText('Post text')).toBeNull());
+    expect(screen.getByRole('article', { name: 'Mastodon Announce preview' }).textContent).toContain('Customized');
   });
 
   it('Use shared message hands a customized post back with customized:false and its own tail', async () => {
     mountView([bPost(), { ...mPost(), customized: true }]);
     updateOutreachPost.mockImplementation((id: number, b: { body: string }) => Promise.resolve(post({ id, channel: 'mastodon', body: b.body })));
-    const card = screen.getByRole('article', { name: 'Mastodon preview' });
+    const card = screen.getByRole('article', { name: 'Mastodon Announce preview' });
     await fireEvent.click(within(card).getByRole('button', { name: 'Use shared message' }));
     await waitFor(() =>
       expect(updateOutreachPost).toHaveBeenCalledWith(2, {
@@ -156,7 +181,7 @@ describe('OutreachAnnouncement', () => {
   it('Use shared message restores the link line and hashtags a customized Mastodon body lost (#0593)', async () => {
     mountView([bPost(), { ...mPost(), customized: true, body: 'My own words.' }]);
     updateOutreachPost.mockImplementation((id: number, b: { body: string }) => Promise.resolve(post({ id, channel: 'mastodon', body: b.body })));
-    const card = screen.getByRole('article', { name: 'Mastodon preview' });
+    const card = screen.getByRole('article', { name: 'Mastodon Announce preview' });
     await fireEvent.click(within(card).getByRole('button', { name: 'Use shared message' }));
     await waitFor(() => expect(updateOutreachPost).toHaveBeenCalledTimes(1));
     const sent = updateOutreachPost.mock.calls[0][1] as { body: string; customized: boolean };

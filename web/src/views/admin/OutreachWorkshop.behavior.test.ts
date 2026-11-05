@@ -52,7 +52,7 @@ const channels = [
   { name: 'bluesky', label: 'Bluesky', utm_source: 'bluesky', utm_medium: 'social', char_limit: 300, automatic: true, configured: true, account: '' },
 ];
 const waves = [{ name: 'announce', label: 'Announce', suggested_at: null }];
-const allWaves = [...waves, { name: 'reminder', label: 'Reminder', suggested_at: null }, { name: 'last-call', label: 'Last call', suggested_at: null }];
+const allWaves = [...waves, { name: 'reminder', label: 'Reminder', suggested_at: null }, { name: 'last-call', label: 'Final', suggested_at: null }];
 
 function view(over: Partial<WorkshopOutreach> = {}): WorkshopOutreach {
   return {
@@ -79,9 +79,9 @@ describe('OutreachWorkshop', () => {
     getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);
     render(OutreachWorkshop, { workshopId: 5 });
     const summary = await screen.findByText('No posts yet. Start with the announcement.', { selector: 'p.summary' });
-    const announcement = await screen.findByRole('heading', { name: 'Announcement' });
+    const announcement = await screen.findByRole('heading', { name: /Announce/ });
     const reminder = await screen.findByText('Reminder', { selector: 'strong' });
-    const lastCall = await screen.findByText('Last call', { selector: 'strong' });
+    const lastCall = await screen.findByText('Final', { selector: 'strong' });
     const schedule = await screen.findByRole('button', { name: 'Schedule all' });
     const byHand = await screen.findByText('Post by hand', { selector: 'strong' });
     const flyers = await screen.findByText('Flyers', { selector: 'strong' });
@@ -98,7 +98,7 @@ describe('OutreachWorkshop', () => {
     getWorkshopOutreach.mockResolvedValue(view({ waves: allWaves }));
     getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);
     render(OutreachWorkshop, { workshopId: 5 });
-    await screen.findByRole('heading', { name: 'Announcement' });
+    await screen.findByRole('heading', { name: /Announce/ });
     expect(screen.queryByText(/Tracked links/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Draft all' })).toBeNull();
     expect(screen.queryByText(/Start outreach/)).toBeNull();
@@ -110,7 +110,7 @@ describe('OutreachWorkshop', () => {
     startOutreach.mockResolvedValue(view());
     getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);
     render(OutreachWorkshop, { workshopId: 5 });
-    await screen.findByRole('heading', { name: 'Announcement' });
+    await screen.findByRole('heading', { name: /Announce/ });
     expect(startOutreach).toHaveBeenCalledTimes(1);
     expect(startOutreach).toHaveBeenCalledWith(5);
   });
@@ -172,7 +172,7 @@ describe('OutreachWorkshop', () => {
     getWorkshopOutreach.mockResolvedValue(view({ can_reset: false }));
     getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);
     render(OutreachWorkshop, { workshopId: 5 });
-    await screen.findByRole('heading', { name: 'Announcement' });
+    await screen.findByRole('heading', { name: /Announce/ });
     expect(screen.queryByRole('button', { name: 'Reset outreach' })).toBeNull();
   });
 
@@ -322,12 +322,12 @@ describe('OutreachWorkshop: Delete and redo (#0606)', () => {
     takedownOutreachPost.mockResolvedValue(draft);
     render(OutreachWorkshop, { workshopId: 5 });
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Delete and redo…' })).toHaveLength(2));
-    const bsky = screen.getByRole('article', { name: 'Bluesky preview' });
+    const bsky = screen.getByRole('article', { name: 'Bluesky Announce preview' });
     await fireEvent.click(within(bsky).getByRole('button', { name: 'Delete and redo…' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Delete post' }));
     await waitFor(() => expect(takedownOutreachPost).toHaveBeenCalledWith(3));
     await waitFor(() => expect(screen.getAllByRole('button', { name: 'Delete and redo…' })).toHaveLength(1));
-    const mas = screen.getByRole('article', { name: 'Mastodon preview' });
+    const mas = screen.getByRole('article', { name: 'Mastodon Announce preview' });
     expect(within(mas).getByRole('button', { name: 'Delete and redo…' })).toBeTruthy();
   });
 });

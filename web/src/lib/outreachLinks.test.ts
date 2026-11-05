@@ -118,7 +118,7 @@ describe('draftAllMessage and scheduleAllMessage', () => {
     ).toBe('Drafted 2 posts. 2 drafts have no link yet — create the missing links first.');
   });
   it('reports scheduled and changed posts', () => {
-    const item = { post_id: 1, channel: 'bluesky', channel_label: 'Bluesky', wave: 'last-call', wave_label: 'Last call', scheduled_at: 'x' };
+    const item = { post_id: 1, channel: 'bluesky', channel_label: 'Bluesky', wave: 'last-call', wave_label: 'Final', scheduled_at: 'x' };
     const skip = { post_id: 2, channel: 'bluesky', channel_label: 'Bluesky', wave: 'reminder', wave_label: 'Reminder', reason: 'changed', suggested_at: null };
     expect(scheduleAllMessage({ dry_run: false, to_schedule: [item], skipped: [] })).toBe('Scheduled 1 post.');
     expect(scheduleAllMessage({ dry_run: false, to_schedule: [], skipped: [skip] })).toBe('Nothing was scheduled. 1 post changed since the preview and was not scheduled.');

@@ -44,6 +44,32 @@ const reminderPost = (): OutreachPost => ({
 });
 
 describe('OutreachWaveRow', () => {
+  const summaryOf = (w: typeof wave, posts: OutreachPost[]) => {
+    const { container } = render(OutreachWaveRow, { view: { ...view(posts), waves: [{ name: 'announce', label: 'Announce', suggested_at: null }, w] }, results: null, wave: w, workshopId: 5, onChange: vi.fn(), reload: vi.fn() });
+    return container.querySelector('summary')!;
+  };
+
+  it('shows the ordinal, label and status in the summary', () => {
+    const summary = summaryOf(wave, []);
+    expect(summary.classList.contains('wave-pin')).toBe(true);
+    expect(summary.querySelector('.ordinal')!.textContent).toBe('2');
+    expect(summary.querySelector('.name')!.textContent).toBe('Reminder');
+    expect(summary.querySelector('.timing')!.textContent).toMatch(/^Not written · not scheduled · suggested /);
+  });
+
+  it('shows no suggested date in the summary once scheduled', () => {
+    const summary = summaryOf(wave, [{ ...reminderPost(), status: 'scheduled', scheduled_at: '2099-11-20T18:00:00Z' }]);
+    expect(summary.textContent).toMatch(/Posts automatically/);
+    expect(summary.textContent).not.toMatch(/suggested/);
+    expect(summary.textContent).not.toMatch(/Nov 28/);
+  });
+
+  it('shows no past suggested date', () => {
+    const summary = summaryOf({ ...wave, suggested_at: '2020-01-01T18:00:00Z' }, []);
+    expect(summary.querySelector('.timing')!.textContent).toBe('Not written · not scheduled');
+    expect(summary.textContent).not.toMatch(/2020|Jan/);
+  });
+
   it('is collapsed with the label, suggested time and status in the summary; Write it is beside it', () => {
     render(OutreachWaveRow, { view: view([]), results: null, wave, workshopId: 5, onChange: vi.fn(), reload: vi.fn() });
     const details = screen.getByText('Reminder', { selector: 'strong' }).closest('details')!;

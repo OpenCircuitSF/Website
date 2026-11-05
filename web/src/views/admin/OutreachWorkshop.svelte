@@ -1,7 +1,7 @@
 <!--
   One workshop's outreach page (#0568, #0582): header, then a summary line, the
   Announcement (one message, how it will look, one post button), Reminder and
-  Last call as collapsed rows, Schedule all, then "Post by hand", Flyers and
+  Final as collapsed rows, Schedule all, then "Post by hand", Flyers and
   "Links and clicks" as collapsed rows with a status and one action each. The
   OutreachPanel stays self-loading (and starts outreach implicitly) and hands
   its view and results to the body snippet. The tracked-links table lives on
@@ -106,7 +106,7 @@
   </p>
 {/if}
 
-<Panel title="Outreach">
+<Panel title="Outreach" pinnable>
   <OutreachPanel {workshopId} {reloadKey} {onLoaded} onNotFound={() => (notFound = true)} autoStart>
     {#snippet body({ view: v, results, onChange: panelChange })}
       {@const onChange = (p: OutreachPost) => { changed(); panelChange(p); }}

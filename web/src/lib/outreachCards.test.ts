@@ -88,7 +88,7 @@ describe('summaryLine', () => {
     expect(summaryLine({ posts: [] }, null)).toBe('No posts yet. Start with the announcement.');
   });
   it('reports posts per wave that exist, never a fifteen-post headline', () => {
-    const waves = [{ name: 'announce', label: 'Announce', suggested_at: null }, { name: 'reminder', label: 'Reminder', suggested_at: null }, { name: 'last-call', label: 'Last call', suggested_at: null }];
+    const waves = [{ name: 'announce', label: 'Announce', suggested_at: null }, { name: 'reminder', label: 'Reminder', suggested_at: null }, { name: 'last-call', label: 'Final', suggested_at: null }];
     expect(summaryLine({ waves, posts: [post(), post({ id: 2, channel: 'mastodon' }), post({ id: 3, wave: 'reminder' })] }, null)).toBe('Drafted: Announce 2, Reminder 1 · 0 scheduled · 0 posted');
   });
 });

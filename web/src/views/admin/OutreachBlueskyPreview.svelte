@@ -9,6 +9,7 @@
 <script lang="ts">
   import { countCharacters, isOverLimit } from '../../lib/outreach';
   import { blueskyCard, segments } from '../../lib/outreachPreview';
+  import OutreachCoverImage from './OutreachCoverImage.svelte';
   import type { OutreachChannel, OutreachPost, WorkshopOutreach } from '../../lib/types';
 
   interface Props {
@@ -30,7 +31,7 @@
   <p class="text">{#each segments(text) as s, i (i)}{#if s.kind === 'text'}{s.text}{:else}<span class={s.kind}>{s.text}</span>{/if}{/each}</p>
   <div class="card">
     {#if card.image}
-      <img src={card.image} alt="" loading="lazy" />
+      <div class="card-cover"><OutreachCoverImage src={card.image} /></div>
     {:else}
       <p class="no-image text-muted">{view.thumb_reason || 'No picture: the card goes out without one.'}</p>
     {/if}
@@ -64,11 +65,8 @@
     overflow: hidden;
     margin: 0 0 var(--space-2);
   }
-  img {
-    display: block;
-    width: 100%;
-    aspect-ratio: 1.91 / 1;
-    object-fit: cover;
+  .card-cover {
+    padding: var(--space-2) var(--space-3) 0;
   }
   .no-image {
     margin: 0;

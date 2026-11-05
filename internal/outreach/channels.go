@@ -46,7 +46,7 @@ var channels = []Channel{
 var waves = []Wave{
 	{Name: "announce", Label: "Announce"},
 	{Name: "reminder", Label: "Reminder", DaysBefore: 7},
-	{Name: "last-call", Label: "Last call", DaysBefore: 1},
+	{Name: "last-call", Label: "Final", DaysBefore: 1},
 }
 
 // Channels returns a copy of the channel list in display order.

@@ -9,6 +9,7 @@
 <script lang="ts">
   import { countCharacters, isOverLimit } from '../../lib/outreach';
   import { mastodonLinkCard, segments } from '../../lib/outreachPreview';
+  import OutreachCoverImage from './OutreachCoverImage.svelte';
   import type { OutreachChannel, OutreachPost, WorkshopOutreach } from '../../lib/types';
 
   interface Props {
@@ -35,17 +36,14 @@
   <p class="text">{#each segments(text) as s, i (i)}{#if s.kind === 'text'}{s.text}{:else}<span class={s.kind}>{s.text}</span>{/if}{/each}</p>
   {#if attachment && cover}
     {#if alt}
-      <div class="attachment">
-        <img src={cover} alt="" loading="lazy" />
-        <span class="alt-badge">ALT</span>
-      </div>
+      <div class="attachment"><OutreachCoverImage src={cover} badge="ALT" /></div>
     {:else}
       <p class="text-warn">No image: alt text missing. Add the cover's alt text so the picture can go out.</p>
     {/if}
   {/if}
   {#if card && !attached}
     <div class="card">
-      {#if card.image}<img src={card.image} alt="" loading="lazy" />{/if}
+      {#if card.image}<div class="card-cover"><OutreachCoverImage src={card.image} /></div>{/if}
       <div class="card-text">
         <p class="card-host text-muted">{card.host}</p>
         <p class="card-title">{card.title}</p>
@@ -72,26 +70,10 @@
     text-decoration: underline;
   }
   .attachment {
-    position: relative;
     margin: 0 0 var(--space-2);
   }
-  .attachment img,
-  .card img {
-    display: block;
-    width: 100%;
-    aspect-ratio: 1.91 / 1;
-    object-fit: cover;
-  }
-  .alt-badge {
-    position: absolute;
-    left: var(--space-2);
-    bottom: var(--space-2);
-    padding: 0 var(--space-2);
-    font-size: var(--fs-sm);
-    font-weight: 600;
-    background: var(--bg, #000);
-    color: var(--text, #fff);
-    border-radius: var(--radius);
+  .card-cover {
+    padding: var(--space-2) var(--space-3) 0;
   }
   .card {
     border: var(--border-w) solid var(--border);

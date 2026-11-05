@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { composeBody, isHashtagParagraph, manualRowStatus, messageTargets, planSaveMessage, restoredTail, sharedMessage, splitBody, waveRowStatus } from './outreachMessage';
+import { composeBody, isHashtagParagraph, manualRowStatus, messageTargets, planSaveMessage, restoredTail, sharedMessage, splitBody, waveRowStatus, waveStrip } from './outreachMessage';
 import type { OutreachChannel, OutreachPost, OutreachWave } from './types';
 
 const ch = (name: string, automatic: boolean, configured: boolean, limit = 0): OutreachChannel => ({
@@ -105,7 +105,7 @@ describe('planSaveMessage', () => {
 
 describe('waveRowStatus and manualRowStatus', () => {
   it('Not written with a write action when the wave has no posts', () => {
-    expect(waveRowStatus(view([bPost]), 'reminder')).toEqual({ text: 'Not written', action: 'write' });
+    expect(waveRowStatus(view([bPost]), 'reminder')).toEqual({ text: 'Not written · not scheduled', action: 'write' });
   });
   it('reads Drafted, scheduled, posting, failed and posted', () => {
     const r = (over: Partial<OutreachPost>) => waveRowStatus(view([post({ wave: 'reminder', ...over })]), 'reminder');
@@ -113,8 +113,50 @@ describe('waveRowStatus and manualRowStatus', () => {
     expect(r({ status: 'queued' }).text).toBe('Posting now…');
     expect(r({ status: 'failed' }).text).toBe('Drafted · a post failed');
     expect(r({ status: 'scheduled', scheduled_at: '2026-11-30T20:00:00Z' }).text).toMatch(/^Posts automatically /);
-    expect(r({ status: 'scheduled', scheduled_at: '2026-11-30T20:00:00Z', held: true }).text).toMatch(/^Scheduled · on hold/);
+    expect(r({ status: 'scheduled', scheduled_at: '2026-11-30T20:00:00Z', held: true }).text).toMatch(/^Scheduled .+ · on hold/);
     expect(r({ status: 'posted' }).text).toBe('Posted 1 of 1');
+  });
+  describe('with real dates (#0622)', () => {
+    const now = new Date('2026-11-01T12:00:00Z');
+    const reminderAt = '2026-11-28T18:00:00Z';
+    const at = (suggested: string | null, posts: OutreachPost[]) => ({
+      channels,
+      waves: [waves[0], { ...waves[1], suggested_at: suggested }],
+      posts,
+    });
+    it('names a future suggested time only while nothing is scheduled or posted', () => {
+      expect(waveRowStatus(at(reminderAt, []), 'reminder', now).text).toMatch(/^Not written · not scheduled · suggested /);
+      expect(waveRowStatus(at(reminderAt, [post({ wave: 'reminder' })]), 'reminder', now).text).toMatch(/^Drafted · not scheduled · suggested /);
+    });
+    it('never shows a suggested time that has passed', () => {
+      expect(waveRowStatus(at('2026-10-01T18:00:00Z', []), 'reminder', now).text).toBe('Not written · not scheduled');
+      expect(waveRowStatus(at('2026-10-01T18:00:00Z', [post({ wave: 'reminder' })]), 'reminder', now).text).toBe('Drafted · not scheduled');
+    });
+    it('drops the suggested time once a post is scheduled', () => {
+      const text = waveRowStatus(at(reminderAt, [post({ wave: 'reminder', status: 'scheduled', scheduled_at: '2026-11-20T20:00:00Z' })]), 'reminder', now).text;
+      expect(text).toMatch(/^Posts automatically /);
+      expect(text).not.toContain('suggested');
+    });
+    it('drops the suggested time once a post is posted, and gives the posted date', () => {
+      const text = waveRowStatus(at(reminderAt, [post({ wave: 'reminder', status: 'posted', posted_at: '2026-10-30T20:00:00Z' })]), 'reminder', now).text;
+      expect(text).toMatch(/^Posted /);
+      expect(text).not.toContain(' of ');
+      expect(text).not.toContain('suggested');
+    });
+    it('says from when scheduled times differ', () => {
+      const v = at(null, [
+        post({ wave: 'reminder', status: 'scheduled', scheduled_at: '2026-11-20T20:00:00Z' }),
+        post({ id: 2, channel: 'mastodon', wave: 'reminder', status: 'scheduled', scheduled_at: '2026-11-21T20:00:00Z' }),
+      ]);
+      expect(waveRowStatus(v, 'reminder', now).text).toMatch(/^Posts automatically from /);
+    });
+    it('adds the posted count beside a later scheduled time', () => {
+      const v = at(null, [
+        post({ wave: 'reminder', status: 'posted', posted_at: '2026-10-30T20:00:00Z' }),
+        post({ id: 2, channel: 'mastodon', wave: 'reminder', status: 'scheduled', scheduled_at: '2026-11-21T20:00:00Z' }),
+      ]);
+      expect(waveRowStatus(v, 'reminder', now).text).toMatch(/^Posts automatically .+ · posted 1 of 2$/);
+    });
   });
   it('counts only automatic posts', () => {
     const v = view([post({ wave: 'reminder', status: 'posted' }), post({ id: 2, wave: 'reminder', channel: 'mastodon' })]);
@@ -123,6 +165,19 @@ describe('waveRowStatus and manualRowStatus', () => {
   it('the manual row counts hand-posted cards', () => {
     expect(manualRowStatus(view([bPost]))).toBe('Nothing drafted');
     expect(manualRowStatus(view([post({ id: 5, channel: 'instagram', status: 'posted' }), post({ id: 6, channel: 'instagram', wave: 'reminder', status: 'manual' })]))).toBe('Posted 1 of 2');
+  });
+});
+
+describe('waveStrip', () => {
+  it('numbers waves in the order the server sends them', () => {
+    const v = { channels, posts: [], waves: [waves[1], { name: 'last-call', label: 'Final', suggested_at: null }, waves[0]] };
+    expect(waveStrip(v, 'reminder')).toMatchObject({ ordinal: 1, label: 'Reminder' });
+    expect(waveStrip(v, 'last-call')).toMatchObject({ ordinal: 2, label: 'Final' });
+    expect(waveStrip(v, 'announce')).toMatchObject({ ordinal: 3, label: 'Announce' });
+  });
+  it('says not scheduled for the announcement before it has a time', () => {
+    expect(waveStrip(view([bPost]), 'announce').text).toBe('Drafted · not scheduled');
+    expect(waveStrip(view([]), 'announce').text).toBe('Not written · not scheduled');
   });
 });
 

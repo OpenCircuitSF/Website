@@ -614,3 +614,14 @@ tbody tr:last-child td { border-bottom: none; }
     linear-gradient(to left, var(--bg-page) 50%, transparent) right center / 48px 100% no-repeat local,
     linear-gradient(to left, var(--border), transparent) right center / 24px 100% no-repeat scroll;
 }
+
+/* The strip naming an Outreach section stays in view while the section is on screen (#0622). */
+.wave-pin {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-panel);
+  padding: var(--space-2) 0;
+  border-bottom: var(--border-w) solid var(--border);
+}
+.wave-section :is(a, button, input, textarea, summary) { scroll-margin-top: 4rem; }

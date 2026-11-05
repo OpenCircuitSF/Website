@@ -40,6 +40,23 @@ func TestChannelTable(t *testing.T) {
 	}
 }
 
+// #0622: the screens say Final; the stored name and the post copy do not change.
+func TestThirdWaveIsLabelledFinal(t *testing.T) {
+	w, ok := WaveByName("last-call")
+	if !ok {
+		t.Fatal("last-call wave not found")
+	}
+	if w.Label != "Final" {
+		t.Errorf("Label = %q, want Final", w.Label)
+	}
+	if w.DaysBefore != 1 {
+		t.Errorf("DaysBefore = %d, want 1", w.DaysBefore)
+	}
+	if _, ok := WaveByName("final"); ok {
+		t.Error("a wave is named final; the stored name must stay last-call")
+	}
+}
+
 func TestDestinationURLExact(t *testing.T) {
 	ch, _ := ChannelByName("bluesky")
 	w, _ := WaveByName("reminder")

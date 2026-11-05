@@ -1,6 +1,6 @@
 <!--
   One wave's message section on the workshop outreach page (#0582): the
-  Announcement, and the body of the Reminder and Last call rows. One Message
+  Announcement, and the body of the Reminder and Final rows. One Message
   field holds the text every automatic post shares; Save message writes it to
   each post that is not customized (lib/outreachMessage.ts decides what is
   written), "How it will look" shows each post as it will go out, and one
@@ -30,7 +30,7 @@
     toLocalInputValue,
   } from '../../lib/outreach';
   import { cardButtons, postableAutomatic, sendsItself, statusLine, visibleNotice, type CardNotice } from '../../lib/outreachCards';
-  import { composeBody, messageTargets, planSaveMessage, restoredTail, sharedMessage } from '../../lib/outreachMessage';
+  import { composeBody, messageTargets, planSaveMessage, restoredTail, sharedMessage, waveStrip } from '../../lib/outreachMessage';
   import { postAll } from '../../lib/outreachPostAll';
   import { identicalAutomaticBodies } from '../../lib/outreachPreview';
   import type { OutreachChannel, OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
@@ -38,6 +38,7 @@
   import OutreachComposer from './OutreachComposer.svelte';
   import OutreachPostDialog from './OutreachPostDialog.svelte';
   import OutreachPostPreview from './OutreachPostPreview.svelte';
+  import OutreachWaveStrip from './OutreachWaveStrip.svelte';
 
   interface Props {
     view: WorkshopOutreach;
@@ -51,6 +52,7 @@
   let { view, wave, workshopId, onChange, reload }: Props = $props();
 
   const waveInfo = $derived(view.waves.find((w) => w.name === wave) ?? null);
+  const waveName = $derived(waveInfo?.label ?? wave);
   const autos = $derived(
     view.channels
       .filter(sendsItself)
@@ -234,14 +236,14 @@
   }
 </script>
 
-<section class="announcement" aria-label={waveInfo?.label ?? wave}>
-  {#if wave === 'announce'}<h3>Announcement</h3>{/if}
+<section class="announcement wave-section" aria-label={waveInfo?.label ?? wave}>
+  {#if wave === 'announce'}<div class="wave-pin"><OutreachWaveStrip strip={waveStrip(view, wave)} /></div>{/if}
 
   {#if autos.length === 0}
-    <p class="text-muted">No posts yet. Start with the {wave === 'announce' ? 'announcement' : (waveInfo?.label ?? wave).toLowerCase()}.</p>
+    <p class="text-muted">No posts yet. Start with the {wave === 'announce' ? 'announcement' : `${waveName.toLowerCase()} post`}.</p>
     <p class="row">
       <Button variant="primary" onclick={write} disabled={busy || !view.available}>
-        Write the {wave === 'announce' ? 'announcement' : (waveInfo?.label ?? wave).toLowerCase()}
+        Write the {wave === 'announce' ? 'announcement' : `${waveName.toLowerCase()} post`}
       </Button>
     </p>
   {:else}
@@ -276,9 +278,10 @@
     {#each autos as { channel, post } (post.id)}
       {@const body = shownBody(post)}
       {@const line = statusLine(post, channel)}
-      <article class="preview" aria-label="{channel.label} preview">
+      <article class="preview" aria-label="{channel.label} {waveName} preview">
         <h5 class="preview-title">
-          {channel.label}{channel.account ? ` · ${channel.account}` : ''}
+          {channel.label} · {waveName}
+          {#if channel.account}<span class="account text-muted">{channel.account}</span>{/if}
           {#if post.customized}<span class="badge">Customized</span>{/if}
         </h5>
         {#if customizingId === post.id}
@@ -396,6 +399,11 @@
   .preview-title {
     margin: 0 0 var(--space-2);
     font-size: var(--fs-base);
+  }
+  .account {
+    margin-left: var(--space-2);
+    font-size: var(--fs-sm);
+    font-weight: 400;
   }
   .badge {
     margin-left: var(--space-2);
