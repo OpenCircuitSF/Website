@@ -365,6 +365,11 @@
   .block-reason {
     margin: var(--space-1) 0 0;
   }
+  .mono {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    overflow-wrap: anywhere;
+  }
   .checkbox-row {
     display: flex;
     align-items: center;

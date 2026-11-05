@@ -491,16 +491,6 @@ export interface CampaignFailedSend {
 
 // ── Public workshops (#0051/#0053/#0054) ─────────────────────────────────────
 
-/**
- * One workshop as shown to an anonymous visitor (GET /api/workshops and GET
- * /api/workshops/{slug} item). Matches
- * internal/handlers/public_workshops.go's publicWorkshopView -- deliberately
- * narrower than an admin workshop view: no numeric id, the public wire
- * contract identifies a workshop by slug (same convention PublicInterest
- * follows for interests). `status` is included even though the index
- * (GET /api/workshops) only ever contains 'published' rows -- the detail
- * route also serves 'canceled', and this type is shared by both callers.
- */
 /** One row of GET /admin/event-types (#0613), matching eventTypeView. */
 export interface EventType {
   id: number;
@@ -520,6 +510,16 @@ export interface EventTypeRef {
   sort_order: number;
 }
 
+/**
+ * One workshop as shown to an anonymous visitor (GET /api/workshops and GET
+ * /api/workshops/{slug} item). Matches
+ * internal/handlers/public_workshops.go's publicWorkshopView -- deliberately
+ * narrower than an admin workshop view: no numeric id, the public wire
+ * contract identifies a workshop by slug (same convention PublicInterest
+ * follows for interests). `status` is included even though the index
+ * (GET /api/workshops) only ever contains 'published' rows -- the detail
+ * route also serves 'canceled', and this type is shared by both callers.
+ */
 export interface PublicWorkshop {
   event_type: EventTypeRef;
   slug: string;
