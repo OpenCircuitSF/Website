@@ -14,7 +14,6 @@ const startOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const getWorkshopOutreachResults = vi.fn<(id: number) => Promise<OutreachResults>>();
 const prepareOutreachPost = vi.fn<(id: number) => Promise<OutreachPost>>();
 const sendOutreachPost = vi.fn<(id: number) => Promise<OutreachPost>>();
-const scheduleOutreachPost = vi.fn<(id: number, at: string) => Promise<OutreachPost>>();
 vi.mock('../../lib/api', () => ({
   getWorkshopOutreach: (id: number) => getWorkshopOutreach(id),
   startOutreach: (id: number) => startOutreach(id),
@@ -25,8 +24,6 @@ vi.mock('../../lib/api', () => ({
   markOutreachPosted: vi.fn(),
   deleteOutreachPost: vi.fn(),
   sendOutreachPost: (id: number) => sendOutreachPost(id),
-  scheduleOutreachPost: (id: number, at: string) => scheduleOutreachPost(id, at),
-  unscheduleOutreachPost: vi.fn(),
   ApiError: class ApiError extends Error {
     status: number;
     constructor(status: number, message: string) {
@@ -44,7 +41,6 @@ afterEach(() => {
   startOutreach.mockReset();
   getWorkshopOutreachResults.mockReset();
   sendOutreachPost.mockReset();
-  scheduleOutreachPost.mockReset();
   vi.useRealTimers();
 });
 

@@ -14,12 +14,14 @@ const sendOutreachPost = vi.fn();
 const draftAllOutreach = vi.fn();
 const scheduleOutreachSection = vi.fn();
 const unscheduleOutreachSection = vi.fn();
+const takedownOutreachPost = vi.fn();
 vi.mock('../../lib/api', () => ({
   updateOutreachPost: (id: number, b: unknown) => updateOutreachPost(id, b),
   sendOutreachPost: (id: number) => sendOutreachPost(id),
   draftAllOutreach: (id: number, w: string[]) => draftAllOutreach(id, w),
   scheduleOutreachSection: (w: number, wave: string, at: string) => scheduleOutreachSection(w, wave, at),
   unscheduleOutreachSection: (w: number, wave: string) => unscheduleOutreachSection(w, wave),
+  takedownOutreachPost: (id: number) => takedownOutreachPost(id),
   prepareOutreachPost: vi.fn(),
   deleteOutreachPost: vi.fn(),
   ApiError: class ApiError extends Error {},
@@ -29,7 +31,7 @@ const { default: OutreachAnnouncement } = await import('./OutreachAnnouncement.s
 
 afterEach(() => {
   cleanup();
-  for (const m of [updateOutreachPost, sendOutreachPost, draftAllOutreach, scheduleOutreachSection, unscheduleOutreachSection]) m.mockReset();
+  for (const m of [updateOutreachPost, sendOutreachPost, draftAllOutreach, scheduleOutreachSection, unscheduleOutreachSection, takedownOutreachPost]) m.mockReset();
 });
 
 const ch = (name: string, limit: number, account: string) => ({
@@ -442,5 +444,46 @@ describe('OutreachAnnouncement with a switched-off channel', () => {
   it('keeps Unschedule on a scheduled post of an off channel (#0628)', () => {
     mountOff([post({ id: 2, channel: 'mastodon', body: mast, short_url: MURL, status: 'scheduled', scheduled_at: '2099-11-28T18:00:00Z' })]);
     expect(screen.getByRole('button', { name: 'Unschedule' })).toBeTruthy();
+  });
+});
+
+describe('OutreachAnnouncement: Delete and redo and Regenerate (#0640)', () => {
+  const postedPair = () => [
+    post({ status: 'posted', posted_at: '2026-11-03T06:30:00Z', remote_url: 'https://bsky.app/x' }),
+    post({ id: 2, channel: 'mastodon', body: mast, short_url: MURL, status: 'posted', posted_at: '2026-11-03T06:30:00Z', remote_url: 'https://m/x' }),
+  ];
+  const bskyArticle = () => screen.getByRole('article', { name: 'Bluesky Announce preview' });
+
+  it('Delete and redo… Cancel deletes nothing (#0606, #0640)', async () => {
+    mountView(postedPair());
+    await fireEvent.click(within(bskyArticle()).getByRole('button', { name: 'Delete and redo…' }));
+    const dlg = screen.getByRole('dialog');
+    await fireEvent.click(within(dlg).getByRole('button', { name: 'Cancel' }));
+    expect(takedownOutreachPost).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(within(bskyArticle()).getByRole('button', { name: 'Delete and redo…' })).toBeTruthy();
+  });
+
+  it('a failed Delete and redo keeps the dialog open with the error and the post still posted', async () => {
+    const { ApiError } = await import('../../lib/api');
+    takedownOutreachPost.mockRejectedValue(new (ApiError as unknown as new (m: string) => Error)('Bluesky refused'));
+    mountView(postedPair());
+    await fireEvent.click(within(bskyArticle()).getByRole('button', { name: 'Delete and redo…' }));
+    await fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Delete post' }));
+    await waitFor(() => expect(screen.getByRole('dialog').textContent).toContain('Bluesky refused'));
+    expect(takedownOutreachPost).toHaveBeenCalledWith(1);
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(within(bskyArticle()).getByRole('button', { name: 'Delete and redo…' })).toBeTruthy();
+  });
+
+  it('Customize… on a stale automatic post offers Regenerate, not the standard wording, and Regenerate sends regenerate:true (#0640)', async () => {
+    mountView([bPost(), { ...mPost(), stale: true, customized: true }]);
+    const article = () => screen.getByRole('article', { name: 'Mastodon Announce preview' });
+    await fireEvent.click(within(article()).getByRole('button', { name: 'Customize…' }));
+    const regen = within(article()).getByRole('button', { name: 'Regenerate' });
+    expect(within(article()).queryByRole('button', { name: 'Use the standard wording' })).toBeNull();
+    updateOutreachPost.mockImplementation((id: number) => Promise.resolve(post({ id, channel: 'mastodon', body: mast })));
+    await fireEvent.click(regen);
+    await waitFor(() => expect(updateOutreachPost).toHaveBeenCalledWith(2, { regenerate: true }));
   });
 });

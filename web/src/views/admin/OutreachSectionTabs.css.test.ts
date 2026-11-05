@@ -35,7 +35,7 @@ describe('the pinned section tabs (#0622, #0640)', () => {
     expect(Number(/z-index:\s*(\d+)/.exec(rule)?.[1])).toBeGreaterThan(Number(/z-index:\s*(\d+)/.exec(pin)?.[1]));
   });
   it('the scroll margin clears the tallest strip (#0625)', () => {
-    expect(read('../../app.css')).toMatch(/\.wave-section[^{]*\{\s*scroll-margin-top:\s*5\.5rem/);
+    expect(read('../../app.css')).toMatch(/\.wave-section[^{]*\{\s*scroll-margin-top:\s*7rem/);
   });
   it('nothing between the panel and the strip clips it (#0625)', () => {
     for (const f of ['OutreachSection.svelte', 'OutreachSectionTabs.svelte']) {

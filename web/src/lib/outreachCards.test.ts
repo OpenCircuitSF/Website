@@ -241,6 +241,17 @@ describe('boardCell (#0624)', () => {
     expect(mixed[0].line.kind).toBe('mixed');
     expect(mixed[0].cells.map((c) => c.detail)).toEqual([weekdayTime(TIME), null]);
   });
+  it('a posted automatic cell shows its time only on a mixed row; a hand-posted cell always does', () => {
+    expect(boardCell(post({ status: 'posted', posted_at: TIME }), auto, false, false).detail).toBeNull();
+    expect(boardCell(post({ status: 'posted', posted_at: TIME }), manual, false, false).detail).toBe(weekdayTime(TIME));
+    const posted = () => [post({ status: 'posted', posted_at: TIME }), post({ id: 2, channel: 'mastodon', status: 'posted', posted_at: TIME })];
+    const rows = boardRows({ channels: [auto, mast], waves, posts: posted() });
+    expect(rows[0].line.kind).not.toBe('mixed');
+    expect(rows[0].cells.map((c) => c.detail)).toEqual([null, null]);
+    const mixed = boardRows({ channels: [auto, mast], waves, posts: [post({ status: 'posted', posted_at: TIME }), post({ id: 2, channel: 'mastodon' })] });
+    expect(mixed[0].line.kind).toBe('mixed');
+    expect(mixed[0].cells.map((c) => c.detail)).toEqual([weekdayTime(TIME), null]);
+  });
   it('says failed and posting now with no time', () => {
     expect(boardCell(post({ status: 'failed' }), auto)).toMatchObject({ status: 'Failed', detail: null });
     expect(boardCell(post({ status: 'queued' }), auto)).toMatchObject({ status: 'Posting now', detail: null });

@@ -127,7 +127,7 @@
 <style>
   .group {
     margin: var(--space-4) 0 var(--space-2);
-    scroll-margin-top: 5.5rem;
+    scroll-margin-top: 7rem;
   }
   .group:focus {
     outline: none;

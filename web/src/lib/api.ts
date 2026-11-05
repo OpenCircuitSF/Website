@@ -1441,16 +1441,6 @@ export function sendOutreachPost(id: number): Promise<OutreachPost> {
   return apiPost<OutreachPost>(`/admin/outreach-posts/${id}/send`);
 }
 
-/** POST /admin/outreach-posts/{id}/schedule — scheduledAt is an RFC 3339 instant (#0545). */
-export function scheduleOutreachPost(id: number, scheduledAt: string): Promise<OutreachPost> {
-  return apiPost<OutreachPost>(`/admin/outreach-posts/${id}/schedule`, { scheduled_at: scheduledAt });
-}
-
-/** POST /admin/outreach-posts/{id}/unschedule — a scheduled post goes back to draft (#0545). */
-export function unscheduleOutreachPost(id: number): Promise<OutreachPost> {
-  return apiPost<OutreachPost>(`/admin/outreach-posts/${id}/unschedule`);
-}
-
 /** POST /admin/workshops/{id}/outreach/schedule — one time for a whole section's automatic posts (#0640); all or nothing on the server. */
 export function scheduleOutreachSection(workshopId: number, wave: string, scheduledAt: string): Promise<OutreachSectionResult> {
   return apiPost<OutreachSectionResult>(`/admin/workshops/${workshopId}/outreach/schedule`, { wave, scheduled_at: scheduledAt });
