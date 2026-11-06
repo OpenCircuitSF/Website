@@ -43,6 +43,7 @@ import type {
   PreflightResponse,
   AudiencePreviewResponse,
   CampaignPreviewResponse,
+  UpcomingEventsResponse,
   CampaignStatsResponse,
   WorkshopsListResponse,
   PublicWorkshop,
@@ -1020,6 +1021,15 @@ export function getCampaignPreflight(id: number): Promise<PreflightResponse> {
  */
 export function previewCampaign(id: number): Promise<CampaignPreviewResponse> {
   return apiPost<CampaignPreviewResponse>(`/admin/campaigns/${id}/preview`);
+}
+
+/**
+ * POST /admin/campaigns/{id}/upcoming-events (#0643) — builds the month's
+ * upcoming-events Markdown, making (or reusing) a newsletter ShortLink per
+ * event. It never edits the campaign; the editor appends the block itself.
+ */
+export function addUpcomingEvents(id: number, month: string): Promise<UpcomingEventsResponse> {
+  return apiPost<UpcomingEventsResponse>(`/admin/campaigns/${id}/upcoming-events`, { month });
 }
 
 /**

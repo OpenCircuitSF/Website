@@ -35,8 +35,10 @@
     resumeCampaign,
     deleteCampaign,
     listInterests,
+    addUpcomingEvents,
     ApiError,
   } from '../../lib/api';
+  import { appendBlock, defaultEventsMonth, fallbackSummary, resultSummary } from '../../lib/newsletterEvents';
   import {
     canEditCampaign,
     canSendCampaign,
@@ -125,6 +127,12 @@
 
   // ── Save state ──────────────────────────────────────────────────────────
   let dirty = $state(false);
+  // #0643: the "Add upcoming events" row under the body.
+  let eventsMonth = $state('');
+  let eventsBusy = $state(false);
+  let eventsStatus = $state<string | null>(null);
+  let eventsFallback = $state<string | null>(null);
+  let eventsError = $state<string | null>(null);
   let saveState = $state<'idle' | 'saving' | 'saved' | 'error'>('idle');
   let saveError = $state<string | null>(null);
   let savedAtLabel = $state('');
@@ -356,6 +364,7 @@
       preheader = c.preheader ?? '';
       bodyMd = c.body_md;
       slug = c.slug;
+      if (eventsMonth === '') eventsMonth = defaultEventsMonth(c.slug, new Date());
       mode = c.audience_mode;
       interestIds = c.interest_ids;
       dirty = false;
@@ -485,6 +494,29 @@
 
   function handleBlur(): void {
     if (dirty) void saveDraft();
+  }
+
+  // #0643: appends the month's events to the body. bodyMd is read only after
+  // the request returns, so anything typed while it was in flight is kept.
+  async function addEvents(): Promise<void> {
+    eventsBusy = true;
+    eventsError = null;
+    try {
+      const r = await addUpcomingEvents(campaignId, eventsMonth);
+      if (r.markdown !== '') {
+        bodyMd = appendBlock(bodyMd, r.markdown);
+        dirty = true;
+        await saveDraft();
+      }
+      eventsStatus = resultSummary(r);
+      eventsFallback = fallbackSummary(r.events);
+    } catch (err) {
+      eventsStatus = null;
+      eventsFallback = null;
+      eventsError = err instanceof ApiError ? err.message : 'Could not add upcoming events.';
+    } finally {
+      eventsBusy = false;
+    }
   }
 
   async function saveDraft(): Promise<void> {
@@ -849,6 +881,18 @@
           onblur={handleBlur}
         ></textarea>
       </div>
+      <div class="row events-row">
+        <label for="campaign-events-month">Events for</label>
+        <input type="month" id="campaign-events-month" bind:value={eventsMonth} disabled={!editable || eventsBusy} />
+        <Button disabled={!editable || eventsBusy || eventsMonth === ''} onclick={addEvents}>Add upcoming events</Button>
+      </div>
+      <!-- Persistent live region (#0242): always mounted, text swapped in. -->
+      <p class="text-muted events-status" role="status">
+        {#if eventsStatus}{eventsStatus}{/if}{#if eventsFallback}{' '}{eventsFallback}{/if}
+      </p>
+      {#if eventsError}
+        <p class="text-error" role="alert">{eventsError}</p>
+      {/if}
       <div class="row save-row">
         <Button variant="primary" disabled={!editable} onclick={saveDraft}>Save draft</Button>
         {#if isSaving}
@@ -1218,6 +1262,15 @@
   }
   .save-row {
     margin-top: var(--space-2);
+  }
+  .events-row {
+    margin-top: var(--space-2);
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+  .events-status:empty {
+    display: none;
   }
   .length-advice {
     margin: var(--space-1) 0 0;

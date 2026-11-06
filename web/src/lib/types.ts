@@ -1229,3 +1229,27 @@ export interface ConnectionTestResult {
   detail?: string;
   error?: string;
 }
+
+/** One event in POST /admin/campaigns/{id}/upcoming-events' answer (#0643). */
+export interface UpcomingEventItem {
+  workshop_id: number;
+  title: string;
+  url: string;
+  /** "short" (a newsletter ShortLink) or "plain" (the event URL with UTM values). */
+  link: 'short' | 'plain';
+  reused: boolean;
+  /** Why a plain link was used: no_campaign | not_configured | rejected | rate_limited | timeout | failed. Empty for a short link. */
+  reason: string;
+}
+
+/** POST /admin/campaigns/{id}/upcoming-events (#0643). */
+export interface UpcomingEventsResponse {
+  month: string;
+  label: string;
+  /** The block to append to the body; "" when the month has no events. */
+  markdown: string;
+  events: UpcomingEventItem[];
+  created: number;
+  reused: number;
+  fallback: number;
+}
