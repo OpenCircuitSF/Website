@@ -78,6 +78,7 @@
   .board-open .board-row-head { box-shadow: inset 2px 0 0 var(--accent); }
   tbody tr:last-child .board-row-head { border-bottom: none; }
   .board-name, .board-line, .board-note, .board-excerpt, .board-status, .board-detail { display: block; }
+  .board-chevron { display: inline-block; width: 1em; font-size: 1.3em; line-height: 1; text-align: center; }
   .board-ordinal { font-family: var(--font-mono); font-weight: 600; border: var(--border-w) solid var(--border-strong); border-radius: var(--radius); padding: 0 var(--space-1); }
   .board-label { font-weight: 600; text-transform: uppercase; text-decoration: underline; }
   .board-note, .board-status { font-weight: 600; }

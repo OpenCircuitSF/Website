@@ -26,6 +26,11 @@ describe('the status board styles (#0624)', () => {
     expect(narrow).toMatch(/td \+ td::before\s*\{\s*content:\s*' · '/);
     expect(narrow).not.toContain('grid-template-columns');
   });
+  it('the triangle is larger and in a fixed box (#0632)', () => {
+    const rule = /\.board-chevron\s*\{([^}]*)\}/.exec(style)?.[1] ?? '';
+    expect(Number(/font-size:\s*([\d.]+)em/.exec(rule)?.[1])).toBeGreaterThanOrEqual(1.2);
+    expect(rule).toMatch(/width:\s*1em/);
+  });
   it('fits the width instead of scrolling sideways', () => {
     expect(style).toMatch(/table-layout:\s*fixed/);
     expect(style).not.toContain('overflow-x');
