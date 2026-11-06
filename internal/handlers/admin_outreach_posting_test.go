@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
+	"github.com/brennanMKE/OpenCircuitSF/internal/outreach"
 	"github.com/brennanMKE/OpenCircuitSF/internal/shortlinks"
 )
 
@@ -79,9 +80,7 @@ func TestAdminOutreachPosting_PanelReportsConfiguredAndHeld(t *testing.T) {
 			t.Errorf("channel %s configured = %v, want %v", name, got, want[name])
 		}
 	}
-	if _, err := e.schedule(t, p.ID, time.Now().Add(2*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
+	e.schedulePost(t, p.ID, time.Now().Add(2*time.Hour))
 	for _, tc := range []struct {
 		status string
 		held   bool
@@ -100,13 +99,13 @@ func TestAdminOutreachPosting_PanelReportsConfiguredAndHeld(t *testing.T) {
 	}
 }
 
-func (e *outreachEnv) schedule(t *testing.T, id int64, at time.Time) (int, error) {
+// schedulePost puts a post in scheduled state through the store, for tests
+// that need one; the per-post schedule route is gone (#0642).
+func (e *outreachEnv) schedulePost(t *testing.T, id int64, at time.Time) {
 	t.Helper()
-	code, b := e.do(t, http.MethodPost, postPath(id, "schedule"), fmt.Sprintf(`{"scheduled_at":%q}`, at.UTC().Format(time.RFC3339)))
-	if code != http.StatusOK {
-		return code, fmt.Errorf("schedule = %d (%s)", code, b)
+	if _, err := outreach.NewStore(e.pool).Schedule(context.Background(), id, at.UTC()); err != nil {
+		t.Fatalf("schedule %d: %v", id, err)
 	}
-	return code, nil
 }
 
 func TestAdminOutreachPosting_SendQueuesAndLocks(t *testing.T) {
@@ -139,7 +138,6 @@ func TestAdminOutreachPosting_SendQueuesAndLocks(t *testing.T) {
 		{http.MethodPatch, fmt.Sprintf("/admin/outreach-posts/%d", p.ID), `{"regenerate":true}`},
 		{http.MethodPost, postPath(p.ID, "posted"), ""},
 		{http.MethodDelete, fmt.Sprintf("/admin/outreach-posts/%d", p.ID), ""},
-		{http.MethodPost, postPath(p.ID, "unschedule"), ""},
 	} {
 		code, b := e.do(t, tc.method, tc.path, tc.body)
 		if code != http.StatusConflict || !strings.Contains(string(b), "being sent") {
@@ -196,9 +194,6 @@ func TestAdminOutreachPosting_SendRefusals(t *testing.T) {
 	if code, _ := e.do(t, http.MethodPost, postPath(held.ID, "send"), ""); code != http.StatusConflict {
 		t.Errorf("canceled workshop send = %d, want 409", code)
 	}
-	if _, err := e.schedule(t, held.ID, time.Now().Add(time.Hour)); err == nil || !strings.Contains(err.Error(), "409") {
-		t.Errorf("canceled workshop schedule: %v, want 409", err)
-	}
 	_ = wid
 
 	if code, _ := e.do(t, http.MethodPost, postPath(held.ID+999999, "send"), ""); code != http.StatusNotFound {
@@ -227,60 +222,6 @@ func TestAdminOutreachPosting_RetryOfFailedPost(t *testing.T) {
 	}
 }
 
-func TestAdminOutreachPosting_ScheduleBoundsAndUnschedule(t *testing.T) {
-	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
-	_, p := e.preparedPost(t, "bluesky")
-	path := postPath(p.ID, "schedule")
-	for name, body := range map[string]string{
-		"not json":       `nope`,
-		"missing":        `{}`,
-		"bad format":     `{"scheduled_at":"tomorrow"}`,
-		"past":           fmt.Sprintf(`{"scheduled_at":%q}`, time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)),
-		"under a minute": fmt.Sprintf(`{"scheduled_at":%q}`, time.Now().Add(20*time.Second).UTC().Format(time.RFC3339)),
-		"over a year":    fmt.Sprintf(`{"scheduled_at":%q}`, time.Now().Add(400*24*time.Hour).UTC().Format(time.RFC3339)),
-	} {
-		if code, b := e.do(t, http.MethodPost, path, body); code != http.StatusBadRequest {
-			t.Errorf("%s: %d (%s), want 400", name, code, b)
-		}
-	}
-	at := time.Now().Add(3 * time.Hour).Truncate(time.Second)
-	code, b := e.do(t, http.MethodPost, path, fmt.Sprintf(`{"scheduled_at":%q}`, at.UTC().Format(time.RFC3339)))
-	if code != http.StatusOK {
-		t.Fatalf("schedule = %d (%s)", code, b)
-	}
-	got := decodeOutreach[postingPostView](t, b)
-	if got.Status != "scheduled" || got.ScheduledAt == nil || *got.ScheduledAt != at.UTC().Format(time.RFC3339) {
-		t.Errorf("post = %+v", got)
-	}
-	if n := e.queueRowCount(t, p.ID); n != 0 {
-		t.Errorf("scheduling enqueued %d rows; the publisher enqueues when due", n)
-	}
-	if n := outreachAuditCount(t, e.pool, audit.ActionOutreachPostScheduled, p.ID); n != 1 {
-		t.Errorf("scheduled audit rows = %d", n)
-	}
-	// Rescheduling is the same call.
-	if _, err := e.schedule(t, p.ID, at.Add(time.Hour)); err != nil {
-		t.Errorf("reschedule: %v", err)
-	}
-
-	code, b = e.do(t, http.MethodPost, postPath(p.ID, "unschedule"), "")
-	if code != http.StatusOK {
-		t.Fatalf("unschedule = %d (%s)", code, b)
-	}
-	if got := decodeOutreach[postingPostView](t, b); got.Status != "draft" || got.ScheduledAt != nil {
-		t.Errorf("unscheduled post = %+v", got)
-	}
-	if n := outreachAuditCount(t, e.pool, audit.ActionOutreachPostUnscheduled, p.ID); n != 1 {
-		t.Errorf("unscheduled audit rows = %d", n)
-	}
-	if code, _ := e.do(t, http.MethodPost, postPath(p.ID, "unschedule"), ""); code != http.StatusConflict {
-		t.Errorf("unschedule a draft = %d, want 409", code)
-	}
-}
-
-// TestAdminOutreachPosting_RacingPreparesAuditOnce is the #0544 review
-// follow-up: two Prepares that both pass the already-prepared check and both
-// hold the SAME key (ShortLinks de-duplicates) must write one audit row.
 func TestAdminOutreachPosting_RacingPreparesAuditOnce(t *testing.T) {
 	e := newOutreachEnv(t, true)
 	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")

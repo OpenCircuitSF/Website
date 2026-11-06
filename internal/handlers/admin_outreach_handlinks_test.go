@@ -122,9 +122,7 @@ func TestAdminOutreachHandLinks_ExistingWorkshopGainsLinksAndDrafts(t *testing.T
 	w, oid := e.handSetup(t, `{"waves":["reminder"]}`)
 	p := e.handPanel(t, w)
 	bsky := findPost(t, p, "bluesky", "reminder")
-	if _, err := e.schedule(t, bsky.ID, time.Now().Add(24*time.Hour)); err != nil {
-		t.Fatal(err)
-	}
+	e.schedulePost(t, bsky.ID, time.Now().Add(24*time.Hour))
 	ig := findPost(t, p, "instagram", "announce")
 	if code, b := e.do(t, http.MethodPost, postPath(ig.ID, "posted"), ""); code != http.StatusOK {
 		t.Fatalf("posted = %d (%s)", code, b)
@@ -331,16 +329,6 @@ func TestAdminOutreachHandLinks_RespectsWaveOptIn(t *testing.T) {
 	if hasPost(p, "tiktok", "reminder") || !hasPost(p, "tiktok", "announce") {
 		t.Error("want a TikTok announce draft and no reminder draft")
 	}
-	code, b := e.do(t, http.MethodPost, e.linksPath(w, "schedule-all"), `{"dry_run":true}`)
-	if code != http.StatusOK {
-		t.Fatalf("schedule-all = %d (%s)", code, b)
-	}
-	plan := decodeOutreach[testSchedulePlan](t, b)
-	for _, s := range plan.Skipped {
-		if s.Reason == "not_drafted" && s.Wave == "reminder" {
-			t.Errorf("reminder reported as not drafted: %+v", s)
-		}
-	}
 
 	calls := len(e.links.links)
 	if code, b := e.do(t, http.MethodPost, e.linksPath(w, "draft-all"), `{"waves":["reminder"]}`); code != http.StatusOK {
@@ -355,17 +343,6 @@ func TestAdminOutreachHandLinks_RespectsWaveOptIn(t *testing.T) {
 			t.Errorf("%s reminder is not prepared", ch)
 		}
 	}
-}
-
-type testSchedulePlan struct {
-	ToSchedule []struct {
-		Channel string `json:"channel"`
-	} `json:"to_schedule"`
-	Skipped []struct {
-		Channel string `json:"channel"`
-		Wave    string `json:"wave"`
-		Reason  string `json:"reason"`
-	} `json:"skipped"`
 }
 
 func TestAdminOutreachHandLinks_SwitchedOffChannelGetsNothing(t *testing.T) {
@@ -449,28 +426,9 @@ func TestAdminOutreachHandLinks_NeverPostedAutomatically(t *testing.T) {
 		if code, b := e.do(t, http.MethodPost, postPath(n.ID, "send"), ""); code != http.StatusBadRequest {
 			t.Errorf("%s send = %d (%s)", ch, code, b)
 		}
-		if code, _ := e.schedule(t, n.ID, time.Now().Add(24*time.Hour)); code != http.StatusBadRequest {
-			t.Errorf("%s schedule = %d", ch, code)
-		}
 		if q := e.queueRowCount(t, n.ID); q != 0 {
 			t.Errorf("%s queue rows = %d", ch, q)
 		}
-	}
-	code, b := e.do(t, http.MethodPost, e.linksPath(w, "schedule-all"), `{"dry_run":true}`)
-	if code != http.StatusOK {
-		t.Fatalf("schedule-all = %d (%s)", code, b)
-	}
-	plan := decodeOutreach[testSchedulePlan](t, b)
-	check := func(ch string) {
-		if ch == "instagram" || ch == "tiktok" || ch == "youtube" {
-			t.Errorf("schedule-all names %s", ch)
-		}
-	}
-	for _, i := range plan.ToSchedule {
-		check(i.Channel)
-	}
-	for _, s := range plan.Skipped {
-		check(s.Channel)
 	}
 }
 

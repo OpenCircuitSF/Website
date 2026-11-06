@@ -214,13 +214,10 @@ func outreachMuxPosting(pool *pgxpool.Pool, links shortLinker, posting outreachP
 	mux.Handle("POST /admin/outreach-posts/{id}/takedown", requireAdmin(http.HandlerFunc(h.Takedown)))
 	mux.Handle("DELETE /admin/outreach-posts/{id}", requireAdmin(http.HandlerFunc(h.DeletePost)))
 	mux.Handle("POST /admin/outreach-posts/{id}/send", requireAdmin(http.HandlerFunc(h.SendPost)))
-	mux.Handle("POST /admin/outreach-posts/{id}/schedule", requireAdmin(http.HandlerFunc(h.SchedulePost)))
-	mux.Handle("POST /admin/outreach-posts/{id}/unschedule", requireAdmin(http.HandlerFunc(h.UnschedulePost)))
 	mux.Handle("GET /admin/workshops/{id}/outreach/results", requireAdmin(http.HandlerFunc(h.ResultsForWorkshop)))
 	mux.Handle("POST /admin/workshops/{id}/outreach/reset", requireAdmin(http.HandlerFunc(h.Reset)))
 	mux.Handle("POST /admin/workshops/{id}/outreach/draft-all", requireAdmin(http.HandlerFunc(h.DraftAll)))
 	mux.Handle("POST /admin/workshops/{id}/outreach/hand-links", requireAdmin(http.HandlerFunc(h.EnsureHandLinks)))
-	mux.Handle("POST /admin/workshops/{id}/outreach/schedule-all", requireAdmin(http.HandlerFunc(h.ScheduleAll)))
 	mux.Handle("POST /admin/workshops/{id}/outreach/schedule", requireAdmin(http.HandlerFunc(h.ScheduleSection)))
 	mux.Handle("POST /admin/workshops/{id}/outreach/unschedule", requireAdmin(http.HandlerFunc(h.UnscheduleSection)))
 	mux.Handle("GET /admin/outreach-results", requireAdmin(http.HandlerFunc(h.ResultsSummary)))
@@ -392,8 +389,6 @@ func TestAdminOutreach_AuthGuards(t *testing.T) {
 		{http.MethodPost, "/admin/outreach-posts/1/posted"},
 		{http.MethodDelete, "/admin/outreach-posts/1"},
 		{http.MethodPost, "/admin/outreach-posts/1/send"},
-		{http.MethodPost, "/admin/outreach-posts/1/schedule"},
-		{http.MethodPost, "/admin/outreach-posts/1/unschedule"},
 		{http.MethodPost, "/admin/outreach-posts/1/takedown"},
 	}
 	for _, p := range paths {

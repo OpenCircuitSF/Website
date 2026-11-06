@@ -222,7 +222,7 @@ func TestAdminOutreach_DisabledChannels(t *testing.T) {
 
 // #0588: switching off a channel the site posts to never hides a scheduled
 // post (it would still go out unseen); it stays shown and actionable, while a
-// draft there is hidden, refused by Post now, and not listed by Schedule all.
+// draft there is hidden and refused by Post now.
 func TestAdminOutreach_DisabledAutomaticChannel(t *testing.T) {
 	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true})
 	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
@@ -235,10 +235,7 @@ func TestAdminOutreach_DisabledAutomaticChannel(t *testing.T) {
 	}
 	sched := e.createPost(t, o.ID, "bluesky", "reminder")
 	prepare(sched.ID)
-	at := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339)
-	if code, b := e.do(t, http.MethodPost, fmt.Sprintf("/admin/outreach-posts/%d/schedule", sched.ID), fmt.Sprintf(`{"scheduled_at":%q}`, at)); code != http.StatusOK {
-		t.Fatalf("schedule = %d %s", code, b)
-	}
+	e.schedulePost(t, sched.ID, time.Now().Add(2*time.Hour))
 	draft := e.createPost(t, o.ID, "bluesky", "announce")
 	prepare(draft.ID)
 
@@ -258,24 +255,8 @@ func TestAdminOutreach_DisabledAutomaticChannel(t *testing.T) {
 	if code, _ := e.do(t, http.MethodPost, fmt.Sprintf("/admin/outreach-posts/%d/send", draft.ID), ""); code != http.StatusConflict {
 		t.Errorf("post now on a hidden draft = %d, want 409", code)
 	}
-	if code, b := e.do(t, http.MethodPost, fmt.Sprintf("/admin/outreach-posts/%d/unschedule", sched.ID), ""); code != http.StatusOK {
+	if code, b := e.do(t, http.MethodPost, sectionPath(w.ID, "unschedule"), `{"wave":"reminder"}`); code != http.StatusOK {
 		t.Errorf("unschedule the shown scheduled post = %d %s", code, b)
-	}
-
-	code, b = e.do(t, http.MethodPost, e.linksPath(w, "schedule-all"), `{"dry_run":true}`)
-	if code != http.StatusOK {
-		t.Fatalf("schedule-all = %d %s", code, b)
-	}
-	d := decodeOutreach[testScheduleAll](t, b)
-	for _, it := range d.ToSchedule {
-		if it.Channel == "bluesky" {
-			t.Errorf("schedule-all plans a bluesky post while it is off: %+v", it)
-		}
-	}
-	for _, s := range d.Skipped {
-		if s.Channel == "bluesky" {
-			t.Errorf("schedule-all lists a bluesky gap while it is off: %+v", s)
-		}
 	}
 }
 
@@ -379,21 +360,6 @@ func TestAdminOutreach_OffChannelWithHistoryGetsNoNewLinksOrDrafts(t *testing.T)
 	for _, l := range hp.HandLinks {
 		if l.Channel == "tiktok" {
 			t.Errorf("tiktok hand-link row: %+v", l)
-		}
-	}
-	code, b := e.do(t, http.MethodPost, e.linksPath(w, "schedule-all"), `{"dry_run":true}`)
-	if code != http.StatusOK {
-		t.Fatalf("schedule-all = %d %s", code, b)
-	}
-	d := decodeOutreach[testScheduleAll](t, b)
-	for _, it := range d.ToSchedule {
-		if it.Channel == "tiktok" {
-			t.Errorf("schedule-all plans tiktok: %+v", it)
-		}
-	}
-	for _, s := range d.Skipped {
-		if s.Channel == "tiktok" {
-			t.Errorf("schedule-all lists tiktok: %+v", s)
 		}
 	}
 	kept := false

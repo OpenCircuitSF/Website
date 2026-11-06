@@ -55,8 +55,6 @@ type outreachStore interface {
 	GetPostLink(ctx context.Context, outreachID int64, channel, wave string) (outreach.PostLink, error)
 	InsertPostLink(ctx context.Context, outreachID int64, channel, wave, key, shortURL string) (outreach.PostLink, bool, error)
 	QueueNow(ctx context.Context, id int64) (post outreach.Post, prevStatus string, err error)
-	Schedule(ctx context.Context, id int64, at time.Time) (outreach.Post, error)
-	Unschedule(ctx context.Context, id int64) (outreach.Post, error)
 	ScheduleMany(ctx context.Context, ids []int64, at time.Time) ([]outreach.Post, error)
 	UnscheduleMany(ctx context.Context, ids []int64) ([]outreach.Post, error)
 	// Engagement and mentions (#0547), read from our own database.

@@ -1607,20 +1607,17 @@ func adminRoutes(
 			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/unmark", http.HandlerFunc(adminOutreachH.UnmarkPosted)},
 			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/takedown", http.HandlerFunc(adminOutreachH.Takedown)},
 			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/send", http.HandlerFunc(adminOutreachH.SendPost)},
-			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/schedule", http.HandlerFunc(adminOutreachH.SchedulePost)},
-			adminRoute{http.MethodPost, "/admin/outreach-posts/{id}/unschedule", http.HandlerFunc(adminOutreachH.UnschedulePost)},
 			adminRoute{http.MethodDelete, "/admin/outreach-posts/{id}", http.HandlerFunc(adminOutreachH.DeletePost)},
 			// #0548: saved flyer locations, under /admin/outreach-locations for
 			// the same overlap reason as the post routes above.
 			// #0546: click results read from ShortLinks. Hyphenated like the
 			// siblings so it never overlaps /admin/outreach/{id}/posts.
 			adminRoute{http.MethodGet, "/admin/workshops/{id}/outreach/results", http.HandlerFunc(adminOutreachH.ResultsForWorkshop)},
-			// #0568: draft-all and schedule-all, keyed by workshop id.
+			// #0568: draft-all, keyed by workshop id.
 			// #0592: reset a workshop's outreach while nothing is public.
 			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/reset", http.HandlerFunc(adminOutreachH.Reset)},
 			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/draft-all", http.HandlerFunc(adminOutreachH.DraftAll)},
 			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/hand-links", http.HandlerFunc(adminOutreachH.EnsureHandLinks)},
-			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/schedule-all", http.HandlerFunc(adminOutreachH.ScheduleAll)},
 			// #0640: one section scheduled or unscheduled in one call.
 			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/schedule", http.HandlerFunc(adminOutreachH.ScheduleSection)},
 			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/unschedule", http.HandlerFunc(adminOutreachH.UnscheduleSection)},

@@ -49,11 +49,4 @@ func TestOutreachServerLabelsAvoidBannedJargon(t *testing.T) {
 	for _, w := range outreach.Waves() {
 		check("wave label", w.Label)
 	}
-	for _, c := range outreach.Channels() {
-		for _, w := range outreach.Waves() {
-			cl, wl := slotLabels(c.Name, w.Name)
-			check("slot channel label", cl)
-			check("slot wave label", wl)
-		}
-	}
 }

@@ -20,9 +20,8 @@ const (
 
 // parseScheduleAt validates a requested schedule time: an RFC 3339 instant
 // within the lead window. It returns the instant in UTC, or a non-empty
-// reason (phrased to follow a field name) when the time is refused. Single
-// Schedule and Schedule all's per-post overrides (#0587) share it so their
-// windows cannot drift apart.
+// reason (phrased to follow a field name) when the time is refused. ScheduleSection
+// uses it (#0640).
 func parseScheduleAt(raw string, now time.Time) (time.Time, string) {
 	at, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
@@ -37,7 +36,7 @@ func parseScheduleAt(raw string, now time.Time) (time.Time, string) {
 	return at.UTC(), ""
 }
 
-// postingGate does the checks Post now, Retry and Schedule share, writing the
+// postingGate does the checks Post now and Retry share, writing the
 // response and returning ok=false when one fails. It resolves the post, its
 // workshop and its channel; the channel must be automatic and configured.
 func (h *AdminOutreachHandler) postingGate(w http.ResponseWriter, r *http.Request, id int64) (outreach.Post, workshops.Workshop, outreach.Channel, bool) {
@@ -140,93 +139,6 @@ func (h *AdminOutreachHandler) SendPost(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 	writeJSON(w, http.StatusAccepted, h.postView(queued, h.facts(wk), wk.Status))
-}
-
-type scheduleOutreachPostRequest struct {
-	ScheduledAt string `json:"scheduled_at"`
-}
-
-// SchedulePost handles POST /admin/outreach-posts/{id}/schedule. The time
-// must be an RFC 3339 instant between a minute and a year from now. Calling
-// it on an already scheduled post reschedules it.
-func (h *AdminOutreachHandler) SchedulePost(w http.ResponseWriter, r *http.Request) {
-	actor, ok := middleware.UserFromContext(r.Context())
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthenticated")
-		return
-	}
-	id, ok := outreachPathID(w, r)
-	if !ok {
-		return
-	}
-	var req scheduleOutreachPostRequest
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	at, msg := parseScheduleAt(req.ScheduledAt, h.now())
-	if msg != "" {
-		writeError(w, http.StatusBadRequest, "scheduled_at "+msg)
-		return
-	}
-	_, wk, _, ok := h.postingGate(w, r, id)
-	if !ok {
-		return
-	}
-	updated, err := h.store.Schedule(r.Context(), id, at.UTC())
-	if err != nil {
-		writePostingStoreError(w, err)
-		return
-	}
-	if h.auditor != nil {
-		actorID := actor.ID
-		targetID := updated.ID
-		h.auditor.Record(r.Context(), audit.Entry{
-			ActorID:    &actorID,
-			Action:     audit.ActionOutreachPostScheduled,
-			TargetType: audit.TargetOutreachPost,
-			TargetID:   &targetID,
-			Metadata:   map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave, "scheduled_at": at.UTC().Format(time.RFC3339)},
-			IP:         clientIP(r),
-		})
-	}
-	writeJSON(w, http.StatusOK, h.postView(updated, h.facts(wk), wk.Status))
-}
-
-// UnschedulePost handles POST /admin/outreach-posts/{id}/unschedule: a
-// scheduled post goes back to draft.
-func (h *AdminOutreachHandler) UnschedulePost(w http.ResponseWriter, r *http.Request) {
-	actor, ok := middleware.UserFromContext(r.Context())
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthenticated")
-		return
-	}
-	id, ok := outreachPathID(w, r)
-	if !ok {
-		return
-	}
-	_, wk, ok := h.postContext(w, r, id)
-	if !ok {
-		return
-	}
-	updated, err := h.store.Unschedule(r.Context(), id)
-	if err != nil {
-		writePostingStoreError(w, err)
-		return
-	}
-	if h.auditor != nil {
-		actorID := actor.ID
-		targetID := updated.ID
-		h.auditor.Record(r.Context(), audit.Entry{
-			ActorID:    &actorID,
-			Action:     audit.ActionOutreachPostUnscheduled,
-			TargetType: audit.TargetOutreachPost,
-			TargetID:   &targetID,
-			Metadata:   map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave},
-			IP:         clientIP(r),
-		})
-	}
-	writeJSON(w, http.StatusOK, h.postView(updated, h.facts(wk), wk.Status))
 }
 
 type scheduleSectionRequest struct {
