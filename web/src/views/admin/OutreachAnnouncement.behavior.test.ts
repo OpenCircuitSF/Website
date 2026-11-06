@@ -7,7 +7,7 @@
 // proved here.
 import { render, cleanup, waitFor, screen, fireEvent, within } from '@testing-library/svelte';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { OutreachPost, WorkshopOutreach } from '../../lib/types';
+import type { OutreachChannel, OutreachPost, WorkshopOutreach } from '../../lib/types';
 
 const updateOutreachPost = vi.fn();
 const sendOutreachPost = vi.fn();
@@ -56,16 +56,21 @@ function post(over: Partial<OutreachPost>): OutreachPost {
 const bPost = () => post({});
 const mPost = () => post({ id: 2, channel: 'mastodon', body: mast, short_url: MURL });
 
-function mountView(posts: OutreachPost[], wave = 'announce', onUnsavedChange?: (unsaved: boolean) => void) {
+function mountView(
+  posts: OutreachPost[],
+  wave = 'announce',
+  onUnsavedChange?: (unsaved: boolean) => void,
+  opts: { channels?: OutreachChannel[]; props?: Record<string, unknown> } = {},
+) {
   let current: WorkshopOutreach = {
     available: true, unavailable_reason: '',
     workshop: { id: 5, slug: 's', title: 'Soldering 101', status: 'published', starts_at: '2026-12-05T18:00:00Z' },
     outreach: { id: 9, workshop_id: 9, campaign_slug: 's', created_at: '' },
-    channels, waves, posts,
+    channels: opts.channels ?? channels, waves, posts,
   };
   const reload = vi.fn();
   const r = render(OutreachAnnouncement, {
-    view: current, results: null, wave, workshopId: 5, reload, onUnsavedChange,
+    view: current, results: null, wave, workshopId: 5, reload, onUnsavedChange, ...opts.props,
     onChange: (p: OutreachPost) => {
       current = { ...current, posts: current.posts.map((x) => (x.id === p.id ? p : x)) };
       void r.rerender({ view: current });
@@ -160,8 +165,59 @@ describe('OutreachAnnouncement', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Save message' }));
     await waitFor(() => expect(updateOutreachPost).toHaveBeenCalledTimes(1));
     expect(updateOutreachPost.mock.calls[0][0]).toBe(1);
-    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Saved to Bluesky. Mastodon is customized and was left alone.'));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Saved to Bluesky. Mastodon is customized and kept its own text.'));
     expect(screen.getByRole('article', { name: 'Mastodon Announce preview' }).textContent).toContain('Customized');
+  });
+
+  it('Save message leaves a post with unsaved Customize typing alone and says so (#0632)', async () => {
+    mountView([bPost(), mPost()]);
+    updateOutreachPost.mockImplementation((id: number, b: { body: string }) => Promise.resolve(post({ id, channel: id === 1 ? 'bluesky' : 'mastodon', body: b.body, short_url: id === 1 ? 'https://go.example/b' : MURL })));
+    const bArticle = screen.getByRole('article', { name: 'Bluesky Announce preview' });
+    await fireEvent.click(within(bArticle).getByRole('button', { name: 'Customize…' }));
+    const box = within(bArticle).getByLabelText('Post text') as HTMLTextAreaElement;
+    await fireEvent.input(box, { target: { value: 'Mine' } });
+    await type('Shared words.');
+    expect(await screen.findByText(/Bluesky has unsaved edits open, so Save message leaves it alone\./)).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Save message' }));
+    await waitFor(() => expect(document.querySelector('.announcement > [role="status"]')?.textContent).toBe('Saved to Mastodon. Bluesky has unsaved edits open, so it was not changed.'));
+    expect(updateOutreachPost).toHaveBeenCalledTimes(1);
+    expect(updateOutreachPost.mock.calls[0][0]).toBe(2);
+    expect((within(screen.getByRole('article', { name: 'Bluesky Announce preview' })).getByLabelText('Post text') as HTMLTextAreaElement).value).toBe('Mine');
+  });
+
+  it('Save message also writes the video rows, keeping each ending, and names the customized one (#0634)', async () => {
+    const V = 'https://go.example/v';
+    const hand = (name: string, label: string) => ({ name, label, utm_source: name, utm_medium: 'video', char_limit: 0, automatic: false, configured: false, account: '' });
+    const ttBody = `Join us.\n\nLearn.\n\nSign up: ${V}\n\nOpen Circuit SF: https://www.opencircuitsf.com\n\n#SanFrancisco #Electronics`;
+    const igBody = 'Join us.\n\nLearn.\n\nSign up at the link in our bio.\n\n#SanFrancisco #Electronics';
+    const all = [
+      bPost(),
+      mPost(),
+      post({ id: 3, channel: 'instagram', status: 'manual', body: igBody, short_url: V }),
+      post({ id: 4, channel: 'tiktok', status: 'manual', body: ttBody, short_url: V }),
+      post({ id: 5, channel: 'youtube', status: 'manual', body: 'Own words.', short_url: V, customized: true }),
+    ];
+    mountView(all, 'announce', undefined, { channels: [...channels, hand('instagram', 'Instagram'), hand('tiktok', 'TikTok'), hand('youtube', 'YouTube Shorts')] });
+    updateOutreachPost.mockImplementation((id: number, b: { body: string }) => Promise.resolve({ ...all.find((x) => x.id === id)!, body: b.body }));
+    await type('Fresh words.');
+    expect(screen.getByText('Saving also changes the video text for Instagram Reels and TikTok. YouTube Shorts is customized and kept its own text.')).toBeTruthy();
+    await fireEvent.click(screen.getByRole('button', { name: 'Save message' }));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Saved to Bluesky, Mastodon, Instagram Reels and TikTok. YouTube Shorts is customized and kept its own text.'));
+    expect(updateOutreachPost.mock.calls.map((c) => c[0])).toEqual([1, 2, 3, 4]);
+    expect(updateOutreachPost.mock.calls[2][1]).toEqual({ body: 'Fresh words.\n\nSign up at the link in our bio.\n\n#SanFrancisco #Electronics' });
+    expect(updateOutreachPost.mock.calls[3][1]).toEqual({ body: `Fresh words.\n\nSign up: ${V}\n\nOpen Circuit SF: https://www.opencircuitsf.com\n\n#SanFrancisco #Electronics` });
+  });
+
+  it('editingElsewhere keeps a hand row out of Save message (#0632)', async () => {
+    const V = 'https://go.example/v';
+    const tiktok = { name: 'tiktok', label: 'TikTok', utm_source: 'tiktok', utm_medium: 'video', char_limit: 0, automatic: false, configured: false, account: '' };
+    const tt = post({ id: 4, channel: 'tiktok', status: 'manual', body: `Join us.\n\nSign up: ${V}`, short_url: V });
+    mountView([bPost(), mPost(), tt], 'announce', undefined, { channels: [...channels, tiktok], props: { editingElsewhere: [4] } });
+    updateOutreachPost.mockImplementation((id: number, b: { body: string }) => Promise.resolve(post({ id, channel: id === 1 ? 'bluesky' : 'mastodon', body: b.body, short_url: id === 1 ? 'https://go.example/b' : MURL })));
+    await type('Fresh words.');
+    await fireEvent.click(screen.getByRole('button', { name: 'Save message' }));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('Saved to Bluesky and Mastodon. TikTok has unsaved edits open, so it was not changed.'));
+    expect(updateOutreachPost.mock.calls.map((c) => c[0])).toEqual([1, 2]);
   });
 
   it('Save message is disabled, with a reason, when the message is over a limit', async () => {
@@ -286,6 +342,15 @@ describe('OutreachAnnouncement', () => {
     expect(unscheduleOutreachSection).toHaveBeenCalledWith(5, 'announce');
     expect(await screen.findByText('Back to draft.')).toBeTruthy();
     expect(m.reload).toHaveBeenCalled();
+  });
+
+  it('Unschedule moves focus to Schedule… once the reload lands (#0633)', async () => {
+    const at = '2099-11-28T18:00:00Z';
+    const m = mountView([post({ status: 'scheduled', scheduled_at: at }), post({ id: 2, channel: 'mastodon', body: mast, short_url: MURL, status: 'scheduled', scheduled_at: at })]);
+    m.reload.mockImplementation(() => void m.rerender([bPost(), mPost()]));
+    unscheduleOutreachSection.mockResolvedValue({ posts: [bPost(), mPost()], left_alone: [] });
+    await fireEvent.click(screen.getByRole('button', { name: 'Unschedule' }));
+    await waitFor(() => expect(document.activeElement?.textContent?.trim()).toBe('Schedule…'));
   });
 
   it('a scheduled section reads Scheduled for … on Bluesky and Mastodon with Change time…, Unschedule and Post', () => {

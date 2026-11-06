@@ -1,16 +1,18 @@
 <!--
   One post card (#0569, extracted in #0581): the post text as it will go out,
-  one plain status line and the actions that apply. Post now, Retry and Mark
-  posted open an in-app confirmation (OutreachPostDialog) instead of a
-  native browser dialog. Each card carries its own always-rendered live regions
+  one plain status line and the actions that apply. Every card here is a
+  hand-posted channel: OutreachPostCards lists no other, and the section
+  (OutreachAnnouncement.svelte) owns posting. Mark posted and Unmark open an
+  in-app confirmation (OutreachPostDialog) instead of a native browser dialog.
+  Saving an edit marks the post customized, so Save message leaves it alone;
+  Use the standard wording then Save hands it back (#0634). Each card carries its own always-rendered live regions
   (role="status" / role="alert") at the bottom, so feedback appears next to
   the button that was pressed; a notice is only shown while the post is still
   in the state it was written for (lib/outreachCards.ts visibleNotice). A
   queued post shows a CSS spinner. A hand-posted row (#0626) offers Copy with
   link, Copy text only and Copy link; each flips to "Copied" for two seconds,
   and when the browser refuses, the exact text is selected in a box instead. The
-  notice itself is held by the list so a both-networks post can write to two
-  cards. A hand-posted row's title carries only "Posted <when> · view post" once
+  notice itself is held by the list. A hand-posted row's title carries only "Posted <when> · view post" once
   it is posted; the day to post it is said once on the group line (#0640). Its
   link and buttons share one row, two across on a phone. Scheduling is not
   here: a section's one time is set from its "When it goes out" block.
@@ -19,11 +21,9 @@
   import { onDestroy, tick, untrack } from 'svelte';
   import {
     createOutreachPost,
-    sendOutreachPost,
     prepareOutreachPost,
     markOutreachPosted,
     unmarkOutreachPosted,
-    takedownOutreachPost,
     ApiError,
   } from '../../lib/api';
   import { composerActions } from '../../lib/outreach';
@@ -146,26 +146,16 @@
         const updated = await markOutreachPosted(post.id, remoteUrl);
         onChange(updated);
         onNotice({ text: 'Marked as posted.', kind: 'status', status: updated.status });
-      } else if (mode === 'unmark') {
+      } else {
         const updated = await unmarkOutreachPosted(post.id);
         onChange(updated);
         onNotice({ text: 'Unmarked. It is a post to make by hand again.', kind: 'status', status: updated.status });
-      } else if (mode === 'takedown') {
-        const updated = await takedownOutreachPost(post.id);
-        onChange(updated);
-        onNotice({ text: `Deleted from ${c.channel.label}. It is a draft again, with the current link.`, kind: 'status', status: updated.status });
-        // Nothing may be posted now, so the page's Reset availability changed.
-        reload();
-      } else {
-        const updated = await sendOutreachPost(post.id);
-        onChange(updated);
-        onNotice({ text: 'Queued. It posts within a few seconds; this page updates when it does.', kind: 'status', status: updated.status });
       }
       dialog = null;
     } catch (err) {
       dialogError = message(
         err,
-        mode === 'markPosted' ? 'Could not mark posted. Please try again.' : mode === 'unmark' ? 'Could not unmark. Please try again.' : mode === 'takedown' ? 'Could not delete the post. Please try again.' : 'Could not post. Please try again.',
+        mode === 'markPosted' ? 'Could not mark posted. Please try again.' : 'Could not unmark. Please try again.',
       );
     } finally {
       busy = false;
@@ -229,7 +219,7 @@
     </p>
   {/snippet}
   <div class="card-head">
-    <h5 class="card-title">{title} &middot; {waveLabel}{p?.stale ? ' (stale)' : ''}</h5>
+    <h5 class="card-title">{title} &middot; {waveLabel}{p?.stale ? ' (stale)' : ''}{#if p?.customized}<span class="badge">Customized</span>{/if}</h5>
     {#if hand && !editing && status.kind === 'posted'}{@render statusEl()}{/if}
   </div>
   {#if p && editing}
@@ -242,6 +232,7 @@
         {onChange}
         {onDeleted}
         onClose={() => onCloseEditor(p.id)}
+        markCustomized
         {onDirtyChange}
       />
     {/key}
@@ -281,12 +272,6 @@
         <Button variant="primary" onclick={draft} disabled={busy}>Draft</Button>
       {/if}
       {#if p}
-        {#if btn.postNow}
-          <Button variant="primary" onclick={() => openDialog('post')} disabled={busy}>Post now</Button>
-        {/if}
-        {#if btn.retry}
-          <Button variant="primary" onclick={() => openDialog('retry')} disabled={busy}>Retry</Button>
-        {/if}
         {#if btn.copyText && copies}
           <Button onclick={() => copy('withlink', copies.withLink ?? '')} disabled={busy || copies.withLink === null}>{copyLabel('Copy with link', copied === 'withlink')}</Button>
           <Button onclick={() => copy('text', copies.textOnly)} disabled={busy || copies.textOnly === ''}>{copyLabel('Copy text only', copied === 'text')}</Button>
@@ -299,9 +284,6 @@
         {/if}
         {#if btn.unmark}
           <Button onclick={() => openDialog('unmark')} disabled={busy}>Unmark</Button>
-        {/if}
-        {#if btn.takedown}
-          <Button onclick={() => openDialog('takedown')} disabled={busy}>Delete and redo…</Button>
         {/if}
         {#if btn.edit}
           <Button onclick={() => onEdit(p)} data-edit-for={p.id}>Edit</Button>
@@ -347,6 +329,15 @@
     border-radius: var(--radius);
     padding: var(--space-3);
     margin-bottom: var(--space-3);
+  }
+  .badge {
+    margin-left: var(--space-2);
+    font-size: var(--fs-sm);
+    font-weight: 400;
+    color: var(--text-muted);
+    border: var(--border-w) solid var(--border);
+    border-radius: var(--radius);
+    padding: 0 var(--space-2);
   }
   .card-title {
     margin: 0;

@@ -414,6 +414,39 @@ describe('hand-posted copy (#0626)', () => {
     return writeText;
   };
 
+  it("saving a hand row's edit marks it customized and shows the badge (#0634)", async () => {
+    updateOutreachPost.mockResolvedValue(tt({ body: 'My own words', customized: true }));
+    onlyVideo([tt()]);
+    await screen.findByRole('article', { name: 'TikTok Announce' });
+    await fireEvent.click(btn('Edit'));
+    await fireEvent.input(screen.getByLabelText('Post text'), { target: { value: 'My own words' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateOutreachPost).toHaveBeenCalledWith(3, { body: 'My own words', customized: true }));
+    await waitFor(() => expect(row().querySelector('h5')?.textContent).toContain('Customized'));
+  });
+
+  it('reports which post has unsaved typing, and null once saved (#0632)', async () => {
+    const onEditingDirty = vi.fn();
+    updateOutreachPost.mockResolvedValue(tt({ body: 'Typed', customized: true }));
+    onlyVideo([tt()], { onEditingDirty });
+    await screen.findByRole('article', { name: 'TikTok Announce' });
+    await fireEvent.click(btn('Edit'));
+    await fireEvent.input(screen.getByLabelText('Post text'), { target: { value: 'Typed' } });
+    await waitFor(() => expect(onEditingDirty).toHaveBeenLastCalledWith(3));
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(onEditingDirty).toHaveBeenLastCalledWith(null));
+  });
+
+  it('a hand row offers no Post now, Retry or Delete and redo (#0634)', async () => {
+    onlyVideo([
+      tt(),
+      post({ id: 2, channel: 'instagram', status: 'failed', body: 'IG.\n\nSign up at the link in our bio.', short_url: 'https://go.example/u/ig', last_error: 'x' }),
+      post({ id: 4, channel: 'youtube', status: 'posted', body: 'YT body', short_url: 'https://go.example/u/yt', posted_at: '2026-10-18T17:00:00Z' }),
+    ]);
+    await screen.findByRole('article', { name: 'TikTok Announce' });
+    for (const name of ['Post now', 'Retry', 'Delete and redo…']) expect(screen.queryByRole('button', { name })).toBeNull();
+  });
+
   it('copying each of the three in one section gives three different links and no token', async () => {
     const urls: Record<string, string> = { instagram: 'https://go.example/u/ig', tiktok: 'https://go.example/u/tt', youtube: 'https://go.example/u/yt' };
     onlyVideo([
@@ -706,7 +739,7 @@ describe('standard wording (#0635)', () => {
     await fireEvent.click(screen.getByRole('button', USE));
     await fireEvent.input(box, { target: { value: 'edited' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(updateOutreachPost).toHaveBeenCalledWith(7, { body: 'edited' }));
+    await waitFor(() => expect(updateOutreachPost).toHaveBeenCalledWith(7, { body: 'edited', customized: true }));
   });
   it('no offer when the text already matches', async () => {
     await open([handRow({ body: FRESH })]);

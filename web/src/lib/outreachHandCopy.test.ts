@@ -1,5 +1,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { handChannelLabel, handCopies, handLinkLabel, handPostWhen, isVideoChannel, sectionVideoId, textOnly, videoJumpLabel, withLink, writeClipboard } from './outreachHandCopy';
+import {
+  handChannelLabel,
+  handCopies,
+  handLinkLabel,
+  handPostWhen,
+  isVideoChannel,
+  messageSavePreview,
+  messageSaveStatus,
+  planMessageSave,
+  sectionVideoId,
+  splitHandBody,
+  textOnly,
+  videoJumpLabel,
+  withLink,
+  writeClipboard,
+} from './outreachHandCopy';
+import { composeBody } from './outreachMessage';
 import type { OutreachChannel, OutreachPost, OutreachWave } from './types';
 import drafts from '../../../internal/outreach/testdata/hand_drafts.json';
 
@@ -232,5 +248,100 @@ describe('videoJumpLabel', () => {
   });
   it('names the heading it goes to', () => {
     expect(sectionVideoId('last-call')).toBe('outreach-section-last-call-video');
+  });
+});
+
+describe('Save message and hand-posted rows (#0634)', () => {
+  const all = drafts as Record<string, string>;
+  const URL = 'https://go.example/u/x';
+  const filled = (key: string) => all[key].split('{link}').join(URL);
+
+  it("splitHandBody keeps each real draft's ending and round-trips", () => {
+    for (const key of Object.keys(all)) {
+      for (const [body, shortUrl, link] of [[filled(key), URL, URL], [all[key], null, '{link}']] as [string, string | null, string][]) {
+        const { message, tail } = splitHandBody(body, shortUrl);
+        expect(composeBody(message, tail)).toBe(body);
+        expect(tail[0]).toBe(key.startsWith('instagram/') ? 'Sign up at the link in our bio.' : `Sign up: ${link}`);
+        expect(message).not.toContain('Sign up');
+      }
+    }
+  });
+
+  it("splitHandBody stops at the first paragraph that is the user's own words", () => {
+    expect(splitHandBody('Mine.\n\nAlso mine.\n\n#sf', null)).toEqual({ message: 'Mine.\n\nAlso mine.', tail: ['#sf'] });
+    expect(splitHandBody('Just one.', URL).tail).toEqual([]);
+  });
+
+  const ch = (name: string, label: string, automatic: boolean, configured: boolean, char_limit = 0): OutreachChannel => ({
+    name, label, utm_source: name, utm_medium: 'social', char_limit, automatic, configured, account: '',
+  });
+  const channels = [
+    ch('bluesky', 'Bluesky', true, true, 300),
+    ch('mastodon', 'Mastodon', true, true, 500),
+    ch('instagram', 'Instagram', false, false),
+    ch('tiktok', 'TikTok', false, false),
+    ch('youtube', 'YouTube Shorts', false, false),
+  ];
+  const p = (over: Partial<OutreachPost>): OutreachPost => ({
+    id: 1, outreach_id: 9, channel: 'bluesky', wave: 'announce', body: 'Old words.\n\n#sf', status: 'draft', prepared: true, stale: false, customized: false, held: false,
+    short_link_key: 'k', short_url: null, destination_url: '', utm: { source: '', medium: '', campaign: '', content: '' },
+    scheduled_at: null, posted_at: null, remote_url: null, last_error: null, created_at: '', updated_at: null, ...over,
+  });
+  const posts = () => [
+    p({ id: 1 }),
+    p({ id: 2, channel: 'mastodon', body: `Old words.\n\nSign up: ${URL}\n\n#sf`, short_url: URL }),
+    p({ id: 3, channel: 'tiktok', status: 'manual', body: filled('tiktok/announce'), short_url: URL }),
+    p({ id: 4, channel: 'instagram', status: 'manual', body: filled('instagram/announce'), short_url: URL }),
+    p({ id: 5, channel: 'youtube', status: 'manual', body: 'My own video words.', short_url: URL, customized: true }),
+  ];
+  const waves: OutreachWave[] = [{ name: 'announce', label: 'Announce', suggested_at: null }];
+  const view = (ps: OutreachPost[], extra: object = {}) => ({ channels, waves, posts: ps, ...extra });
+  const labels = (xs: { label: string }[]) => xs.map((x) => x.label);
+
+  it('planMessageSave writes the automatic posts and every video row not customized', () => {
+    const s = planMessageSave(view(posts()), 'announce', 'Fresh words.');
+    expect(labels(s.write)).toEqual(['Bluesky', 'Mastodon', 'Instagram Reels', 'TikTok']);
+    expect(s.write.find((i) => i.post.id === 3)?.body).toBe(
+      `Fresh words.\n\nSign up: ${URL}\n\nOpen Circuit SF: https://www.opencircuitsf.com\n\n#SanFrancisco #Electronics`,
+    );
+    expect(s.write.find((i) => i.post.id === 4)?.body).toBe('Fresh words.\n\nSign up at the link in our bio.\n\n#SanFrancisco #Electronics');
+    expect(labels(s.customized)).toEqual(['YouTube Shorts']);
+    expect(s.editing).toEqual([]);
+  });
+
+  it('planMessageSave leaves posted, queued and switched-off video rows out of every list', () => {
+    const ps = posts().map((x) => (x.id === 4 ? { ...x, status: 'posted' as const } : x.id === 5 ? { ...x, status: 'queued' as const } : x));
+    const s = planMessageSave(view(ps, { off_channels: [{ name: 'tiktok', label: 'TikTok', automatic: false }] }), 'announce', 'Fresh words.');
+    const ids = [...s.write, ...s.customized, ...s.editing].map((x) => x.post.id);
+    expect(ids).toEqual([1, 2]);
+  });
+
+  it('planMessageSave leaves a post with unsaved typing alone, automatic or hand', () => {
+    const s = planMessageSave(view(posts()), 'announce', 'Fresh words.', [1, 3]);
+    expect(labels(s.editing)).toEqual(['Bluesky', 'TikTok']);
+    expect(s.write.map((i) => i.post.id)).toEqual([2, 4]);
+  });
+
+  it('planMessageSave ignores an unconnected Bluesky', () => {
+    const v = { channels: [ch('bluesky', 'Bluesky', true, false, 300), channels[3]], waves, posts: [p({ id: 1 }), posts()[2]] };
+    const s = planMessageSave(v, 'announce', 'Fresh words.');
+    expect([...s.write, ...s.customized, ...s.editing].map((x) => x.post.id)).toEqual([3]);
+  });
+
+  it('messageSaveStatus names what changed and what kept its own text', () => {
+    const yt = { post: p({ id: 5 }), label: 'YouTube Shorts' };
+    const tt = { post: p({ id: 3 }), label: 'TikTok' };
+    expect(messageSaveStatus({ customized: [yt], editing: [] }, ['Bluesky', 'Mastodon', 'TikTok'])).toBe(
+      'Saved to Bluesky, Mastodon and TikTok. YouTube Shorts is customized and kept its own text.',
+    );
+    expect(messageSaveStatus({ customized: [yt, tt], editing: [] }, ['Bluesky'])).toBe('Saved to Bluesky. YouTube Shorts and TikTok are customized and kept their own text.');
+    expect(messageSaveStatus({ customized: [], editing: [tt] }, ['Bluesky'])).toBe('Saved to Bluesky. TikTok has unsaved edits open, so it was not changed.');
+  });
+
+  it('messageSavePreview says which video rows change, or nothing', () => {
+    expect(messageSavePreview(planMessageSave(view(posts().filter((x) => x.id !== 5)), 'announce', 'Fresh words.'))).toBe(
+      'Saving also changes the video text for Instagram Reels and TikTok.',
+    );
+    expect(messageSavePreview(planMessageSave(view(posts().slice(0, 2)), 'announce', 'Fresh words.'))).toBe('');
   });
 });

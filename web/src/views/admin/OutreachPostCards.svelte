@@ -7,7 +7,8 @@
   being edited, the "discard changes" confirmation and the per-card notices.
   The automatic posts are not here: OutreachAnnouncement.svelte posts and
   schedules them (#0640). Edit opens the existing OutreachComposer inline in
-  the card. No native browser dialog: every confirmation is an in-app dialog.
+  the card. It reports which post has unsaved typing (onEditingDirty, #0632),
+  so the section's Save message leaves that post alone. No native browser dialog: every confirmation is an in-app dialog.
 -->
 <script lang="ts">
   import { tick, untrack } from 'svelte';
@@ -29,8 +30,10 @@
     wave: string;
     /** Whether a card's editor holds typing not saved yet (#0626). */
     onUnsavedChange?: (unsaved: boolean) => void;
+    /** The post whose editor holds unsaved typing, else null (#0632), so Save message leaves it alone. */
+    onEditingDirty?: (postId: number | null) => void;
   }
-  let { view, results, onChange, reload, flyer, wave, onUnsavedChange }: Props = $props();
+  let { view, results, onChange, reload, flyer, wave, onUnsavedChange, onEditingDirty }: Props = $props();
 
   let editingId = $state<number | null>(null);
   let pendingEditId = $state<number | null>(null);
@@ -48,6 +51,11 @@
     const d = editorDirty;
     untrack(() => onUnsavedChange?.(d));
     return () => untrack(() => onUnsavedChange?.(false));
+  });
+  $effect(() => {
+    const id = editorDirty ? editingId : null;
+    untrack(() => onEditingDirty?.(id));
+    return () => untrack(() => onEditingDirty?.(null));
   });
 
   /** Open the composer in place of this card's display; one card edits at a time (#0579). */

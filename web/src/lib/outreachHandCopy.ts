@@ -1,8 +1,9 @@
 // What a hand-posted row copies (#0626): the post with its ShortLink, or the
-// post with no links at all, reading cleanly. Pure, so it is unit-testable.
-import { LINK_TOKEN } from './outreach';
+// post with no links at all, reading cleanly. It also holds what Save message
+// does to hand-posted rows (#0634). Pure, so it is unit-testable.
+import { LINK_TOKEN, countCharacters, isOverLimit } from './outreach';
 import { sendsItself } from './outreachCards';
-import { isHashtagParagraph } from './outreachMessage';
+import { composeBody, isHashtagParagraph, planSaveMessage } from './outreachMessage';
 import { formatPacificWeekday, toPacificInput } from './pacificTime';
 import type { OutreachChannel, OutreachPost, WorkshopOutreach } from './types';
 
@@ -104,6 +105,108 @@ export function isVideoChannel(channel: Pick<OutreachChannel, 'name'>): boolean 
 
 export function handChannelLabel(channel: Pick<OutreachChannel, 'name' | 'label'>): string {
   return channel.name === 'instagram' ? 'Instagram Reels' : channel.label;
+}
+
+const SITE_LINE = /^Open Circuit SF: https?:\/\/\S+$/;
+
+/**
+ * A hand-posted body's message and ending (#0634). The ending is the trailing
+ * run of paragraphs that carry the link or its token, are Instagram's bio line
+ * or the site line, plus one final hashtag line. Save message keeps the ending
+ * and replaces the message.
+ */
+export function splitHandBody(body: string, shortUrl: string | null): { message: string; tail: string[] } {
+  const paras = body.split('\n\n');
+  const tail: string[] = [];
+  while (paras.length > 1) {
+    const last = paras[paras.length - 1];
+    const t = last.trim();
+    const tags = isHashtagParagraph(last);
+    const cta = last.includes(LINK_TOKEN) || (shortUrl !== null && shortUrl !== '' && last.includes(shortUrl)) || t === BIO_CTA || SITE_LINE.test(t);
+    if (!tags && !cta) break;
+    if (tags && tail.length > 0) break;
+    tail.unshift(paras.pop() as string);
+  }
+  return { message: paras.join('\n\n'), tail };
+}
+
+type MessageView = Pick<WorkshopOutreach, 'channels' | 'waves' | 'posts' | 'off_channels'>;
+export interface MessageSaveItem {
+  post: OutreachPost;
+  channel: OutreachChannel;
+  label: string;
+  body: string;
+  over: boolean;
+}
+export interface MessageSaveLeft {
+  post: OutreachPost;
+  label: string;
+}
+export interface MessageSave {
+  /** Written by Save message: the automatic targets, then the video rows, in channel order. */
+  write: MessageSaveItem[];
+  /** Left alone because customized. */
+  customized: MessageSaveLeft[];
+  /** Left alone because an editor on it holds unsaved typing (#0632). */
+  editing: MessageSaveLeft[];
+}
+
+/** What Save message does in a section (#0634): every post it writes, and every one it leaves alone and why. */
+export function planMessageSave(view: MessageView, wave: string, message: string, editing: readonly number[] = []): MessageSave {
+  const out: MessageSave = { write: [], customized: [], editing: [] };
+  const inSection = (name: string) => view.posts.find((p) => p.channel === name && p.wave === wave) ?? null;
+  const open = (p: OutreachPost) => p.status !== 'posted' && p.status !== 'queued';
+  for (const item of planSaveMessage(view, wave, message)) {
+    if (editing.includes(item.post.id)) out.editing.push({ post: item.post, label: item.channel.label });
+    else out.write.push({ ...item, label: item.channel.label });
+  }
+  for (const channel of view.channels) {
+    const post = inSection(channel.name);
+    if (sendsItself(channel) && post && post.customized && open(post)) out.customized.push({ post, label: channel.label });
+  }
+  const off = view.off_channels ?? [];
+  for (const channel of view.channels) {
+    if (sendsItself(channel) || !isVideoChannel(channel) || off.some((o) => o.name === channel.name)) continue;
+    const post = inSection(channel.name);
+    if (!post || !open(post)) continue;
+    const label = handChannelLabel(channel);
+    if (post.customized) out.customized.push({ post, label });
+    else if (editing.includes(post.id)) out.editing.push({ post, label });
+    else {
+      const body = composeBody(message, splitHandBody(post.body, post.short_url).tail);
+      out.write.push({ post, channel, label, body, over: isOverLimit(channel, countCharacters(channel, body, post.prepared).count) });
+    }
+  }
+  return out;
+}
+
+const listOf = (xs: string[]): string => (xs.length <= 1 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+const kept = (left: MessageSaveLeft[]): string =>
+  `${listOf(left.map((l) => l.label))} ${left.length > 1 ? 'are customized and kept their' : 'is customized and kept its'} own text.`;
+const editingLine = (left: MessageSaveLeft[], after: boolean): string => {
+  const n = left.length;
+  const names = listOf(left.map((l) => l.label));
+  return after
+    ? `${names} ${n > 1 ? 'have' : 'has'} unsaved edits open, so ${n > 1 ? 'they were' : 'it was'} not changed.`
+    : `${names} ${n > 1 ? 'have' : 'has'} unsaved edits open, so Save message leaves ${n > 1 ? 'them' : 'it'} alone.`;
+};
+
+/** Shown under Save message while the Message has unsaved typing: what saving changes beyond the previews. '' when nothing to say. */
+export function messageSavePreview(save: MessageSave): string {
+  const video = save.write.filter((i) => isVideoChannel(i.channel)).map((i) => i.label);
+  const parts: string[] = [];
+  if (video.length > 0) parts.push(`Saving also changes the video text for ${listOf(video)}.`);
+  if (save.customized.length > 0) parts.push(kept(save.customized));
+  if (save.editing.length > 0) parts.push(editingLine(save.editing, false));
+  return parts.join(' ');
+}
+
+/** The line after Save message: what was written and what was left alone. */
+export function messageSaveStatus(save: Pick<MessageSave, 'customized' | 'editing'>, saved: string[]): string {
+  const parts = [`Saved to ${listOf(saved)}.`];
+  if (save.customized.length > 0) parts.push(kept(save.customized));
+  if (save.editing.length > 0) parts.push(editingLine(save.editing, true));
+  return parts.join(' ');
 }
 
 export function handLinkLabel(channel: Pick<OutreachChannel, 'name' | 'automatic'>): string {

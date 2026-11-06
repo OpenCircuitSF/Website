@@ -7,7 +7,9 @@
   under the hidden attribute, so typed text survives switching sections; the
   tab says when that text is not saved. The panel opens with a link down to
   the section's Video group (#0635), a button because the admin router owns
-  the hash. Nothing here may set overflow or contain (#0622).
+  the hash. Nothing here may set overflow or contain (#0622). The hand-posted
+  row whose editor holds unsaved typing is passed to the message section, so
+  Save message leaves it alone (#0632).
 -->
 <script lang="ts">
   import { onChannels, sectionHeadId, sectionPanelId, sendsItself } from '../../lib/outreachCards';
@@ -36,6 +38,7 @@
   function report(): void {
     onUnsavedChange?.(messageUnsaved || handUnsaved);
   }
+  let handEditingId = $state<number | null>(null);
   const handChannels = $derived(view.channels.filter((c) => !sendsItself(c)));
   const handOn = $derived(onChannels(view).filter((c) => !sendsItself(c)));
   const written = $derived(view.posts.some((p) => p.wave === wave.name));
@@ -51,10 +54,10 @@
 
 <div class="wave-section" id={sectionPanelId(wave.name)} role="tabpanel" aria-labelledby={sectionHeadId(wave.name)} hidden={!open}>
   {#if videoJump}<p class="video-jump"><button type="button" class="link-button" onclick={goToVideo}>{videoJump}</button></p>{/if}
-  <OutreachAnnouncement {view} {results} wave={wave.name} {workshopId} {onChange} {reload} onUnsavedChange={(u) => { messageUnsaved = u; report(); }} />
+  <OutreachAnnouncement {view} {results} wave={wave.name} {workshopId} {onChange} {reload} editingElsewhere={handEditingId === null ? [] : [handEditingId]} onUnsavedChange={(u) => { messageUnsaved = u; report(); }} />
   {#if handChannels.length > 0}
     {#if written}
-      <OutreachPostCards {view} {results} {onChange} {reload} wave={wave.name} {flyer} onUnsavedChange={(u) => { handUnsaved = u; report(); }} />
+      <OutreachPostCards {view} {results} {onChange} {reload} wave={wave.name} {flyer} onEditingDirty={(id) => (handEditingId = id)} onUnsavedChange={(u) => { handUnsaved = u; report(); }} />
     {:else if handOn.length > 0}
       <p class="text-muted">The text for {handOn.map((c) => handChannelLabel(c)).join(', ')} appears here once this section is written.</p>
     {/if}

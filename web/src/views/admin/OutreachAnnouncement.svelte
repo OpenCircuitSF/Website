@@ -9,7 +9,11 @@
   automatic post in one call, Unschedule takes them all back to draft.
   Customize… opens the composer for a single post and marks it customized, so
   a later Save message leaves it alone until "Use shared message" hands it
-  back. Once no
+  back. Save message also writes the section's video rows (TikTok, Instagram
+  Reels, YouTube Shorts) with each row's own ending, unless customized (#0634),
+  and never writes a post whose editor holds unsaved typing (#0632). After
+  Unschedule, focus goes to Schedule…, else the "When it goes out" heading
+  (#0633). Once no
   automatic post can change any more the Message box goes and the section shows
   what was posted (#0626).
 
@@ -18,7 +22,7 @@
   and screen readers see them from the start.
 -->
 <script lang="ts">
-  import { untrack } from 'svelte';
+  import { tick, untrack } from 'svelte';
   import {
     draftAllOutreach,
     updateOutreachPost,
@@ -36,7 +40,8 @@
   } from '../../lib/outreach';
   import { scheduleTargets, sectionLine, sectionTimeText, unscheduleTargets } from '../../lib/outreachSection';
   import { cardButtons, onChannels, postableAutomatic, sendsItself, statusLine, visibleNotice, weekdayTime, type CardNotice } from '../../lib/outreachCards';
-  import { composeBody, messageTargets, planSaveMessage, restoredTail, sharedMessage } from '../../lib/outreachMessage';
+  import { composeBody, messageTargets, restoredTail, sharedMessage } from '../../lib/outreachMessage';
+  import { messageSavePreview, messageSaveStatus, planMessageSave } from '../../lib/outreachHandCopy';
   import { postAll } from '../../lib/outreachPostAll';
   import { identicalAutomaticBodies } from '../../lib/outreachPreview';
   import type { OutreachChannel, OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
@@ -55,8 +60,10 @@
     reload: () => void;
     /** Whether this section holds typing not saved yet (#0625). */
     onUnsavedChange?: (unsaved: boolean) => void;
+    /** Hand-posted posts in this section whose editor holds unsaved typing (#0632): Save message leaves them alone. */
+    editingElsewhere?: number[];
   }
-  let { view, wave, workshopId, onChange, reload, onUnsavedChange }: Props = $props();
+  let { view, wave, workshopId, onChange, reload, onUnsavedChange, editingElsewhere = [] }: Props = $props();
 
   const waveInfo = $derived(view.waves.find((w) => w.name === wave) ?? null);
   const waveName = $derived(waveInfo?.label ?? wave);
@@ -85,18 +92,20 @@
   });
 
   const trimmed = $derived(message.trim());
-  const plan = $derived(planSaveMessage(view, wave, trimmed));
-  const dirty = $derived(touched && trimmed !== shared);
   let composerDirty = $state(false);
+  let customizingId = $state<number | null>(null);
+  const editingIds = $derived([...editingElsewhere, ...(composerDirty && customizingId !== null ? [customizingId] : [])]);
+  const save = $derived(planMessageSave(view, wave, trimmed, editingIds));
+  const savePreview = $derived(messageSavePreview(save));
+  const dirty = $derived(touched && trimmed !== shared);
   const unsaved = $derived((dirty && autos.length > 0 && !locked) || composerDirty);
   $effect(() => {
     const u = unsaved;
     untrack(() => onUnsavedChange?.(u));
     return () => untrack(() => onUnsavedChange?.(false));
   });
-  const anyOver = $derived(plan.some((i) => i.over));
-  const canSave = $derived(dirty && plan.length > 0 && trimmed !== '' && !anyOver);
-  const customizedLeft = $derived(autos.filter((a) => a.post.customized && a.post.status !== 'posted' && a.post.status !== 'queued'));
+  const anyOver = $derived(save.write.some((i) => i.over));
+  const canSave = $derived(dirty && save.write.length > 0 && trimmed !== '' && !anyOver);
   const postable = $derived(postableAutomatic(view, wave));
   const canSchedule = $derived(scheduleTargets(view, wave).length > 0);
   const canUnschedule = $derived(unscheduleTargets(view, wave).length > 0);
@@ -114,7 +123,6 @@
   const shownPostLine = $derived(
     Object.entries(postNotices).some(([id, n]) => visibleNotice(n, view.posts.find((p) => p.id === Number(id)) ?? null) !== '') ? postLine : '',
   );
-  let customizingId = $state<number | null>(null);
   let postOpen = $state(false);
   let postBusy = $state(false);
   let postSnapshot = $state<{ post: OutreachPost; channel: OutreachChannel }[]>([]);
@@ -164,15 +172,14 @@
 
   const saveMessage = () =>
     guarded('Could not save the message. Please try again.', async () => {
+      const s = save; // fixed now: each onChange re-derives save
       const done: string[] = [];
-      for (const item of plan) {
+      for (const item of s.write) {
         onChange(await updateOutreachPost(item.post.id, { body: item.body }));
-        done.push(item.channel.label);
+        done.push(item.label);
       }
       touched = false;
-      status =
-        `Saved to ${names(done)}.` +
-        (customizedLeft.length > 0 ? ` ${names(customizedLeft.map((a) => a.channel.label))} ${customizedLeft.length > 1 ? 'are customized and were' : 'is customized and was'} left alone.` : '');
+      status = messageSaveStatus(s, done);
     });
 
   const useShared = (post: OutreachPost) =>
@@ -184,7 +191,7 @@
   // The workshop changed since a post was drafted (#0593): said here, not only inside Customize….
   const staleAutos = $derived(autos.filter((a) => composerActions(a.post, a.channel, view.available).canRegenerate));
   // A customized post is the editor's own words: it is only regenerated from its own Customize….
-  const regenerable = $derived(staleAutos.filter((a) => !a.post.customized));
+  const regenerable = $derived(staleAutos.filter((a) => !a.post.customized && !editingIds.includes(a.post.id)));
   const regenerateStale = () =>
     guarded('Could not regenerate. Please try again.', async () => {
       for (const { post } of regenerable) onChange(await updateOutreachPost(post.id, { regenerate: true }));
@@ -242,8 +249,19 @@
     guarded('Could not unschedule. Please try again.', async () => {
       await unscheduleOutreachSection(workshopId, wave);
       status = 'Back to draft.';
+      focusSchedule = true;
       reload();
     });
+
+  let whenEl = $state<HTMLElement | undefined>();
+  let focusSchedule = $state(false);
+  // Unschedule removes its own button once the reload lands (#0633): focus goes to Schedule…, else the block's heading.
+  // Not while busy: Schedule… is disabled until the call has settled, and a disabled button takes no focus.
+  $effect(() => {
+    if (!focusSchedule || canUnschedule || busy) return;
+    untrack(() => (focusSchedule = false));
+    void tick().then(() => (whenEl?.parentElement?.querySelector<HTMLElement>('[data-schedule]') ?? whenEl)?.focus({ preventScroll: true }));
+  });
 
   // What each post would go out with, so the warning follows unsaved typing too.
   const sameText = $derived(
@@ -253,7 +271,7 @@
   /** The text a post will go out with: the unsaved message while typing, else what is stored. */
   function shownBody(post: OutreachPost): string {
     if (!dirty) return post.body;
-    return plan.find((i) => i.post.id === post.id)?.body ?? post.body;
+    return save.write.find((i) => i.post.id === post.id)?.body ?? post.body;
   }
   function closeComposer(): void {
     customizingId = null;
@@ -298,16 +316,17 @@
       <p class="row">
         <Button variant="primary" onclick={saveMessage} disabled={busy || !canSave}>Save message</Button>
       </p>
+      {#if dirty && savePreview}<p class="text-muted">{savePreview}</p>{/if}
       {#if anyOver}
-        <p class="text-error">This message is over the limit for {names(plan.filter((i) => i.over).map((i) => i.channel.label))}.</p>
+        <p class="text-error">This message is over the limit for {names(save.write.filter((i) => i.over).map((i) => i.label))}.</p>
       {/if}
     {/if}
 
-    <h4 class="when">When it goes out</h4>
+    <h4 class="when" tabindex="-1" bind:this={whenEl}>When it goes out</h4>
     <p class="when-line">{timeText}</p>
     <p class="row">
       {#if canSchedule && !scheduling}
-        <Button variant={primarySchedule ? 'primary' : undefined} onclick={openSchedule} disabled={busy || dirty}>{scheduledNow ? 'Change time…' : 'Schedule…'}</Button>
+        <Button data-schedule variant={primarySchedule ? 'primary' : undefined} onclick={openSchedule} disabled={busy || dirty}>{scheduledNow ? 'Change time…' : 'Schedule…'}</Button>
       {/if}
       {#if canUnschedule}<Button onclick={unschedule} disabled={busy}>Unschedule</Button>{/if}
       {#if postable.length > 0}
@@ -422,6 +441,9 @@
   }
   .when {
     margin: var(--space-4) 0 var(--space-2);
+  }
+  .when:focus {
+    outline: none;
   }
   .when-line {
     margin: 0 0 var(--space-2);

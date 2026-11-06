@@ -6,8 +6,8 @@
   far end (#0591). Scheduling is not here: since #0640 a section's one time is
   set from its "When it goes out" block. Regenerate sits with its warning. It
   always replaces a card's display
-  and always has Cancel; the card owns Post now, Retry and Mark posted behind
-  their confirmation dialog (#0581), and since #0582 nothing in this file posts
+  and always has Cancel; the hand-posted card owns Mark posted and Unmark, and
+  the section (OutreachAnnouncement.svelte) owns posting, and since #0582 nothing in this file posts
   or marks posted. `markCustomized` makes Save record the post as customized,
   so a shared-message save leaves it alone. Which buttons apply is decided in
   lib/outreach.ts (composerActions); this file is markup and wiring only. On a
