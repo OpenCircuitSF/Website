@@ -226,6 +226,9 @@ type AdminCampaignsHandler struct {
 	preflight campaignPreflightChecker // nil until #0045 wires one in — see that type's doc comment
 	audience  campaignAudienceCounter  // nil disables confirm_count enforcement — see Send
 	auditor   *audit.Logger
+	// upcomingEvents serves /admin/campaigns/{id}/upcoming-events; nil omits
+	// the route. Set with SetUpcomingEvents (#0643).
+	upcomingEvents *AdminNewsletterEventsHandler
 }
 
 // NewAdminCampaignsHandler constructs an AdminCampaignsHandler. A nil

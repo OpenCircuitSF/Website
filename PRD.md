@@ -1561,6 +1561,7 @@ All of `/auth/*`, `/account/credentials*`, `/admin/users*`, `/admin/settings`,
 | `GET` | `/admin/campaigns/{id}/preflight` | The pre-send gate's current verdict and every blocking reason |
 | `POST` | `/admin/campaigns/{id}/preview` | Render HTML + text without sending |
 | `POST` | `/admin/campaigns/{id}/test` | Send to one admin address |
+| `POST` | `/admin/campaigns/{id}/upcoming-events` | Build the month's upcoming-events Markdown with newsletter ShortLinks (#0643) |
 | `GET` | `/admin/campaigns/{id}/audience` | Recipient count + sample, before committing |
 | `POST` | `/admin/campaigns/{id}/send` | Requires typed confirmation of the count |
 | `POST` | `/admin/campaigns/{id}/cancel` | Stop an in-flight send |

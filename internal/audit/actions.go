@@ -398,6 +398,11 @@ const (
 	ActionOutreachFlyerLinkPutUp        = "outreach_flyer_link.put_up"
 	ActionOutreachFlyerLinkPutUpCleared = "outreach_flyer_link.put_up_cleared"
 
+	// ActionNewsletterLinkCreated (#0643) is written only when a newsletter
+	// ShortLink row was really inserted for an (email campaign, workshop)
+	// pair, never for a reused one.
+	ActionNewsletterLinkCreated = "newsletter_link.created"
+
 	// ActionOutreachConnectionsUpdated records a save of the outreach
 	// connection credentials in admin Settings (#0564). Its metadata names
 	// field keys only, never values.
@@ -614,6 +619,9 @@ const (
 	// TargetOutreachLink is the target type for ActionOutreachLinkCreated
 	// (#0568).
 	TargetOutreachLink = "outreach_link"
+	// TargetNewsletterLink is the target type for ActionNewsletterLinkCreated
+	// (#0643).
+	TargetNewsletterLink = "newsletter_link"
 	// TargetOutreachConnections is the target type for
 	// ActionOutreachConnectionsUpdated (#0564). The connections are a set of
 	// keyed rows, not one bigint-id row, so TargetID is left nil.

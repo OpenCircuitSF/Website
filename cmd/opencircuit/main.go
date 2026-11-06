@@ -538,6 +538,8 @@ func servePostgres(cfg *config.Config) error {
 	}
 
 	adminCampaignsH := handlers.NewAdminCampaignsHandler(campaignsStore, handlers.NewCampaignPreflightChecker(sendStore), audienceStore, auditLogger)
+	// #0643: the editor's "Add upcoming events" button.
+	adminCampaignsH.SetUpcomingEvents(handlers.NewAdminNewsletterEventsHandler(campaignsStore, workshopsStore, outreachStore, outreachStore, conns.ShortLinker(), auditLogger, cfg.BaseURL))
 	adminCampaignAudienceH := handlers.NewAdminCampaignAudienceHandler(audienceStore)
 
 	// Public campaign archive read routes (#0123, PRD §6.8): GET
@@ -1533,6 +1535,11 @@ func adminRoutes(
 	if adminCampaignArchiveH != nil {
 		routes = append(routes,
 			adminRoute{http.MethodPatch, "/admin/campaigns/{id}/archive", http.HandlerFunc(adminCampaignArchiveH.Patch)},
+		)
+	}
+	if adminCampaignsH != nil && adminCampaignsH.UpcomingEventsHandler() != nil {
+		routes = append(routes,
+			adminRoute{http.MethodPost, "/admin/campaigns/{id}/upcoming-events", http.HandlerFunc(adminCampaignsH.UpcomingEventsHandler().UpcomingEvents)},
 		)
 	}
 	if adminCampaignsH != nil {

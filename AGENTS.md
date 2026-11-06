@@ -34,7 +34,7 @@ belong in this tracker.
 |---|---|
 | `cmd/opencircuit/` | Binary entry point — `serve` and `seed` subcommands, the route table |
 | `internal/` | `config`, `db`, `auth`, `audit`, `events`, `devstore`, `handlers`, `middleware`, `testdb` — per-package roles in [`docs/architecture.md`](docs/architecture.md) |
-| `migrations/` | `golang-migrate` up/down SQL pairs, contiguous `000001`–`000048` |
+| `migrations/` | `golang-migrate` up/down SQL pairs, contiguous `000001`–`000049` |
 | `web/` | Svelte 5 SPA; built to `web/dist/` and embedded via `//go:embed all:dist` |
 | `scripts/` | `list-issues-by-phase` (the queue), `check.sh` (canonical verification), `testdb.sh` (per-agent test databases), `db-reset.sh` (drop and rebuild a local DB), `dev.sh`, `sim.sh`, `deploy.sh`, `db-status.sh`, `db/` |
 | `deploy/` | Apache vhost and systemd unit assets |
@@ -1219,7 +1219,7 @@ that needs cost accounting; refresh once per day.
 
 ## 11. PRD section index
 
-`PRD.md` is 1,939 lines (~21k tokens). **Never read it whole.** Every issue's
+`PRD.md` is 1,940 lines (~21k tokens). **Never read it whole.** Every issue's
 `## Relation` block names the section it needs and carries the exact extraction
 command; run that. This table is the fallback when you need a section no issue
 cites.
@@ -1264,7 +1264,7 @@ the PRD.
 | §7.4 SEO and social preview cards | 34 | `sed -n '/^### 7\.4 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §7.5 Accessibility | 13 | `sed -n '/^### 7\.5 /,/^#\{2,3\} [0-9]/p' PRD.md` |
 | §7.6 Performance budget | 12 | `sed -n '/^### 7\.6 /,/^#\{2,3\} [0-9]/p' PRD.md` |
-| **§8 HTTP API** | 67 | `sed -n '/^## 8\. /,/^## [0-9]/p' PRD.md` |
+| **§8 HTTP API** | 68 | `sed -n '/^## 8\. /,/^## [0-9]/p' PRD.md` |
 | **§9 Configuration** | 82 | `sed -n '/^## 9\. /,/^## [0-9]/p' PRD.md` |
 | **§10 Infrastructure and Deployment** | 119 | `sed -n '/^## 10\. /,/^## [0-9]/p' PRD.md` |
 | §10.1 Topology | 38 | `sed -n '/^### 10\.1 /,/^#\{2,3\} [0-9]/p' PRD.md` |
