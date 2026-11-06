@@ -80,7 +80,10 @@
 {:else if view === 'flyers' || view === 'print'}
   <OutreachFlyers workshopId={outreachWorkshopFromQuery(query)} />
 {:else if view === 'workshop' && outreachWorkshopFromQuery(query) !== null}
-  <OutreachWorkshop workshopId={outreachWorkshopFromQuery(query) ?? 0} />
+  <!-- A new workshop is a new page: nothing typed for one may reach another (#0633). -->
+  {#key outreachWorkshopFromQuery(query)}
+    <OutreachWorkshop workshopId={outreachWorkshopFromQuery(query) ?? 0} />
+  {/key}
 {:else if view === 'locations'}
   <OutreachLocations />
 {:else if view === 'results'}

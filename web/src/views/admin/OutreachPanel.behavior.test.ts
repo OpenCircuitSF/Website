@@ -14,6 +14,7 @@ const startOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const getWorkshopOutreachResults = vi.fn<(id: number) => Promise<OutreachResults>>();
 const prepareOutreachPost = vi.fn<(id: number) => Promise<OutreachPost>>();
 const sendOutreachPost = vi.fn<(id: number) => Promise<OutreachPost>>();
+const ensureOutreachHandLinks = vi.fn();
 vi.mock('../../lib/api', () => ({
   getWorkshopOutreach: (id: number) => getWorkshopOutreach(id),
   startOutreach: (id: number) => startOutreach(id),
@@ -24,6 +25,7 @@ vi.mock('../../lib/api', () => ({
   markOutreachPosted: vi.fn(),
   deleteOutreachPost: vi.fn(),
   sendOutreachPost: (id: number) => sendOutreachPost(id),
+  ensureOutreachHandLinks: (id: number) => ensureOutreachHandLinks(id),
   ApiError: class ApiError extends Error {
     status: number;
     constructor(status: number, message: string) {
@@ -41,6 +43,8 @@ afterEach(() => {
   startOutreach.mockReset();
   getWorkshopOutreachResults.mockReset();
   sendOutreachPost.mockReset();
+  ensureOutreachHandLinks.mockReset();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -330,5 +334,65 @@ describe('OutreachPanel: a failed reload (#0625)', () => {
     await screen.findByRole('button', { name: 'Retry' });
     expect(screen.queryByText(/BODY/)).toBeNull();
     expect(alertText()).toBe('');
+  });
+
+  it('the banner adds a full stop to a server message that has none (#0633)', async () => {
+    getWorkshopOutreach.mockResolvedValue(view());
+    getWorkshopOutreachResults.mockResolvedValue(resultsFor());
+    const { rerender } = render(OutreachPanel, { workshopId: 5, reloadKey: 0, body });
+    await screen.findByText(/BODY/);
+    const { ApiError } = await import('../../lib/api');
+    getWorkshopOutreach.mockRejectedValue(new (ApiError as unknown as new (s: number, m: string) => Error)(500, 'internal server error'));
+    await rerender({ workshopId: 5, reloadKey: 1, body });
+    await screen.findByRole('button', { name: 'Retry' });
+    expect(alertText().startsWith('internal server error. What is below')).toBe(true);
+  });
+
+  it('while the banner shows, the panel passes its height to the tabs (#0633)', async () => {
+    const real = HTMLElement.prototype.getBoundingClientRect;
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.id === 'outreach-reload-banner' ? ({ height: 69 } as DOMRect) : real.call(this);
+    });
+    await failedReload();
+    const outer = () => document.querySelector('.outreach') as HTMLElement;
+    await waitFor(() => expect(outer().getAttribute('style')).toContain('--reload-banner-h: 69px'));
+    getWorkshopOutreach.mockResolvedValue(view());
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(outer().getAttribute('style')).toContain('--reload-banner-h: 0px'));
+  });
+
+  it('a failed load of another workshop never starts outreach or makes links for it (#0633)', async () => {
+    for (const first of [view({ outreach: null, hand_links_pending: true }), view({ hand_links_pending: true })]) {
+      getWorkshopOutreach.mockResolvedValue(first);
+      getWorkshopOutreachResults.mockResolvedValue(resultsFor());
+      startOutreach.mockRejectedValue(new Error('nope'));
+      ensureOutreachHandLinks.mockResolvedValue({ created: 0, drafted: 0, failed: [] });
+      const { rerender } = render(OutreachPanel, { workshopId: 5, body, autoStart: true });
+      await waitFor(() => expect(getWorkshopOutreach).toHaveBeenCalledWith(5));
+      await new Promise((r) => setTimeout(r, 0));
+      getWorkshopOutreach.mockRejectedValue(new Error('network'));
+      await rerender({ workshopId: 6, body, autoStart: true });
+      await screen.findByRole('button', { name: 'Retry' });
+      await new Promise((r) => setTimeout(r, 0));
+      for (const m of [startOutreach, ensureOutreachHandLinks, getWorkshopOutreachResults]) expect(m).not.toHaveBeenCalledWith(6);
+      cleanup();
+      for (const m of [getWorkshopOutreach, startOutreach, ensureOutreachHandLinks, getWorkshopOutreachResults]) m.mockReset();
+    }
+  });
+
+  it('a Retry that brings the page back calls onRecovered (#0633)', async () => {
+    const onRecovered = vi.fn();
+    getWorkshopOutreach.mockResolvedValue(view());
+    getWorkshopOutreachResults.mockResolvedValue(resultsFor());
+    const { rerender } = render(OutreachPanel, { workshopId: 5, reloadKey: 0, body, onRecovered });
+    await screen.findByText(/BODY/);
+    getWorkshopOutreach.mockRejectedValue(new Error('network'));
+    await rerender({ workshopId: 5, reloadKey: 1, body, onRecovered });
+    await fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(onRecovered).not.toHaveBeenCalled();
+    getWorkshopOutreach.mockResolvedValue(view());
+    await fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(onRecovered).toHaveBeenCalledTimes(1));
   });
 });

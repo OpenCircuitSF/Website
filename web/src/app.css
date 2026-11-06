@@ -618,10 +618,11 @@ tbody tr:last-child td { border-bottom: none; }
 /* The strip naming an Outreach section stays in view while the section is on screen (#0622). */
 .wave-pin {
   position: sticky;
-  top: 0;
+  top: var(--reload-banner-h, 0px);
+  scroll-margin-top: var(--reload-banner-h, 0px);
   z-index: 2;
   background: var(--bg-panel);
   padding: var(--space-2) 0;
   border-bottom: var(--border-w) solid var(--border);
 }
-.wave-section :is(a, button, input, textarea, summary) { scroll-margin-top: 7rem; }
+.wave-section :is(a, button, input, textarea, summary) { scroll-margin-top: calc(7rem + var(--reload-banner-h, 0px)); }

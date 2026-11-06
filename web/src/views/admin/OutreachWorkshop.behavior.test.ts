@@ -577,4 +577,97 @@ describe('one open section (#0625)', () => {
     await waitFor(() => expect(resetOutreach).toHaveBeenCalledWith(5));
     await waitFor(() => expect(openNames()).toEqual(['announce']));
   });
+  it("Retry that works puts focus on the open section's tab (#0633)", async () => {
+    const v = fullView([], { can_reset: true });
+    const board = await mount(v);
+    await fireEvent.click(boardBtn(board, /Final/));
+    await waitFor(() => expect(openNames()).toEqual(['last-call']));
+    resetOutreach.mockResolvedValue(v);
+    getWorkshopOutreach.mockRejectedValue(new Error('network'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Reset outreach' }));
+    const dialog = await screen.findByRole('dialog');
+    [...dialog.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Reset outreach')!.click();
+    const retry = await screen.findByRole('button', { name: 'Retry' });
+    getWorkshopOutreach.mockResolvedValue(v);
+    (document.body as HTMLElement).focus();
+    await fireEvent.click(retry);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull());
+    await waitFor(() => expect(document.activeElement?.id).toBe(`outreach-section-${openNames()[0]}-head`));
+  });
+
+  it('a successful Reset puts focus on the first section\'s tab (#0633)', async () => {
+    const board = await mount(fullView([], { can_reset: true }));
+    resetOutreach.mockResolvedValue(fullView([], { can_reset: true }));
+    await fireEvent.click(boardBtn(board, /Final/));
+    await fireEvent.click(screen.getByRole('button', { name: 'Reset outreach' }));
+    const dialog = await screen.findByRole('dialog');
+    [...dialog.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Reset outreach')!.click();
+    await waitFor(() => expect(openNames()).toEqual(['announce']));
+    await waitFor(() => expect(document.activeElement?.id).toBe('outreach-section-announce-head'));
+  });
+});
+
+describe('leaving with unsaved work (#0632)', () => {
+  const post: OutreachPost = {
+    id: 1, outreach_id: 9, channel: 'bluesky', wave: 'announce', body: 'Hello', status: 'draft', prepared: true, stale: false, customized: false, held: false,
+    short_link_key: 'k', short_url: 'https://go.example/k', destination_url: 'https://x', utm: { source: '', medium: '', campaign: '', content: '' },
+    scheduled_at: null, posted_at: null, remote_url: null, last_error: null, created_at: '', updated_at: null,
+  };
+  async function mount(): Promise<HTMLTextAreaElement> {
+    getWorkshopOutreach.mockResolvedValue(view({ posts: [post] }));
+    getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);
+    render(OutreachWorkshop, { workshopId: 5 });
+    return (await screen.findByLabelText('Message')) as HTMLTextAreaElement;
+  }
+  const unload = () => window.dispatchEvent(new Event('beforeunload', { cancelable: true }));
+
+  it('a reload or closed tab is warned only while something is unsaved', async () => {
+    const field = await mount();
+    expect(unload()).toBe(true);
+    await fireEvent.input(field, { target: { value: 'Typed' } });
+    expect(unload()).toBe(false);
+  });
+
+  it('a link asks first; Cancel stays with the text and focus on the link; Leave without saving goes', async () => {
+    const field = await mount();
+    const seen: boolean[] = [];
+    const rec = (e: Event) => {
+      seen.push(e.defaultPrevented);
+      e.preventDefault(); // jsdom: keep the test page where it is
+    };
+    document.addEventListener('click', rec);
+    try {
+      await fireEvent.input(field, { target: { value: 'Typed' } });
+      const link = screen.getByRole('link', { name: 'All outreach' });
+      await fireEvent.click(link);
+      expect(await screen.findByRole('dialog', { name: 'Leave without saving?' })).toBeTruthy();
+      expect(seen.at(-1)).toBe(true);
+      await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(field.value).toBe('Typed');
+      expect(document.activeElement).toBe(link);
+      await fireEvent.click(link);
+      await fireEvent.click(await screen.findByRole('button', { name: 'Leave without saving' }));
+      expect(seen.at(-1)).toBe(false);
+    } finally {
+      document.removeEventListener('click', rec);
+    }
+  });
+
+  it('with nothing unsaved a link goes straight through', async () => {
+    await mount();
+    const seen: boolean[] = [];
+    const rec = (e: Event) => {
+      seen.push(e.defaultPrevented);
+      e.preventDefault();
+    };
+    document.addEventListener('click', rec);
+    try {
+      await fireEvent.click(screen.getByRole('link', { name: 'All outreach' }));
+      expect(seen).toEqual([false]);
+      expect(screen.queryByRole('dialog')).toBeNull();
+    } finally {
+      document.removeEventListener('click', rec);
+    }
+  });
 });

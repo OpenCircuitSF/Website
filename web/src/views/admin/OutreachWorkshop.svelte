@@ -8,6 +8,12 @@
   OutreachPanel stays self-loading (and starts outreach implicitly) and hands
   its view and results to the body snippet. The tracked-links table lives on
   Results, not here.
+
+  Leaving with unsaved typing warns (#0632): a reload or closed tab through the
+  browser's own beforeunload prompt, a same-site link through an in-app dialog
+  (lib/outreachLeave.ts decides which clicks ask). After a Retry that brings the
+  page back, or a Reset, focus goes to the open section's tab, else the heading
+  (#0633).
 -->
 <script lang="ts">
   import { adminOutreachFlyersHash, adminOutreachHash, adminOutreachResultsHash, adminWorkshopHash } from '../../lib/adminRouter';
@@ -19,6 +25,8 @@
   import OutreachSectionTabs from './OutreachSectionTabs.svelte';
   import OutreachSection from './OutreachSection.svelte';
   import OutreachResetDialog from './OutreachResetDialog.svelte';
+  import OutreachConfirmDialog from './OutreachConfirmDialog.svelte';
+  import { asksBeforeLeaving } from '../../lib/outreachLeave';
   import Button from '../../lib/Button.svelte';
   import { onMount, tick } from 'svelte';
   import { resetOutreach, listOutreachFlyers, ApiError } from '../../lib/api';
@@ -72,6 +80,7 @@
     try {
       await resetOutreach(workshopId);
       openFor = null;
+      focusAfterLoad = true;
       resetOpen = false;
       resetNote = 'Outreach was reset. Write the announcement to start again.';
       reloadKey++;
@@ -99,8 +108,49 @@
       openWave = defaultOpenSection(v);
     }
     if (v.link_report) linkWarning = linkReportMessage(v.link_report);
+    if (focusAfterLoad) {
+      focusAfterLoad = false;
+      void focusOpenSection();
+    }
+  }
+
+  let headingEl = $state<HTMLElement | undefined>();
+  let focusAfterLoad = false;
+  async function focusOpenSection(): Promise<void> {
+    await tick();
+    const el = (openWave ? document.getElementById(sectionHeadId(openWave)) : null) ?? headingEl;
+    el?.focus({ preventScroll: true });
+  }
+
+  const anyUnsaved = $derived(Object.values(unsavedWaves).some(Boolean));
+  let leaving = false;
+  let pendingLink = $state<HTMLAnchorElement | null>(null);
+  function onBeforeUnload(e: BeforeUnloadEvent): void {
+    if (!anyUnsaved || leaving) return;
+    e.preventDefault();
+    e.returnValue = ''; // Safari needs this as well as preventDefault
+  }
+  function onLinkClick(e: MouseEvent): void {
+    if (!anyUnsaved || leaving) return;
+    const a = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
+    if (!a || !asksBeforeLeaving(e, { href: a.href, target: a.target, hasDownload: a.hasAttribute('download') }, window.location)) return;
+    e.preventDefault();
+    pendingLink = a;
+  }
+  function leaveAnyway(): void {
+    const a = pendingLink;
+    pendingLink = null;
+    leaving = true;
+    a?.click(); // the same link again, now unguarded, so it goes as usual
+  }
+  function stay(): void {
+    const a = pendingLink;
+    pendingLink = null;
+    a?.focus();
   }
 </script>
+
+<svelte:window onbeforeunload={onBeforeUnload} onclickcapture={onLinkClick} />
 
 {#if notFound}
 <Panel>
@@ -111,9 +161,9 @@
 {:else}
 <div class="row spread heading-row">
   {#if view}
-    <h2 class="heading">{view.workshop.title}</h2>
+    <h2 class="heading" tabindex="-1" bind:this={headingEl}>{view.workshop.title}</h2>
   {:else}
-    <h2 class="heading">Loading…</h2>
+    <h2 class="heading" tabindex="-1" bind:this={headingEl}>Loading…</h2>
   {/if}
   <span class="row links-row">
     <a href={adminWorkshopHash(workshopId)}>Edit event</a>
@@ -127,7 +177,7 @@
 {/if}
 
 <Panel pinnable>
-  <OutreachPanel {workshopId} {reloadKey} {onLoaded} onNotFound={() => (notFound = true)} autoStart>
+  <OutreachPanel {workshopId} {reloadKey} {onLoaded} onNotFound={() => (notFound = true)} onRecovered={() => void focusOpenSection()} autoStart>
     {#snippet body({ view: v, results, onChange: panelChange })}
       {@const onChange = (p: OutreachPost) => { changed(); panelChange(p); }}
       <OutreachStatusBoard view={v} {openWave} unsaved={unsavedWaves} onSelect={(w) => void selectSection(w)} />
@@ -164,6 +214,12 @@
 {/if}
 {/if}
 
+{#if pendingLink}
+  <OutreachConfirmDialog title="Leave without saving?" inFlight={false} errorMessage={null} confirmLabel="Leave without saving" danger onConfirm={leaveAnyway} onClose={stay}>
+    <p>Some text on this page is not saved yet. If you leave now, it is lost.</p>
+  </OutreachConfirmDialog>
+{/if}
+
 <style>
   .heading-row {
     margin-bottom: var(--space-2);
@@ -172,6 +228,9 @@
     font-size: var(--fs-lg);
     margin: 0;
     overflow-wrap: anywhere;
+  }
+  .heading:focus {
+    outline: none;
   }
   .row-details {
     border-top: var(--border-w) solid var(--border);

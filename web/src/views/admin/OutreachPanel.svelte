@@ -16,14 +16,17 @@
   typed text survives (#0625). The banner above it stays pinned to the window
   and stays up until a load succeeds, so the page never passes for current: the
   button that caused the reload can be a long way below the top of the panel.
+  While it shows, the section tabs pin below it through --reload-banner-h, and a
+  Retry that brings the page back calls onRecovered so focus has somewhere to
+  go (#0633). An answer for a workshop no longer on screen is dropped (#0633).
 -->
 <script lang="ts">
-  import { untrack, type Snippet } from 'svelte';
+  import { tick, untrack, type Snippet } from 'svelte';
   import { ensureOutreachHandLinks, getWorkshopOutreach, getWorkshopOutreachResults, startOutreach, ApiError } from '../../lib/api';
   import { adminSettingsHash, adminWorkshopHash } from '../../lib/adminRouter';
-  import { shouldPoll, unavailableMessage } from '../../lib/outreach';
+  import { asSentence, shouldPoll, unavailableMessage } from '../../lib/outreach';
   import { resultsStatusMessage } from '../../lib/outreachResults';
-  import { pollDelay } from '../../lib/outreachCards';
+  import { pollDelay, reloadBannerId } from '../../lib/outreachCards';
   import { handLinkReportMessage } from '../../lib/outreachLinks';
   import { eventStarted } from '../../lib/outreachList';
   import type { OutreachPost, OutreachResults, WorkshopOutreach } from '../../lib/types';
@@ -42,8 +45,10 @@
     autoStart?: boolean;
     /** The page layout; the panel hands over the view, the results and the change callback. */
     body: Snippet<[{ view: WorkshopOutreach; results: OutreachResults | null; onChange: (p: OutreachPost) => void }]>;
+    /** Called after Retry brings the page back, since the Retry button has just gone (#0633). */
+    onRecovered?: () => void;
   }
-  let { workshopId, workshopUpdatedAt = '', reloadKey = 0, onLoaded, onNotFound, autoStart = false, body }: Props = $props();
+  let { workshopId, workshopUpdatedAt = '', reloadKey = 0, onLoaded, onNotFound, autoStart = false, body, onRecovered }: Props = $props();
 
   let view = $state<WorkshopOutreach | null>(null);
   let loading = $state(true);
@@ -59,7 +64,7 @@
   // #0625: only when the body below is this workshop's, shown from an earlier load.
   const reloadError = $derived(
     loadError && view?.workshop.id === workshopId
-      ? `${loadError} What is below may be out of date. Anything you typed is still here.`
+      ? `${asSentence(loadError)} What is below may be out of date. Anything you typed is still here.`
       : '',
   );
 
@@ -114,13 +119,17 @@
   }
 
   async function load(): Promise<void> {
+    const id = workshopId;
     notFound = false;
     try {
-      view = await getWorkshopOutreach(workshopId);
+      const v = await getWorkshopOutreach(id);
+      if (id !== workshopId) return;
+      view = v;
       // Cleared only now, so a Retry in flight does not pass the old page off as current.
       loadError = null;
       onLoaded?.(view);
     } catch (err) {
+      if (id !== workshopId) return;
       if (err instanceof ApiError && err.status === 404) {
         loadError = null;
         notFound = true;
@@ -129,18 +138,21 @@
         loadError = message(err, 'Could not load outreach. Please try again.');
       }
     } finally {
-      loading = false;
+      if (id === workshopId) loading = false;
     }
-    if (autoStart && view && view.available && view.outreach === null && autoStartTried !== workshopId) {
-      autoStartTried = workshopId;
+    if (id !== workshopId) return;
+    // Only this workshop's own view may start outreach or make links for it (#0633).
+    const current = view?.workshop.id === id ? view : null;
+    if (autoStart && current && current.available && current.outreach === null && autoStartTried !== id) {
+      autoStartTried = id;
       await start();
       return;
     }
-    if (autoStart && view?.hand_links_pending && !eventStarted(view.workshop.starts_at) && handLinksTried !== workshopId) {
-      handLinksTried = workshopId;
-      void ensureHandLinks(workshopId);
+    if (autoStart && current?.hand_links_pending && !eventStarted(current.workshop.starts_at) && handLinksTried !== id) {
+      handLinksTried = id;
+      void ensureHandLinks(id);
     }
-    if (view?.outreach) await loadResults();
+    if (current?.outreach) await loadResults();
   }
 
   $effect(() => {
@@ -160,8 +172,11 @@
   let pollAttempt = 0;
   let pollTick = $state(0);
   async function refreshQuietly(): Promise<void> {
+    const id = workshopId;
     try {
-      view = await getWorkshopOutreach(workshopId);
+      const v = await getWorkshopOutreach(id);
+      if (id !== workshopId) return;
+      view = v;
       loadError = null;
       onLoaded?.(view);
     } catch {
@@ -197,6 +212,19 @@
     }
   }
 
+  async function retry(): Promise<void> {
+    await load();
+    if (!loadError) onRecovered?.();
+  }
+
+  let bannerEl = $state<HTMLElement | undefined>();
+  let bannerH = $state(0);
+  // The section tabs pin below the failure banner while it shows (#0633).
+  $effect(() => {
+    const up = reloadError !== '';
+    void tick().then(() => (bannerH = up && bannerEl ? Math.ceil(bannerEl.getBoundingClientRect().height) : 0));
+  });
+
   function onChange(updated: OutreachPost): void {
     if (!view) return;
     const before = view.posts.find((p) => p.id === updated.id);
@@ -209,10 +237,10 @@
   }
 </script>
 
-<div class="outreach">
-  <div class="reload-banner">
+<div class="outreach" style:--reload-banner-h="{bannerH}px">
+  <div class="reload-banner" id={reloadBannerId} bind:this={bannerEl}>
     <p class="text-error reload-error" role="alert">{reloadError}</p>
-    {#if reloadError}<p class="reload-retry"><Button onclick={load}>Retry</Button></p>{/if}
+    {#if reloadError}<p class="reload-retry"><Button onclick={retry}>Retry</Button></p>{/if}
   </div>
   {#if loading}
     <p class="text-muted">Loading outreach…</p>
@@ -221,7 +249,7 @@
     {#if !onNotFound}<p class="text-muted">This event no longer exists.</p>{/if}
   {:else if loadError && view?.workshop.id !== workshopId}
     <p class="text-error">{loadError}</p>
-    <Button onclick={load}>Retry</Button>
+    <Button onclick={retry}>Retry</Button>
   {:else if view}
     {#if !view.available}
       <p class="text-muted">

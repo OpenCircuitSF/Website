@@ -194,3 +194,9 @@ export function validateRemoteUrl(s: string): string | null {
   }
   return null;
 }
+
+/** The server's message as a sentence (#0633): a full stop is added when it ends in none. */
+export function asSentence(s: string): string {
+  const t = s.trim();
+  return t === '' || /[.!?…]$/.test(t) ? t : `${t}.`;
+}

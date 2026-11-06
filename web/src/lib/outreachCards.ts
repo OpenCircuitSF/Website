@@ -137,6 +137,7 @@ export function boardCell(post: OutreachPost | null, channel: OutreachChannel, o
 }
 
 export function sectionHeadId(name: string): string { return `outreach-section-${name}-head`; }
+export const reloadBannerId = 'outreach-reload-banner';
 export function sectionPanelId(name: string): string { return `outreach-section-${name}-panel`; }
 
 /** True when every channel has a post in this section and all have gone out (#0625). */

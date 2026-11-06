@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  asSentence,
   LINK_ESTIMATE,
   channelStatusNote,
   composerActions,
@@ -212,5 +213,12 @@ describe('scheduleHint (#0587)', () => {
   });
   it('a wave with no suggestion says so', () => {
     expect(scheduleHint('nope', waves)).toBe('There is no suggested time for this post. Pick one.');
+  });
+});
+
+describe('asSentence', () => {
+  it('adds a full stop only when one is missing (#0633)', () => {
+    expect(asSentence('internal server error')).toBe('internal server error.');
+    for (const s of ['Failed to fetch.', 'Why?', '']) expect(asSentence(s)).toBe(s);
   });
 });

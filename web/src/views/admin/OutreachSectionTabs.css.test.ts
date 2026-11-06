@@ -14,8 +14,11 @@ describe('the pinned section tabs (#0622, #0640)', () => {
   it('the pin rule is sticky at the top with a solid background', () => {
     const rule = /\.wave-pin\s*\{([^}]*)\}/.exec(read('../../app.css'))?.[1] ?? '';
     expect(rule).toMatch(/position:\s*sticky/);
-    expect(rule).toMatch(/top:\s*0/);
+    expect(rule).toMatch(/top:\s*var\(--reload-banner-h,\s*0px\)/);
     expect(rule).toMatch(/background:\s*var\(--bg-panel\)/);
+  });
+  it('the tabs pin below the failure banner (#0633)', () => {
+    expect(read('OutreachPanel.svelte')).toContain('style:--reload-banner-h=');
   });
   it('the Outreach panel opts out of overflow hidden', () => {
     expect(read('../../lib/Panel.svelte')).toMatch(/\.panel\.pinnable\s*\{[^}]*overflow:\s*clip/);
@@ -35,7 +38,7 @@ describe('the pinned section tabs (#0622, #0640)', () => {
     expect(Number(/z-index:\s*(\d+)/.exec(rule)?.[1])).toBeGreaterThan(Number(/z-index:\s*(\d+)/.exec(pin)?.[1]));
   });
   it('the scroll margin clears the tallest strip (#0625)', () => {
-    expect(read('../../app.css')).toMatch(/\.wave-section[^{]*\{\s*scroll-margin-top:\s*7rem/);
+    expect(read('../../app.css')).toMatch(/\.wave-section[^{]*\{\s*scroll-margin-top:\s*calc\(7rem \+ var\(--reload-banner-h, 0px\)\)/);
   });
   it('nothing between the panel and the strip clips it (#0625)', () => {
     for (const f of ['OutreachSection.svelte', 'OutreachSectionTabs.svelte']) {
