@@ -161,6 +161,9 @@ func TestAdminOutreachPosting_ScheduleSectionRefusals(t *testing.T) {
 		{"bad json", w.ID, `nope`, http.StatusBadRequest, ""},
 		{"missing time", w.ID, `{"wave":"reminder"}`, http.StatusBadRequest, "scheduled_at"},
 		{"past", w.ID, scheduleBody("reminder", time.Now().Add(-time.Hour)), http.StatusBadRequest, "scheduled_at"},
+		{"bad format", w.ID, `{"wave":"reminder","scheduled_at":"tomorrow"}`, http.StatusBadRequest, "scheduled_at"},
+		{"under a minute", w.ID, scheduleBody("reminder", time.Now().Add(20*time.Second)), http.StatusBadRequest, "scheduled_at"},
+		{"over a year", w.ID, scheduleBody("reminder", time.Now().Add(400*24*time.Hour)), http.StatusBadRequest, "scheduled_at"},
 		{"unknown wave", w.ID, scheduleBody("someday", soon), http.StatusBadRequest, "wave must be one of"},
 		{"no outreach", bare.ID, scheduleBody("reminder", soon), http.StatusConflict, "start outreach first"},
 		{"unpublished", draft.ID, scheduleBody("reminder", soon), http.StatusConflict, "not published"},
@@ -223,6 +226,56 @@ func TestAdminOutreachPosting_UnscheduleSection(t *testing.T) {
 	}
 	if len(got.LeftAlone) != 1 || got.LeftAlone[0].Channel != "bluesky" || got.LeftAlone[0].Reason != "posted" {
 		t.Errorf("left_alone = %+v", got.LeftAlone)
+	}
+}
+
+// TestAdminOutreachPosting_UnscheduleSectionInFlight pins how the section
+// route treats a post that is being sent (#0642): a queued post is never a
+// target, so a section holding only one is refused with 409 and nothing
+// changes, and a section that also holds a scheduled post unschedules that
+// one and names the queued one as posting_now.
+func TestAdminOutreachPosting_UnscheduleSectionInFlight(t *testing.T) {
+	e := newOutreachEnvPosting(t, true, fakePosting{"bluesky": true, "mastodon": true})
+	w, ids := e.sectionWorkshop(t, []string{"bluesky"}, map[string]bool{"bluesky": true})
+	if code, b := e.do(t, http.MethodPost, postPath(ids["bluesky"], "send"), ""); code != http.StatusAccepted {
+		t.Fatalf("send = %d (%s)", code, b)
+	}
+	_, beforeAt := e.postStatus(t, ids["bluesky"])
+	code, b := e.do(t, http.MethodPost, sectionPath(w.ID, "unschedule"), `{"wave":"reminder"}`)
+	if code != http.StatusConflict || !strings.Contains(string(b), "nothing in this section is scheduled") {
+		t.Errorf("unschedule in-flight section = %d (%s), want 409", code, b)
+	}
+	if status, at := e.postStatus(t, ids["bluesky"]); status != "queued" || (at == nil) != (beforeAt == nil) || (at != nil && !at.Equal(*beforeAt)) {
+		t.Errorf("in-flight post = %s %v, want queued with time unchanged (%v)", status, at, beforeAt)
+	}
+	if n := e.queueRowCount(t, ids["bluesky"]); n != 1 {
+		t.Errorf("queue rows = %d, want 1", n)
+	}
+	if n := sectionAuditCount(t, e, audit.ActionOutreachPostUnscheduled, ids["bluesky"]); n != 0 {
+		t.Errorf("unscheduled audit rows = %d, want 0", n)
+	}
+
+	// One queued, one scheduled: the scheduled one goes back, the queued one is named.
+	w2, ids2 := e.sectionWorkshop(t, []string{"bluesky", "mastodon"}, map[string]bool{"bluesky": true, "mastodon": true})
+	if code, b := e.do(t, http.MethodPost, sectionPath(w2.ID, "schedule"), scheduleBody("reminder", time.Now().Add(3*time.Hour))); code != http.StatusOK {
+		t.Fatalf("schedule section = %d (%s)", code, b)
+	}
+	if _, err := e.pool.Exec(context.Background(), `UPDATE outreach_posts SET status = 'queued', scheduled_at = NULL WHERE id = $1`, ids2["bluesky"]); err != nil {
+		t.Fatal(err)
+	}
+	code, b = e.do(t, http.MethodPost, sectionPath(w2.ID, "unschedule"), `{"wave":"reminder"}`)
+	if code != http.StatusOK {
+		t.Fatalf("unschedule mixed section = %d (%s)", code, b)
+	}
+	got := decodeOutreach[sectionView](t, b)
+	if len(got.Posts) != 1 || got.Posts[0].ID != ids2["mastodon"] || got.Posts[0].Status != "draft" {
+		t.Errorf("posts = %+v", got.Posts)
+	}
+	if len(got.LeftAlone) != 1 || got.LeftAlone[0].Channel != "bluesky" || got.LeftAlone[0].Reason != "posting_now" {
+		t.Errorf("left_alone = %+v", got.LeftAlone)
+	}
+	if status, _ := e.postStatus(t, ids2["bluesky"]); status != "queued" {
+		t.Errorf("queued post = %s, want queued", status)
 	}
 }
 

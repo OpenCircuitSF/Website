@@ -76,7 +76,7 @@ func (h *AdminOutreachHandler) handLinkViews(links []outreach.PostLink, posts []
 // that already shows a post:
 //
 //   - A draft in an unwritten wave would flip that wave from Write to open and
-//     and show its automatic channels as missing drafts.
+//     show its automatic channels as missing drafts.
 //   - A slot whose link already exists is left alone, so a draft the user
 //     deleted does not come back.
 //

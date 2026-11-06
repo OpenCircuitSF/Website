@@ -222,6 +222,9 @@ func TestAdminOutreachPosting_RetryOfFailedPost(t *testing.T) {
 	}
 }
 
+// TestAdminOutreachPosting_RacingPreparesAuditOnce is the #0544 review
+// follow-up: two Prepares that both pass the already-prepared check and both
+// hold the SAME key (ShortLinks de-duplicates) must write one audit row.
 func TestAdminOutreachPosting_RacingPreparesAuditOnce(t *testing.T) {
 	e := newOutreachEnv(t, true)
 	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
