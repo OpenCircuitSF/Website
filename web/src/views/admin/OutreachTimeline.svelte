@@ -9,6 +9,7 @@
 <script lang="ts">
   import { formatDateTime } from '../../lib/admin';
   import { boardRows } from '../../lib/outreachCards';
+  import { handChannelLabel } from '../../lib/outreachHandCopy';
   import { outreachRowAriaLabel, outreachRowButtonLabel } from '../../lib/outreachList';
   import { timelineLanes } from '../../lib/outreachTimeline';
   import type { OutreachTimeline } from '../../lib/types';
@@ -68,10 +69,7 @@
 
     <ul class="gaps">
       {#each lane.gaps as g (g.wave)}
-        <li>
-          <a href={g.href}>{g.label}: {g.text}</a>
-          {#if g.handLeft.length > 0}<span class="text-muted"> · Left to post by hand: {g.handLeft.join(', ')}</span>{/if}
-        </li>
+        <li><a href={g.href}>{g.label}: {g.text}</a></li>
       {/each}
     </ul>
 
@@ -79,7 +77,7 @@
       {@const board = boardRows(ev)}
       <table class="sr-only">
         <caption>{ev.workshop.title}</caption>
-        <thead><tr><th>Section</th>{#each ev.channels as c (c.name)}<th>{c.label}</th>{/each}</tr></thead>
+        <thead><tr><th>Section</th>{#each ev.channels as c (c.name)}<th>{handChannelLabel(c)}</th>{/each}</tr></thead>
         <tbody>
           {#each board as br (br.wave)}
             <tr><th>{br.label}</th>{#each br.cells as cell (cell.channel)}<td>{cell.status}{cell.detail ? ' ' + cell.detail : ''}</td>{/each}</tr>
@@ -93,7 +91,9 @@
 <style>
   .legend { display: flex; gap: var(--space-3); align-items: center; }
   .axis, .row { display: grid; grid-template-columns: 14rem 5rem 1fr; gap: var(--space-2); }
-  .axis { margin-left: 14rem; grid-template-columns: 5rem 1fr; font-size: 0.85em; color: var(--text-muted); }
+  /* The axis sits outside any lane, so it adds the lane's 3px border and
+     padding plus the row's label-column gap to line up with the markers. */
+  .axis { margin-left: calc(14rem + 3px + 2 * var(--space-2)); grid-template-columns: 5rem 1fr; font-size: 0.85em; color: var(--text-muted); }
   .track { position: relative; min-height: 1.5rem; }
   .tick { position: absolute; white-space: nowrap; transform: translateX(-50%); }
   .tick:first-child { transform: none; }
@@ -106,7 +106,7 @@
   .row-label { color: var(--text-muted); }
   .today { position: absolute; left: 0; top: 0; bottom: 0; border-left: 1px solid var(--accent); }
   .event { position: absolute; top: 0; bottom: 0; border-left: 2px solid var(--text-muted); padding-left: 2px; font-size: 0.75em; color: var(--text-muted); }
-  .pill { position: absolute; white-space: nowrap; font-size: 0.8em; padding: 0 var(--space-1); border-radius: var(--radius); border: var(--border-w) solid var(--accent); text-decoration: none; color: inherit; }
+  .pill { position: absolute; white-space: nowrap; font-size: 0.8em; padding: 0 var(--space-1); border-radius: var(--radius); border: var(--border-w) solid var(--accent); text-decoration: none; color: inherit; background: var(--bg-panel); z-index: 1; }
   .legend .pill { position: static; }
   .pill.posted { background: var(--success); border-color: var(--success); color: var(--bg-panel); }
   .pill.scheduled { border-style: solid; border-color: var(--success); }

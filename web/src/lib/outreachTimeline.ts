@@ -11,7 +11,7 @@
 import { defaultScheduleAt } from './outreach';
 import { boardChannelLabel, boardRows, onChannels, weekdayTime, type StatusKind } from './outreachCards';
 import { handChannelLabel } from './outreachHandCopy';
-import { sectionLine } from './outreachSection';
+import { sectionLine, withHandNames } from './outreachSection';
 import { eventCounts, outreachChip, type OutreachChip } from './outreachList';
 import { adminOutreachWorkshopHash } from './adminRouter';
 import { formatPacificWeekday, fromPacificInput, toPacificInput } from './pacificTime';
@@ -121,15 +121,18 @@ export function sectionGaps(ev: OutreachTimelineEvent, now: Date): TimelineGap[]
     return [{ wave: '', label: 'Outreach', text: 'Outreach not started', handLeft: [], href: adminOutreachWorkshopHash(ev.workshop.id) }];
   }
   const hand = onChannels(ev).filter((c) => !c.automatic);
-  return ev.waves.map((w) => ({
-    wave: w.name,
-    label: w.label,
-    text: sectionLine(ev, w.name, now).text,
-    handLeft: hand
+  return ev.waves.map((w) => {
+    const handLeft = hand
       .filter((c) => !ev.posts.some((p) => p.channel === c.name && p.wave === w.name && p.status === 'posted'))
-      .map(handChannelLabel),
-    href: adminOutreachWorkshopHash(ev.workshop.id, w.name),
-  }));
+      .map(handChannelLabel);
+    return {
+      wave: w.name,
+      label: w.label,
+      text: withHandNames(sectionLine(ev, w.name, now).text, handLeft),
+      handLeft,
+      href: adminOutreachWorkshopHash(ev.workshop.id, w.name),
+    };
+  });
 }
 
 function lane(ev: OutreachTimelineEvent, axis: TimelineAxis, now: Date): TimelineLane {

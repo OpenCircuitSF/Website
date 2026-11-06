@@ -119,8 +119,9 @@ describe('sectionGaps', () => {
     const e = ev({ channels: [bsky, mast, ig, tt], posts: [post('tiktok', 'reminder', { status: 'posted', posted_at: '2026-11-05T18:00:00Z' })] });
     const g = sectionGaps(e, NOW).find((x) => x.wave === 'reminder');
     expect(g?.label).toBe('Reminder');
-    expect(g?.text).toBe(sectionLine(e, 'reminder', NOW).text);
+    expect(g?.text).toBe(sectionLine(e, 'reminder', NOW).text.replace('1 left to post by hand', '1 left to post by hand: Instagram Reels'));
     expect(g?.text).toContain(`suggested ${weekdayTime(REMINDER_AT)}`);
+    expect(g?.text.match(/left to post by hand/g)).toHaveLength(1);
     expect(g?.handLeft).toEqual(['Instagram Reels']);
   });
 });

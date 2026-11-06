@@ -31,6 +31,19 @@ function list(labels: string[]): string {
   return labels.length <= 1 ? (labels[0] ?? '') : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
 }
 
+/**
+ * A section line with the hand-posted channels still left named after its
+ * count (#0646): "… · 3 left to post by hand: Instagram Reels, TikTok and
+ * YouTube Shorts". A line that does not give the count gets it appended, so
+ * the names never appear without it and the count is never said twice.
+ */
+export function withHandNames(text: string, names: string[]): string {
+  if (names.length === 0) return text;
+  const count = new RegExp(`(^|\\D)(${names.length} left to post by hand)`);
+  const named = `${names.length} left to post by hand: ${list(names)}`;
+  return count.test(text) ? text.replace(count, (_m, pre: string) => `${pre}${named}`) : `${text} · ${named}`;
+}
+
 /** On hand-posted channels (not automatic at all): how many there are and how many are not yet posted. */
 export function sectionHand(view: View, wave: string): { left: number; total: number } {
   const hand = onChannels(view).filter((c) => !c.automatic);

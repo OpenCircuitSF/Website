@@ -77,6 +77,14 @@ describe('OutreachTimeline', () => {
   it('names hand-posted channels left to post', () => {
     render(OutreachTimeline, { timeline });
     const lane = screen.getByRole('region', { name: 'LED Programming' });
-    expect(within(lane).getAllByText(/Left to post by hand: Instagram Reels/)).toHaveLength(2);
+    const lines = within(lane).getAllByText(/left to post by hand: Instagram Reels/);
+    expect(lines).toHaveLength(2);
+    for (const l of lines) expect(l.textContent?.match(/left to post by hand/gi)).toHaveLength(1);
+  });
+
+  it('the screen-reader table names channels as the rows do', () => {
+    render(OutreachTimeline, { timeline });
+    const table = screen.getByRole('table', { name: 'LED Programming' });
+    expect(Array.from(table.querySelectorAll('thead th')).map((h) => h.textContent)).toEqual(['Section', 'Bluesky', 'Instagram Reels']);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { weekdayTime } from './outreachCards';
-import { hasVideoByHandLine, lineParts, scheduleTargets, sectionLine, sectionTimeText, unscheduleTargets } from './outreachSection';
+import { hasVideoByHandLine, lineParts, scheduleTargets, sectionLine, sectionTimeText, unscheduleTargets, withHandNames } from './outreachSection';
 import type { OutreachChannel, OutreachPost, WorkshopOutreach } from './types';
 
 const ch = (name: string, label: string, automatic: boolean, configured = automatic): OutreachChannel => ({
@@ -148,5 +148,18 @@ describe('lineParts', () => {
   it('splits around the first date', () => {
     expect(lineParts('Scheduled Thu, Nov 12 at 6:00 PM PT · 3 left to post by hand')).toEqual(['Scheduled ', 'Thu, Nov 12 at 6:00 PM PT', ' · 3 left to post by hand']);
     expect(lineParts('Not written')).toEqual(['Not written', '', '']);
+  });
+});
+
+describe('withHandNames (#0646)', () => {
+  it('names the channels after the count, saying the count once', () => {
+    expect(withHandNames('Posted Thu · 3 left to post by hand · Bluesky is not connected', ['Instagram Reels', 'TikTok', 'YouTube Shorts']))
+      .toBe('Posted Thu · 3 left to post by hand: Instagram Reels, TikTok and YouTube Shorts · Bluesky is not connected');
+  });
+  it('appends the count and names when the line has no count', () => {
+    expect(withHandNames('Not written', ['Instagram Reels'])).toBe('Not written · 1 left to post by hand: Instagram Reels');
+  });
+  it('leaves the line alone when nothing is left', () => {
+    expect(withHandNames('Posted Thu', [])).toBe('Posted Thu');
   });
 });
