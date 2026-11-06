@@ -30,6 +30,7 @@ import type {
   OutreachResults,
   OutreachResultsSummary,
   OutreachSummary,
+  OutreachTimeline,
   WorkshopOutreach,
   Subscriber,
   SubscribersPage,
@@ -1399,6 +1400,11 @@ export function resetOutreach(workshopId: number): Promise<WorkshopOutreach> {
 /** `enabled_channels` (#0588) is the channels switched on in Settings. */
 export function listOutreach(): Promise<{ outreach: OutreachSummary[]; enabled_channels?: string[] }> {
   return apiGet<{ outreach: OutreachSummary[]; enabled_channels?: string[] }>('/admin/outreach');
+}
+
+/** GET /admin/outreach-timeline (#0646): published events in the next 30 days with their posts. */
+export function getOutreachTimeline(): Promise<OutreachTimeline> {
+  return apiGet<OutreachTimeline>('/admin/outreach-timeline');
 }
 
 /** GET /admin/workshops/{id}/outreach/results — clicks from ShortLinks (#0546). Always 200 for a known workshop; `status` says whether the numbers are real. */

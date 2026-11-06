@@ -77,6 +77,8 @@ type outreachPosting interface {
 // outreachWorkshopReader loads the workshop an outreach belongs to.
 type outreachWorkshopReader interface {
 	GetByID(ctx context.Context, id int64) (workshops.Workshop, error)
+	// ListVisible feeds the home timeline (#0646).
+	ListVisible(ctx context.Context, now time.Time) (upcoming, past []workshops.Workshop, err error)
 }
 
 // shortLinker is the slice of *shortlinks.Client the handler uses. A nil
@@ -554,16 +556,32 @@ type outreachPanelView struct {
 	OffChannels []outreach.Channel `json:"off_channels"`
 }
 
+// workshopView is the workshop part of the panel and of a timeline event.
+func (h *AdminOutreachHandler) workshopView(wk workshops.Workshop) outreachWorkshopView {
+	return outreachWorkshopView{ID: wk.ID, Slug: wk.Slug, Title: wk.Title, Status: wk.Status, StartsAt: rfc3339(wk.StartsAt), Summary: nonEmptyPtr(wk.Summary), CoverImage: nonEmptyPtr(wk.CoverImage)}
+}
+
+// waveViews lists every section with its suggested time for wk.
+func (h *AdminOutreachHandler) waveViews(wk workshops.Workshop) []outreachWaveView {
+	out := []outreachWaveView{}
+	for _, w := range outreach.Waves() {
+		wv := outreachWaveView{Name: w.Name, Label: w.Label}
+		wv.SuggestedAt = rfc3339(outreach.SuggestedAt(w, wk.StartsAt, h.postHour()))
+		out = append(out, wv)
+	}
+	return out
+}
+
 func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop, o *outreach.Outreach) (outreachPanelView, error) {
 	thumbOK, thumbReason := h.thumbStatus(wk.CoverImage)
 	v := outreachPanelView{
-		Workshop:    outreachWorkshopView{ID: wk.ID, Slug: wk.Slug, Title: wk.Title, Status: wk.Status, StartsAt: rfc3339(wk.StartsAt), Summary: nonEmptyPtr(wk.Summary), CoverImage: nonEmptyPtr(wk.CoverImage)},
+		Workshop:    h.workshopView(wk),
 		BlueskyCard: h.blueskyCard(),
 		CardHost:    h.cardHost(),
 		ThumbOK:     thumbOK,
 		ThumbReason: thumbReason,
 		Channels:    h.channelViews(nil),
-		Waves:       []outreachWaveView{},
+		Waves:       h.waveViews(wk),
 		Posts:       []outreachPostView{},
 		HandLinks:   []outreachHandLinkView{},
 		OffChannels: h.offChannels(),
@@ -575,11 +593,6 @@ func (h *AdminOutreachHandler) panel(ctx context.Context, wk workshops.Workshop,
 		v.UnavailableReason = "workshop_not_published"
 	default:
 		v.Available = true
-	}
-	for _, w := range outreach.Waves() {
-		wv := outreachWaveView{Name: w.Name, Label: w.Label}
-		wv.SuggestedAt = rfc3339(outreach.SuggestedAt(w, wk.StartsAt, h.postHour()))
-		v.Waves = append(v.Waves, wv)
 	}
 	if o != nil {
 		v.Outreach = &outreachRowView{ID: o.ID, WorkshopID: o.WorkshopID, CampaignSlug: o.CampaignSlug, CreatedAt: o.CreatedAt.UTC().Format(time.RFC3339)}

@@ -21,9 +21,11 @@ const listAdminWorkshops = vi.fn<() => Promise<{ workshops: AdminWorkshop[] }>>(
 const getWorkshopOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const getOutreachConnections = vi.fn<() => Promise<{ groups: ConnectionGroup[] }>>();
 const getOverview = vi.fn();
+const getOutreachTimeline = vi.fn(() => Promise.resolve({ now: '2026-11-06T18:00:00Z', events: [] as unknown[] }));
 vi.mock('../../lib/api', () => ({
   listOutreach: () => listOutreach(),
   listAdminWorkshops: () => listAdminWorkshops(),
+  getOutreachTimeline: () => getOutreachTimeline(),
   getWorkshopOutreach: (id: number) => getWorkshopOutreach(id),
   getOutreachConnections: () => getOutreachConnections(),
   getOverview: () => getOverview(),
@@ -75,6 +77,32 @@ describe('Outreach landing list', () => {
     expect(screen.queryByText('Old without')).toBeNull();
     expect(screen.getByRole('link', { name: 'Open outreach for Old with outreach' }).getAttribute('href')).toContain('workshop=4');
     expect(screen.getByRole('link', { name: 'Results for Old with outreach' })).toBeTruthy();
+  });
+
+  it('shows the timeline above the unchanged list (#0646)', async () => {
+    listAdminWorkshops.mockResolvedValue({ workshops: [ws(1)] });
+    listOutreach.mockResolvedValue({ outreach: [] });
+    getOutreachTimeline.mockResolvedValueOnce({
+      now: new Date().toISOString(),
+      events: [{
+        workshop: { id: 1, slug: 'w1', title: 'Workshop 1', status: 'published', starts_at: future(11) },
+        outreach: null, channels: [], waves: [{ name: 'announce', label: 'Announce', suggested_at: null }], posts: [], off_channels: [],
+      }],
+    });
+    render(Outreach);
+    const timeline = await screen.findByText('Next 30 days', { selector: '.panel-header' });
+    const list = screen.getByText('Outreach', { selector: '.panel-header' });
+    expect(timeline.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole('table')).toBeTruthy();
+    expect(screen.getAllByRole('link', { name: 'Promote Workshop 1' })).toHaveLength(2);
+  });
+
+  it('shows Retry when the timeline fails to load (#0646)', async () => {
+    listAdminWorkshops.mockResolvedValue({ workshops: [ws(1)] });
+    listOutreach.mockResolvedValue({ outreach: [] });
+    getOutreachTimeline.mockRejectedValueOnce(new Error('down'));
+    render(Outreach);
+    expect(await screen.findByRole('button', { name: 'Retry' })).toBeTruthy();
   });
 
   it('labels the sub-nav Posts, Flyer spots (the saved locations), Flyers, Results', async () => {

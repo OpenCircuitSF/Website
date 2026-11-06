@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AdminWorkshop, ConnectionGroup, OutreachSummary } from './types';
 import {
+  eventCounts,
   eventStarted,
   upcomingPublished,
   outreachChip,
@@ -109,5 +110,12 @@ describe('eventStarted (#0638)', () => {
   });
   it('is true once the start time has passed', () => {
     expect(eventStarted('2026-12-05T17:59:00Z', now)).toBe(true);
+  });
+});
+
+describe('eventCounts (#0646)', () => {
+  it('eventCounts counts posts by status', () => {
+    expect(eventCounts([{ status: 'posted' }, { status: 'draft' }, { status: 'posted' }])).toEqual({ posted: 2, draft: 1 });
+    expect(eventCounts([])).toEqual({});
   });
 });

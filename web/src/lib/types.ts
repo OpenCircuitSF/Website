@@ -869,6 +869,14 @@ export interface OutreachPost {
   fresh_body?: string;
 }
 
+/** One event on the Outreach home timeline (#0646): the panel's shape, minus what needs the network. */
+export type OutreachTimelineEvent = Pick<WorkshopOutreach, 'workshop' | 'outreach' | 'channels' | 'waves' | 'posts' | 'off_channels'>;
+/** GET /admin/outreach-timeline: `now` is the server's clock. */
+export interface OutreachTimeline {
+  now: string;
+  events: OutreachTimelineEvent[];
+}
+
 export interface WorkshopOutreach {
   available: boolean;
   /** '', 'shortlinks_not_configured' or 'workshop_not_published'. */

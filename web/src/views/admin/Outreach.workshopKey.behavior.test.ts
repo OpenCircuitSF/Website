@@ -20,6 +20,7 @@ vi.mock('../../lib/api', () => ({
   takedownOutreachPost: vi.fn(),
   listOutreach: vi.fn(() => Promise.resolve({ outreach: [] })),
   listAdminWorkshops: vi.fn(() => Promise.resolve({ workshops: [] })),
+  getOutreachTimeline: vi.fn(() => Promise.resolve({ now: '2026-11-06T18:00:00Z', events: [] })),
   ApiError: class ApiError extends Error {},
 }));
 

@@ -71,6 +71,22 @@ function view(over: Partial<WorkshopOutreach> = {}): WorkshopOutreach {
 }
 
 describe('OutreachWorkshop', () => {
+  it('opens the section named in the link (#0646)', async () => {
+    getWorkshopOutreach.mockResolvedValue(view({ waves: allWaves }));
+    getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);
+    render(OutreachWorkshop, { workshopId: 5, section: 'reminder' });
+    const tab = await screen.findByRole('tab', { name: /Reminder/ });
+    expect(tab.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('ignores an unknown section name (#0646)', async () => {
+    getWorkshopOutreach.mockResolvedValue(view({ waves: allWaves }));
+    getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);
+    render(OutreachWorkshop, { workshopId: 5, section: 'nope' });
+    const tab = await screen.findByRole('tab', { name: /Announce/ });
+    expect(tab.getAttribute('aria-selected')).toBe('true');
+  });
+
   it('renders the header with the title, status and the editor link', async () => {
     getWorkshopOutreach.mockResolvedValue(view());
     getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);

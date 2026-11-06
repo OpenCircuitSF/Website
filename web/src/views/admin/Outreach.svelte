@@ -8,7 +8,7 @@
 <script lang="ts">
   import SubNav from '../../lib/SubNav.svelte';
   import { untrack } from 'svelte';
-  import { listOutreach, listAdminWorkshops, ApiError } from '../../lib/api';
+  import { listOutreach, listAdminWorkshops, getOutreachTimeline, ApiError } from '../../lib/api';
   import {
     adminOutreachWorkshopHash,
     adminOutreachHash,
@@ -18,10 +18,12 @@
     outreachWorkshopFromQuery,
     outreachFlyerFromQuery,
     outreachLayoutFromQuery,
+    outreachSectionFromQuery,
   } from '../../lib/adminRouter';
   import { formatDateTime } from '../../lib/admin';
   import { upcomingPublished, summariesByWorkshop, outreachChip, outreachRowButtonLabel, outreachRowAriaLabel, pastWithOutreach } from '../../lib/outreachList';
-  import type { OutreachSummary, AdminWorkshop } from '../../lib/types';
+  import type { OutreachSummary, AdminWorkshop, OutreachTimeline as Timeline } from '../../lib/types';
+  import OutreachTimeline from './OutreachTimeline.svelte';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
   import OutreachLocations from './OutreachLocations.svelte';
@@ -38,6 +40,8 @@
 
   let rows = $state<OutreachSummary[]>([]);
   let workshops = $state<AdminWorkshop[]>([]);
+  // #0646: the next 30 days on a timeline, above the unchanged list.
+  let timeline = $state<Timeline | null>(null);
   const upcoming = $derived(upcomingPublished(workshops));
   const byWorkshop = $derived(summariesByWorkshop(rows));
   const past = $derived(pastWithOutreach(workshops, rows));
@@ -48,9 +52,10 @@
     loading = true;
     loadError = null;
     try {
-      const [o, w] = await Promise.all([listOutreach(), listAdminWorkshops()]);
+      const [o, w, t] = await Promise.all([listOutreach(), listAdminWorkshops(), getOutreachTimeline()]);
       rows = o.outreach;
       workshops = w.workshops;
+      timeline = t;
     } catch (err) {
       loadError = err instanceof ApiError ? err.message : 'Could not load outreach. Please try again.';
     } finally {
@@ -82,13 +87,18 @@
 {:else if view === 'workshop' && outreachWorkshopFromQuery(query) !== null}
   <!-- A new workshop is a new page: nothing typed for one may reach another (#0633). -->
   {#key outreachWorkshopFromQuery(query)}
-    <OutreachWorkshop workshopId={outreachWorkshopFromQuery(query) ?? 0} />
+    <OutreachWorkshop workshopId={outreachWorkshopFromQuery(query) ?? 0} section={outreachSectionFromQuery(query)} />
   {/key}
 {:else if view === 'locations'}
   <OutreachLocations />
 {:else if view === 'results'}
   <OutreachResults workshopId={outreachWorkshopFromQuery(query)} />
 {:else}
+{#if !loading && !loadError && timeline && timeline.events.length > 0}
+  <Panel title="Next 30 days">
+    <OutreachTimeline {timeline} />
+  </Panel>
+{/if}
 <Panel title="Outreach">
   {#if loading}
     <p class="text-muted">Loading outreach…</p>

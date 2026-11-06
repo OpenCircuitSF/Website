@@ -34,7 +34,9 @@
   import { linkReportMessage } from '../../lib/outreachLinks';
   import { resultsSummaryLine } from '../../lib/outreachResults';
 
-  let { workshopId }: { workshopId: number } = $props();
+  // section (#0646): a link from the home timeline names the section to open first.
+  let { workshopId, section = null }: { workshopId: number; section?: string | null } = $props();
+  let sectionUsed = false;
 
   let view = $state<WorkshopOutreach | null>(null);
   let reloadKey = $state(0);
@@ -105,7 +107,13 @@
     view = v;
     if (openFor !== v.workshop.id || !v.waves.some((w) => w.name === openWave)) {
       openFor = v.workshop.id;
-      openWave = defaultOpenSection(v);
+      const named = !sectionUsed && section !== null && v.waves.some((w) => w.name === section);
+      sectionUsed = true;
+      openWave = named ? section : defaultOpenSection(v);
+      if (named) {
+        void tick().then(() => document.getElementById('outreach-section-tabs')?.scrollIntoView({ block: 'start' }));
+        focusAfterLoad = true;
+      }
     }
     if (v.link_report) linkWarning = linkReportMessage(v.link_report);
     if (focusAfterLoad) {

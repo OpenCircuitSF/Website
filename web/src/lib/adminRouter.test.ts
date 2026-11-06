@@ -17,6 +17,7 @@ import {
   outreachWorkshopFromQuery,
   adminOutreachResultsHash,
   adminOutreachWorkshopHash,
+  outreachSectionFromQuery,
   outreachFlyerFromQuery,
   outreachLayoutFromQuery,
   adminOutreachFlyersHash,
@@ -255,5 +256,18 @@ describe('event types section (#0613)', () => {
     const group = ADMIN_NAV_GROUPS.find((g) => g.label === 'Events');
     expect(group?.sections).toContain('event-types');
     expect(ADMIN_SECTION_LABELS['event-types']).toBe('Event types');
+  });
+});
+
+describe('outreach section links (#0646)', () => {
+  it('adminOutreachWorkshopHash adds a section when given', () => {
+    expect(adminOutreachWorkshopHash(6, 'reminder')).toBe('#/outreach?view=workshop&workshop=6&section=reminder');
+    expect(adminOutreachWorkshopHash(6)).toBe('#/outreach?view=workshop&workshop=6');
+  });
+  it('outreachSectionFromQuery accepts a section name and rejects anything else', () => {
+    expect(outreachSectionFromQuery(new URLSearchParams('section=last-call'))).toBe('last-call');
+    expect(outreachSectionFromQuery(new URLSearchParams('section=Reminder'))).toBeNull();
+    expect(outreachSectionFromQuery(new URLSearchParams('section=a%3Cb'))).toBeNull();
+    expect(outreachSectionFromQuery(new URLSearchParams(''))).toBeNull();
   });
 });

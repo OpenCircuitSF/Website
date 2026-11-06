@@ -260,9 +260,17 @@ export function adminOutreachResultsHash(workshopId?: number): string {
   return workshopId === undefined ? '#/outreach?view=results' : `#/outreach?view=results&workshop=${workshopId}`;
 }
 
-/** One workshop's outreach page (#0568): `<id>` is the workshop id. */
-export function adminOutreachWorkshopHash(workshopId: number): string {
-  return `#/outreach?view=workshop&workshop=${workshopId}`;
+/** One workshop's outreach page (#0568): `<id>` is the workshop id; a
+ * section name opens that section first (#0646). */
+export function adminOutreachWorkshopHash(workshopId: number, section?: string): string {
+  const base = `#/outreach?view=workshop&workshop=${workshopId}`;
+  return section ? `${base}&section=${encodeURIComponent(section)}` : base;
+}
+
+/** The section a workshop hash names (#0646): a lowercase name, else null. */
+export function outreachSectionFromQuery(query: URLSearchParams): string | null {
+  const raw = query.get('section');
+  return raw !== null && /^[a-z][a-z-]*$/.test(raw) ? raw : null;
 }
 
 /** The flyer a flyers or print hash names: a positive integer `flyer` param, else null (#0549). */

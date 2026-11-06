@@ -2,7 +2,7 @@
 // and the Overview's outreach needs-attention items (#0586). No DOM, so they
 // are unit-testable directly.
 
-import type { AdminWorkshop, ConnectionGroup, OutreachSummary } from './types';
+import type { AdminWorkshop, ConnectionGroup, OutreachPost, OutreachSummary } from './types';
 import { GROUP_LABELS } from './outreachConnections';
 
 export interface OutreachChip {
@@ -28,12 +28,12 @@ export function summariesByWorkshop(rows: OutreachSummary[]): Map<number, Outrea
   return new Map(rows.map((r) => [r.workshop_id, r]));
 }
 
-function count(s: OutreachSummary, status: string): number {
+function count(s: Pick<OutreachSummary, 'counts'>, status: string): number {
   return s.counts[status] ?? 0;
 }
 
 /** The status chip for one workshop's outreach: "Not started", "Set up", or posted/scheduled counts. */
-export function outreachChip(summary: OutreachSummary | undefined): OutreachChip {
+export function outreachChip(summary: Pick<OutreachSummary, 'counts'> | undefined): OutreachChip {
   if (!summary) return { label: 'Not started', tone: 'muted' };
   const posted = count(summary, 'posted');
   const scheduled = count(summary, 'scheduled');
@@ -47,12 +47,12 @@ export function outreachChip(summary: OutreachSummary | undefined): OutreachChip
 }
 
 /** The one button on an Outreach list row. */
-export function outreachRowButtonLabel(summary: OutreachSummary | undefined): string {
+export function outreachRowButtonLabel(summary: Pick<OutreachSummary, 'counts'> | undefined): string {
   return summary ? 'Open' : 'Promote';
 }
 
 /** The row button's accessible name: the visible word plus the workshop it acts on (#0593). */
-export function outreachRowAriaLabel(summary: OutreachSummary | undefined, title: string): string {
+export function outreachRowAriaLabel(summary: Pick<OutreachSummary, 'counts'> | undefined, title: string): string {
   return summary ? `Open outreach for ${title}` : `Promote ${title}`;
 }
 
@@ -132,4 +132,11 @@ export function outreachAttentionItems(
  * exactly now has not. */
 export function eventStarted(startsAt: string | null | undefined, now: Date = new Date()): boolean {
   return !!startsAt && Date.parse(startsAt) < now.getTime();
+}
+
+/** Posts counted by status (#0646), so a timeline lane's chip reads like the list's. */
+export function eventCounts(posts: Pick<OutreachPost, 'status'>[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const p of posts) out[p.status] = (out[p.status] ?? 0) + 1;
+  return out;
 }
