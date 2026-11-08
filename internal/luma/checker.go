@@ -74,7 +74,10 @@ func FeedURL(base, id string) string {
 }
 
 // Feed returns the cached snapshot, fetching the feed when the cache is cold,
-// expired, or for a different calendar.
+// expired, or for a different calendar. The fetch runs under
+// context.WithoutCancel(ctx): an admin who navigates away mid-fetch must not
+// leave "unreachable" cached for a minute. The client's own timeout still
+// bounds it.
 func (c *Checker) Feed(ctx context.Context) Snapshot {
 	id := strings.TrimSpace(c.calendarID())
 	c.mu.Lock()
@@ -86,7 +89,7 @@ func (c *Checker) Feed(ctx context.Context) Snapshot {
 	if id == c.id && now.Before(c.expires) {
 		return c.snap
 	}
-	st, evs := c.fetch(ctx, id)
+	st, evs := c.fetch(context.WithoutCancel(ctx), id)
 	snap := Snapshot{Status: st}
 	ttl := FailTTL
 	if st == StatusOK {

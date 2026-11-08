@@ -8,6 +8,13 @@ import (
 
 const siteAddr = "1736 18th Street, San Francisco, CA 94107"
 
+// The three address forms production's workshops carry, read 2026-11-07.
+const (
+	prodAddrNoComma   = "1736 18th Street, San Francisco CA 94107"
+	prodAddrStNoComma = "1736 18th St San Francisco, CA 94107"
+	prodAddrZip4      = "1736 18th Street, San Francisco CA 94107-2343"
+)
+
 func pt(mo time.Month, d, h, m int) time.Time {
 	return time.Date(2026, mo, d, h, m, 0, 0, pacific)
 }
@@ -17,14 +24,15 @@ func ws(id int64, title string, start, end time.Time) Workshop {
 }
 
 func production() []Workshop {
+	at := func(w Workshop, addr string) Workshop { w.Address = addr; return w }
 	return []Workshop{
-		ws(1, "Introduction to Soldering", pt(9, 3, 18, 30), pt(9, 3, 21, 0)),
-		ws(2, "Programming LEDs", pt(9, 17, 18, 30), pt(9, 17, 20, 30)),
-		ws(3, "Introduction to Soldering", pt(10, 1, 18, 30), pt(10, 1, 21, 0)),
-		ws(4, "Programming LEDs", pt(10, 19, 18, 30), pt(10, 19, 19, 30)),
-		ws(5, "Hack Night", pt(11, 9, 19, 0), pt(11, 9, 22, 0)),
-		ws(6, "Programming LEDs", pt(11, 16, 18, 30), pt(11, 16, 20, 30)),
-		ws(7, "Hack Night", pt(11, 16, 19, 0), pt(11, 16, 22, 0)),
+		at(ws(1, "Introduction to Soldering", pt(9, 3, 18, 30), pt(9, 3, 21, 0)), prodAddrNoComma),
+		at(ws(2, "Programming LEDs", pt(9, 17, 18, 30), pt(9, 17, 20, 30)), prodAddrStNoComma),
+		at(ws(3, "Introduction to Soldering", pt(10, 1, 18, 30), pt(10, 1, 21, 0)), prodAddrNoComma),
+		at(ws(4, "Programming LEDs", pt(10, 19, 18, 30), pt(10, 19, 19, 30)), prodAddrStNoComma),
+		at(ws(5, "Hack Night", pt(11, 9, 19, 0), pt(11, 9, 22, 0)), prodAddrZip4),
+		at(ws(6, "Programming LEDs", pt(11, 16, 18, 30), pt(11, 16, 20, 30)), prodAddrStNoComma),
+		at(ws(7, "Hack Night", pt(11, 16, 19, 0), pt(11, 16, 22, 0)), prodAddrZip4),
 	}
 }
 
@@ -115,6 +123,9 @@ func TestCompareLocation(t *testing.T) {
 		{"other number", siteAddr, "1740 18th St, San Francisco, CA 94107", true},
 		{"no site address", "", "1740 18th St, San Francisco, CA 94107", false},
 		{"no Luma street", siteAddr, "Sequoia Fabrica, San Francisco", false},
+		{"production, no comma after St", prodAddrStNoComma, lumaFixtureAddr, false},
+		{"production, ZIP+4", prodAddrZip4, lumaFixtureAddr, false},
+		{"production form, other number", "1740 18th St San Francisco, CA 94107", lumaFixtureAddr, true},
 	}
 	for _, c := range cases {
 		rs, _ := Compare([]Workshop{{ID: 1, Title: "Hack Night", Start: start, Address: c.site}},
@@ -129,6 +140,23 @@ func TestCompareLocation(t *testing.T) {
 		want := []Diff{{"location", "Location", c.site, c.luma}}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: diffs = %+v, want %+v", c.name, got, want)
+		}
+	}
+}
+
+// lumaFixtureAddr is the location text the captured Luma feed carries.
+const lumaFixtureAddr = "Sequoia Fabrica Community Workshop, 1736 18th St, San Francisco, CA 94107, USA"
+
+func TestStreetPart(t *testing.T) {
+	for in, want := range map[string]string{
+		prodAddrNoComma:       "1736 18th st",
+		prodAddrStNoComma:     "1736 18th st",
+		prodAddrZip4:          "1736 18th st",
+		lumaFixtureAddr:       "1736 18th st",
+		"100 St Francis Blvd": "100 st francis blvd",
+	} {
+		if got := streetPart(in); got != want {
+			t.Errorf("streetPart(%q) = %q, want %q", in, got, want)
 		}
 	}
 }

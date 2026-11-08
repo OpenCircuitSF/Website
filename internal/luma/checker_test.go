@@ -160,3 +160,17 @@ func TestCheckerTimeout(t *testing.T) {
 		t.Fatalf("snapshot = %+v", s)
 	}
 }
+
+func TestCheckerCancelledRequestDoesNotCacheFailure(t *testing.T) {
+	fs := newFeedServer(t)
+	id := "cal-test"
+	c, _ := newTestChecker(&id, fs.URL)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if s := c.Feed(ctx); s.Status != StatusOK || len(s.Events) != 6 {
+		t.Fatalf("snapshot = %+v", s)
+	}
+	if s := c.Feed(context.Background()); s.Status != StatusOK || fs.hits.Load() != 1 {
+		t.Fatalf("snapshot = %+v, hits = %d", s, fs.hits.Load())
+	}
+}

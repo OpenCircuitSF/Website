@@ -223,6 +223,17 @@ describe('Outreach landing list: Luma (#0648)', () => {
     expect(item?.querySelector('a')?.getAttribute('href')).toBe('https://luma.com/3y6a2mnm');
   });
 
+  it('shows two identical Luma-only events as two rows without breaking the list', async () => {
+    listAdminWorkshops.mockResolvedValue({ workshops: [ws(1)] });
+    listOutreach.mockResolvedValue({ outreach: [] });
+    const dup = { title: 'Hack Night', starts_at: '2026-11-17T03:00:00Z', luma_url: 'https://luma.com/3y6a2mnm' };
+    getOutreachLuma.mockResolvedValueOnce({ ...lumaOK, events: [], leftovers: [dup, { ...dup }] });
+    render(Outreach);
+    expect(await screen.findByText('On Luma only')).toBeTruthy();
+    expect(document.querySelectorAll('.luma-leftovers li')).toHaveLength(2);
+    expect(screen.getByText('Workshop 1')).toBeTruthy();
+  });
+
   it('keeps the list when the Luma check fails', async () => {
     listAdminWorkshops.mockResolvedValue({ workshops: [ws(1)] });
     listOutreach.mockResolvedValue({ outreach: [] });

@@ -176,7 +176,7 @@
     {#if luma?.leftovers.length}
       <p><strong>On Luma only</strong></p>
       <ul class="luma-leftovers">
-        {#each luma.leftovers as l (l.starts_at + l.title)}
+        {#each luma.leftovers as l, i (i)}
           <li>
             {formatDateTime(l.starts_at)} · {l.title}{#if l.luma_url}{' · '}<a href={l.luma_url} target="_blank" rel="noopener noreferrer">{OPEN_ON_LUMA}</a>{/if}
           </li>

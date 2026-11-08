@@ -114,8 +114,18 @@ var streetWords = map[string]string{
 	"north": "n", "south": "s", "east": "e", "west": "w", "suite": "ste",
 }
 
+// streetTypes are the normalised street-type words that end a street line.
+var streetTypes = map[string]bool{
+	"st": true, "ave": true, "blvd": true, "rd": true, "dr": true, "pl": true, "ln": true,
+	"ct": true, "ter": true, "hwy": true, "way": true, "pkwy": true, "sq": true,
+}
+
 // streetPart is the normalised street line of an address ("1736 18th st"),
-// or "" when no comma-separated segment starts with a house number.
+// or "" when no comma-separated segment starts with a house number. The line
+// is cut after the first street-type word at index 2 or later, so an address
+// written without a comma after the street ("1736 18th St San Francisco")
+// gives the same line as one with it. Index 0 and 1 are skipped so a street
+// named after a saint ("100 St Francis Blvd") keeps its name.
 func streetPart(addr string) string {
 	for _, seg := range strings.Split(addr, ",") {
 		seg = strings.TrimSpace(seg)
@@ -128,6 +138,12 @@ func streetPart(addr string) string {
 		for i, w := range words {
 			if s, ok := streetWords[w]; ok {
 				words[i] = s
+			}
+		}
+		for i := 2; i < len(words); i++ {
+			if streetTypes[words[i]] {
+				words = words[:i+1]
+				break
 			}
 		}
 		return strings.Join(words, " ")
