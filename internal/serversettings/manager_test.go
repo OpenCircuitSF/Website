@@ -253,3 +253,14 @@ func TestOutreachChannelsSavedValueIsRespected(t *testing.T) {
 		t.Errorf("channels = %v, want the saved two", got)
 	}
 }
+
+func TestLumaCalendarIDDefaultAndOff(t *testing.T) {
+	if got := load(t, newFake(), nil, nil, nil).LumaCalendarID(); got != DefaultLumaCalendarID {
+		t.Errorf("default = %q, want %q", got, DefaultLumaCalendarID)
+	}
+	st := newFake()
+	st.rows[KeyLumaCalendarID] = LumaOff
+	if got := load(t, st, nil, nil, nil).LumaCalendarID(); got != "" {
+		t.Errorf("off = %q, want empty", got)
+	}
+}

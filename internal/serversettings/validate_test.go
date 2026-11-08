@@ -104,3 +104,20 @@ func TestDefaultOutreachHashtagsLowercase(t *testing.T) {
 		t.Error("validation message must not recommend CamelCase")
 	}
 }
+
+func TestNormalizeLumaCalendar(t *testing.T) {
+	for in, want := range map[string]string{
+		"cal-UIMZwzLquNDI2DB": "cal-UIMZwzLquNDI2DB",
+		"https://api.luma.com/ics/get?entity=calendar&id=cal-UIMZwzLquNDI2DB": "cal-UIMZwzLquNDI2DB",
+		"OFF": "off",
+	} {
+		if got, err := Normalize(KeyLumaCalendarID, in); err != nil || got != want {
+			t.Errorf("Normalize(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"luma.com/opencircuitsf", "cal-x", "cal-abc!", "https://luma.com/opencircuitsf"} {
+		if _, err := Normalize(KeyLumaCalendarID, in); err == nil {
+			t.Errorf("Normalize(%q) accepted", in)
+		}
+	}
+}

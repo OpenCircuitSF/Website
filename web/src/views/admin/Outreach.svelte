@@ -8,7 +8,7 @@
 <script lang="ts">
   import SubNav from '../../lib/SubNav.svelte';
   import { untrack } from 'svelte';
-  import { listOutreach, listAdminWorkshops, getOutreachTimeline, ApiError } from '../../lib/api';
+  import { listOutreach, listAdminWorkshops, getOutreachTimeline, getOutreachLuma, ApiError } from '../../lib/api';
   import {
     adminOutreachWorkshopHash,
     adminOutreachHash,
@@ -22,7 +22,8 @@
   } from '../../lib/adminRouter';
   import { formatDateTime } from '../../lib/admin';
   import { upcomingPublished, summariesByWorkshop, outreachChip, outreachRowButtonLabel, outreachRowAriaLabel, pastWithOutreach } from '../../lib/outreachList';
-  import type { OutreachSummary, AdminWorkshop, OutreachTimeline as Timeline } from '../../lib/types';
+  import { lumaByWorkshop, lumaChip, lumaDiffText, lumaTitleNote, lumaStatusLine, OPEN_ON_LUMA } from '../../lib/outreachLuma';
+  import type { OutreachSummary, AdminWorkshop, OutreachTimeline as Timeline, OutreachLuma } from '../../lib/types';
   import OutreachTimeline from './OutreachTimeline.svelte';
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
@@ -45,6 +46,11 @@
   const upcoming = $derived(upcomingPublished(workshops));
   const byWorkshop = $derived(summariesByWorkshop(rows));
   const past = $derived(pastWithOutreach(workshops, rows));
+  // #0648: each event against the Luma calendar, loaded apart from the list so
+  // a slow or failed Luma read never delays or breaks it.
+  let luma = $state<OutreachLuma | null>(null);
+  let lumaFailed = $state(false);
+  const lumaBy = $derived(lumaByWorkshop(luma));
   let loading = $state(true);
   let loadError = $state<string | null>(null);
 
@@ -63,9 +69,23 @@
     }
   }
 
+  async function loadLuma(): Promise<void> {
+    luma = null;
+    lumaFailed = false;
+    try {
+      luma = await getOutreachLuma();
+    } catch {
+      lumaFailed = true;
+    }
+  }
+
   // The workshops list loads whenever it becomes the visible sub-view.
   $effect(() => {
-    if (view === 'workshops') untrack(load);
+    if (view === 'workshops')
+      untrack(() => {
+        void load();
+        void loadLuma();
+      });
   });
 </script>
 
@@ -115,6 +135,7 @@
             <th>Event</th>
             <th>Date</th>
             <th>Outreach</th>
+            <th>Luma</th>
             <th><span class="sr-only">Action</span></th>
           </tr>
         </thead>
@@ -122,16 +143,46 @@
           {#each upcoming as w (w.id)}
             {@const s = byWorkshop.get(w.id)}
             {@const chip = outreachChip(s)}
+            {@const lev = lumaBy.get(w.id)}
+            {@const lchip = lumaChip(lev)}
+            {@const tnote = lumaTitleNote(lev, w.title)}
             <tr>
               <td>{w.title}</td>
               <td>{w.starts_at ? formatDateTime(w.starts_at) : 'Date TBA'}</td>
               <td><span class="badge badge-{chip.tone}">{chip.label}</span></td>
+              <td>
+                {#if lev && lchip}
+                  <span class="badge badge-{lchip.tone}">{lchip.label}</span>
+                  {#if lev.state === 'differs'}
+                    {#each lev.diffs as d (d.field)}
+                      <div class="luma-note text-muted">{lumaDiffText(d)}</div>
+                    {/each}
+                  {/if}
+                  {#if tnote}<div class="luma-note text-muted">{tnote}</div>{/if}
+                  {#if lev.luma_url}
+                    <div class="luma-note"><a href={lev.luma_url} target="_blank" rel="noopener noreferrer">{OPEN_ON_LUMA}</a></div>
+                  {/if}
+                {/if}
+              </td>
               <td><a class="row-button" href={adminOutreachWorkshopHash(w.id)} aria-label={outreachRowAriaLabel(s, w.title)}>{outreachRowButtonLabel(s)}</a></td>
             </tr>
           {/each}
         </tbody>
       </table>
     </div>
+  {/if}
+  {#if !loading && !loadError}
+    <p class="text-muted">{lumaStatusLine(luma, lumaFailed)}</p>
+    {#if luma?.leftovers.length}
+      <p><strong>On Luma only</strong></p>
+      <ul class="luma-leftovers">
+        {#each luma.leftovers as l (l.starts_at + l.title)}
+          <li>
+            {formatDateTime(l.starts_at)} · {l.title}{#if l.luma_url}{' · '}<a href={l.luma_url} target="_blank" rel="noopener noreferrer">{OPEN_ON_LUMA}</a>{/if}
+          </li>
+        {/each}
+      </ul>
+    {/if}
   {/if}
 </Panel>
 {#if !loading && !loadError && past.length > 0}
@@ -170,6 +221,14 @@
 {/if}
 
 <style>
+  .luma-note {
+    font-size: var(--fs-sm);
+    margin-top: var(--space-1);
+  }
+  .luma-leftovers {
+    list-style: none;
+    padding-left: 0;
+  }
   .row-button {
     display: inline-block;
     padding: var(--space-1) var(--space-3);

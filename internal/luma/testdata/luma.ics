@@ -1,0 +1,104 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Luma//Open Circuit SF//EN
+X-WR-CALNAME:Open Circuit SF
+X-WR-CALDESC:Luma Calendar
+REFRESH-INTERVAL;VALUE=DURATION:PT12H
+X-PUBLISHED-TTL:PT12H
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+BEGIN:VEVENT
+DTSTART:20260904T010000Z
+DTEND:20260904T040000Z
+DTSTAMP:20261107T215837Z
+ORGANIZER;CN="Brennan S":MAILTO:calendar-invite@lu.ma
+UID:evt-3QwoCvTioeeY4k9@events.lu.ma
+SUMMARY:Intro to Soldering
+DESCRIPTION:Get up-to-date information at: https://luma.com/cjr6l17d\n\nAd
+ dress:\nSequoia Fabrica Community Workshop\nSan Francisco, CA\nUnited Stat
+ es\n\nHosted by Brennan S
+LOCATION:Sequoia Fabrica Community Workshop, 1736 18th St, San Francisco, 
+ CA 94107, USA
+GEO:37.762549299999996;-122.399717
+SEQUENCE:216251917
+STATUS:TENTATIVE
+END:VEVENT
+BEGIN:VEVENT
+DTSTART:20260918T020000Z
+DTEND:20260918T030000Z
+DTSTAMP:20261107T215837Z
+ORGANIZER;CN="Brennan S":MAILTO:calendar-invite@lu.ma
+UID:evt-6oE6YG5PddLJQUH@events.lu.ma
+SUMMARY:Learn to Program LEDs
+DESCRIPTION:Get up-to-date information at: https://luma.com/y3y7czlm\n\nAd
+ dress:\nSequoia Fabrica Community Workshop\nSan Francisco, CA\nUnited Stat
+ es\n\nHosted by Brennan S
+LOCATION:Sequoia Fabrica Community Workshop, 1736 18th St, San Francisco, 
+ CA 94107, USA
+GEO:37.762549299999996;-122.399717
+SEQUENCE:216251917
+STATUS:TENTATIVE
+END:VEVENT
+BEGIN:VEVENT
+DTSTART:20261002T010000Z
+DTEND:20261002T040000Z
+DTSTAMP:20261107T215837Z
+ORGANIZER;CN="Brennan S":MAILTO:calendar-invite@lu.ma
+UID:evt-tPvTYMW5MUd70mh@events.lu.ma
+SUMMARY:Intro to Soldering
+DESCRIPTION:Get up-to-date information at: https://luma.com/c1kx1znr\n\nAd
+ dress:\nSequoia Fabrica Community Workshop\nSan Francisco, CA\nUnited Stat
+ es\n\nHosted by Brennan S
+LOCATION:Sequoia Fabrica Community Workshop, 1736 18th St, San Francisco, 
+ CA 94107, USA
+GEO:37.762549299999996;-122.399717
+SEQUENCE:216251917
+STATUS:TENTATIVE
+END:VEVENT
+BEGIN:VEVENT
+DTSTART:20261110T030000Z
+DTEND:20261110T060000Z
+DTSTAMP:20261107T215837Z
+ORGANIZER;CN="Brennan S":MAILTO:calendar-invite@lu.ma
+UID:evt-kXQB4cCnz1CViBX@events.lu.ma
+SUMMARY:Hack Night
+DESCRIPTION:Get up-to-date information at: https://luma.com/k9aszuib\n\nAd
+ dress:\n1736 18th St\nSan Francisco, CA\nUnited States\n\nHosted by Brenna
+ n S
+LOCATION:1736 18th St, San Francisco, CA 94107, USA
+GEO:37.7625759;-122.3997155
+SEQUENCE:216251917
+STATUS:TENTATIVE
+END:VEVENT
+BEGIN:VEVENT
+DTSTART:20261117T023000Z
+DTEND:20261117T043000Z
+DTSTAMP:20261107T215837Z
+ORGANIZER;CN="Brennan S":MAILTO:calendar-invite@lu.ma
+UID:evt-5OLBPgdnZYhOcUG@events.lu.ma
+SUMMARY:Programming LEDs
+DESCRIPTION:Get up-to-date information at: https://luma.com/6ssnei53\n\nAd
+ dress:\n1736 18th St\nSan Francisco, CA\nUnited States\n\nHosted by Brenna
+ n S
+LOCATION:1736 18th St, San Francisco, CA 94107, USA
+GEO:37.7625759;-122.3997155
+SEQUENCE:216251917
+STATUS:TENTATIVE
+END:VEVENT
+BEGIN:VEVENT
+DTSTART:20261117T030000Z
+DTEND:20261117T060000Z
+DTSTAMP:20261107T215837Z
+ORGANIZER;CN="Brennan S":MAILTO:calendar-invite@lu.ma
+UID:evt-of1cCascDhDKBW7@events.lu.ma
+SUMMARY:Hack Night
+DESCRIPTION:Get up-to-date information at: https://luma.com/3y6a2mnm\n\nAd
+ dress:\nSequoia Fabrica Community Workshop\nSan Francisco, CA\nUnited Stat
+ es\n\nHosted by Brennan S
+LOCATION:Sequoia Fabrica Community Workshop, 1736 18th St, San Francisco, 
+ CA 94107, USA
+GEO:37.762549299999996;-122.399717
+SEQUENCE:216251917
+STATUS:TENTATIVE
+END:VEVENT
+END:VCALENDAR

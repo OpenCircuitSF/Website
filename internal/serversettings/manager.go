@@ -278,3 +278,13 @@ func (m *Manager) OutreachChannels() []string {
 	names, _ := NormalizeChannels(DefaultOutreachChannels)
 	return names
 }
+
+// LumaCalendarID returns the Luma calendar Outreach compares events with
+// (#0648), or "" when the check is switched off.
+func (m *Manager) LumaCalendarID() string {
+	v := m.Value(KeyLumaCalendarID)
+	if strings.EqualFold(v, LumaOff) {
+		return ""
+	}
+	return v
+}

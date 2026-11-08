@@ -60,3 +60,15 @@ func TestStoreChecks(t *testing.T) {
 		t.Error("an empty value must violate the CHECK")
 	}
 }
+
+// TestStoreAcceptsLumaCalendarKey proves migration 000050 widened the CHECK
+// (#0648).
+func TestStoreAcceptsLumaCalendarKey(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `INSERT INTO server_setting_values (key, value) VALUES ('luma_calendar_id', 'cal-test1234')
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`); err != nil {
+		t.Fatalf("insert luma_calendar_id: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM server_setting_values WHERE key = 'luma_calendar_id'`) })
+}

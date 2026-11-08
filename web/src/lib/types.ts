@@ -877,6 +877,36 @@ export interface OutreachTimeline {
   events: OutreachTimelineEvent[];
 }
 
+/** One field that differs between an event and its Luma copy (#0648), both values formatted in Pacific time. */
+export interface OutreachLumaDiff {
+  field: 'start' | 'end' | 'location';
+  label: string;
+  site: string;
+  luma: string;
+}
+/** One upcoming published event's state against the Luma calendar (#0648). */
+export interface OutreachLumaEvent {
+  workshop_id: number;
+  state: 'on_luma' | 'differs' | 'not_on_luma';
+  luma_url: string | null;
+  luma_title: string | null;
+  diffs: OutreachLumaDiff[];
+}
+/** A Luma event that matches no event on the site. */
+export interface OutreachLumaLeftover {
+  title: string;
+  starts_at: string;
+  luma_url: string | null;
+}
+/** GET /admin/outreach-luma (#0648). Unless status is ok, events and leftovers are empty. */
+export interface OutreachLuma {
+  status: 'ok' | 'off' | 'unreachable' | 'malformed';
+  read_at: string | null;
+  last_good_at: string | null;
+  events: OutreachLumaEvent[];
+  leftovers: OutreachLumaLeftover[];
+}
+
 export interface WorkshopOutreach {
   available: boolean;
   /** '', 'shortlinks_not_configured' or 'workshop_not_published'. */

@@ -28,6 +28,14 @@ const (
 	KeyOutreachHashtags = "outreach_hashtags"
 	KeyOutreachPostHour = "outreach_post_hour"
 	KeyOutreachChannels = "outreach_channels"
+	KeyLumaCalendarID   = "luma_calendar_id"
+)
+
+// The Luma calendar Outreach compares events with (#0648). LumaOff turns the
+// check off; a blank save falls back to the default, like every setting.
+const (
+	DefaultLumaCalendarID = "cal-UIMZwzLquNDI2DB"
+	LumaOff               = "off"
 )
 
 // Outreach settings (#0571, #0573, #0574) and their defaults.
@@ -80,6 +88,7 @@ var Fields = []Field{
 	{Key: KeyOutreachHashtags, Group: GroupOutreach, Default: DefaultOutreachHashtags},
 	{Key: KeyOutreachPostHour, Group: GroupOutreach, Default: DefaultOutreachPostHour},
 	{Key: KeyOutreachChannels, Group: GroupOutreach, Default: DefaultOutreachChannels},
+	{Key: KeyLumaCalendarID, Group: GroupOutreach, Default: DefaultLumaCalendarID},
 }
 
 // Groups lists the group names in display order.

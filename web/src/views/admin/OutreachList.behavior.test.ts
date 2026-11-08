@@ -22,8 +22,11 @@ const getWorkshopOutreach = vi.fn<(id: number) => Promise<WorkshopOutreach>>();
 const getOutreachConnections = vi.fn<() => Promise<{ groups: ConnectionGroup[] }>>();
 const getOverview = vi.fn();
 const getOutreachTimeline = vi.fn(() => Promise.resolve({ now: '2026-11-06T18:00:00Z', events: [] as unknown[] }));
+const lumaOK = { status: 'ok', read_at: '2026-11-07T23:41:00Z', last_good_at: '2026-11-07T23:41:00Z', events: [] as unknown[], leftovers: [] as unknown[] };
+const getOutreachLuma = vi.fn(() => Promise.resolve(lumaOK as unknown));
 vi.mock('../../lib/api', () => ({
   listOutreach: () => listOutreach(),
+  getOutreachLuma: () => getOutreachLuma(),
   listAdminWorkshops: () => listAdminWorkshops(),
   getOutreachTimeline: () => getOutreachTimeline(),
   getWorkshopOutreach: (id: number) => getWorkshopOutreach(id),
@@ -175,5 +178,58 @@ describe('Overview needs-attention box', () => {
     render(Dashboard, { props: { onOpenCampaign: vi.fn() } });
     await screen.findByText('2 upcoming events not yet announced.');
     expect(screen.queryByText(/Not connected/)).toBeNull();
+  });
+});
+
+describe('Outreach landing list: Luma (#0648)', () => {
+  it("shows each upcoming event's Luma state with the differing fields and the Luma link", async () => {
+    listAdminWorkshops.mockResolvedValue({ workshops: [ws(1), ws(2, { title: 'Hack Night' }), ws(3)] });
+    listOutreach.mockResolvedValue({ outreach: [] });
+    getOutreachLuma.mockResolvedValueOnce({
+      ...lumaOK,
+      events: [
+        { workshop_id: 1, state: 'differs', luma_url: 'https://luma.com/abc', luma_title: 'Intro to Workshop 1', diffs: [{ field: 'start', label: 'Start', site: '6:30 PM', luma: '6:00 PM' }] },
+        { workshop_id: 2, state: 'on_luma', luma_url: 'https://luma.com/hack', luma_title: 'Hack Night', diffs: [] },
+        { workshop_id: 3, state: 'not_on_luma', luma_url: null, luma_title: null, diffs: [] },
+      ],
+    });
+    render(Outreach);
+    expect(await screen.findByText('Differs')).toBeTruthy();
+    expect(screen.getByRole('columnheader', { name: 'Luma' })).toBeTruthy();
+    expect(screen.getByText('Start: site 6:30 PM, Luma 6:00 PM')).toBeTruthy();
+    expect(screen.getByText('Luma title: Intro to Workshop 1')).toBeTruthy();
+    expect(screen.getByText('On Luma')).toBeTruthy();
+    expect(screen.getByText('Not on Luma')).toBeTruthy();
+    expect(screen.queryByText('Luma title: Hack Night')).toBeNull();
+    const links = screen.getAllByRole('link', { name: 'Open on Luma' });
+    expect(links.map((a) => a.getAttribute('href'))).toEqual(['https://luma.com/abc', 'https://luma.com/hack']);
+    expect(links[0].getAttribute('target')).toBe('_blank');
+    expect(links[0].getAttribute('rel')).toBe('noopener noreferrer');
+    expect(screen.getByText(/^Compared with Luma's calendar, read /)).toBeTruthy();
+  });
+
+  it('lists Luma events that match no event under On Luma only', async () => {
+    listAdminWorkshops.mockResolvedValue({ workshops: [ws(1)] });
+    listOutreach.mockResolvedValue({ outreach: [] });
+    getOutreachLuma.mockResolvedValueOnce({
+      ...lumaOK,
+      events: [{ workshop_id: 1, state: 'on_luma', luma_url: 'https://luma.com/a', luma_title: 'Workshop 1', diffs: [] }],
+      leftovers: [{ title: 'Hack Night', starts_at: '2026-11-17T03:00:00Z', luma_url: 'https://luma.com/3y6a2mnm' }],
+    });
+    render(Outreach);
+    expect(await screen.findByText('On Luma only')).toBeTruthy();
+    const item = document.querySelector('.luma-leftovers li');
+    expect(item?.textContent).toContain('· Hack Night · Open on Luma');
+    expect(item?.querySelector('a')?.getAttribute('href')).toBe('https://luma.com/3y6a2mnm');
+  });
+
+  it('keeps the list when the Luma check fails', async () => {
+    listAdminWorkshops.mockResolvedValue({ workshops: [ws(1)] });
+    listOutreach.mockResolvedValue({ outreach: [] });
+    getOutreachLuma.mockRejectedValueOnce(new Error('boom'));
+    render(Outreach);
+    expect(await screen.findByText("Couldn't check Luma.")).toBeTruthy();
+    expect(screen.getByText('Workshop 1')).toBeTruthy();
+    expect(screen.getByText('Not started')).toBeTruthy();
   });
 });

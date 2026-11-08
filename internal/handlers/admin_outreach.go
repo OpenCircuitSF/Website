@@ -105,16 +105,18 @@ type AdminOutreachHandler struct {
 	cardFn    func() string
 	// channelsFn lists the channels switched on in Settings (#0588); nil means all.
 	channelsFn func() []string
-	store      outreachStore
-	locations  outreachLocationStore
-	flyers     outreachFlyerStore
-	ws         outreachWorkshopReader
-	links      shortLinker
-	auditor    *audit.Logger
-	baseURL    string
-	posting    outreachPosting
-	mu         sync.Mutex // guards shortBase and stats; never held across a network call
-	shortBase  string     // cached Me().BaseURL; a failed fetch is not cached
+	// luma reads the Luma calendar feed for GET /admin/outreach-luma (#0648); nil means off.
+	luma      lumaFeed
+	store     outreachStore
+	locations outreachLocationStore
+	flyers    outreachFlyerStore
+	ws        outreachWorkshopReader
+	links     shortLinker
+	auditor   *audit.Logger
+	baseURL   string
+	posting   outreachPosting
+	mu        sync.Mutex // guards shortBase and stats; never held across a network call
+	shortBase string     // cached Me().BaseURL; a failed fetch is not cached
 	// stats memoizes campaign stats for the results routes (#0546). Always
 	// built; fetchStats answers ErrUnavailable while ShortLinks is not
 	// configured, and ResetShortLinks replaces it when the connection changes.

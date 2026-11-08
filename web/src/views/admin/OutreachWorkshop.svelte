@@ -29,7 +29,9 @@
   import { asksBeforeLeaving } from '../../lib/outreachLeave';
   import Button from '../../lib/Button.svelte';
   import { onMount, tick } from 'svelte';
-  import { resetOutreach, listOutreachFlyers, ApiError } from '../../lib/api';
+  import { resetOutreach, listOutreachFlyers, getOutreachLuma, ApiError } from '../../lib/api';
+  import { lumaByWorkshop, lumaEventLine, lumaStatusLine, OPEN_ON_LUMA } from '../../lib/outreachLuma';
+  import type { OutreachLuma } from '../../lib/types';
   import { defaultOpenSection, flyerLinkFor, sectionHeadId } from '../../lib/outreachCards';
   import { linkReportMessage } from '../../lib/outreachLinks';
   import { resultsSummaryLine } from '../../lib/outreachResults';
@@ -48,11 +50,23 @@
   // This workshop's flyers, so the Instagram card can open the right one (#0588).
   let flyers = $state<FlyerRow[]>([]);
   const flyer = $derived(flyerLinkFor(flyers, workshopId));
+  // This event against the Luma calendar (#0648), loaded on its own so a
+  // failed read never affects the page.
+  let luma = $state<OutreachLuma | null>(null);
+  let lumaFailed = $state(false);
+  const lumaEntry = $derived(lumaByWorkshop(luma).get(workshopId));
   onMount(async () => {
     try {
       flyers = (await listOutreachFlyers()).flyers;
     } catch {
       // The link then falls back to "Make a flyer" for this workshop.
+    }
+  });
+  onMount(async () => {
+    try {
+      luma = await getOutreachLuma();
+    } catch {
+      lumaFailed = true;
     }
   });
 
@@ -182,6 +196,13 @@
   <p class="text-muted">
     {view.workshop.starts_at ? formatDateTime(view.workshop.starts_at) : 'Date TBA'} · {view.workshop.status}
   </p>
+  {#if lumaEntry}
+    <p class="text-muted">
+      {lumaEventLine(lumaEntry)}{#if lumaEntry.luma_url}{' · '}<a href={lumaEntry.luma_url} target="_blank" rel="noopener noreferrer">{OPEN_ON_LUMA}</a>{/if}
+    </p>
+  {:else if lumaFailed || (luma && luma.status !== 'ok')}
+    <p class="text-muted">{lumaStatusLine(luma, lumaFailed)}</p>
+  {/if}
 {/if}
 
 <Panel pinnable>

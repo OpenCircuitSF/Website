@@ -31,6 +31,7 @@ import type {
   OutreachResultsSummary,
   OutreachSummary,
   OutreachTimeline,
+  OutreachLuma,
   WorkshopOutreach,
   Subscriber,
   SubscribersPage,
@@ -1405,6 +1406,14 @@ export function listOutreach(): Promise<{ outreach: OutreachSummary[]; enabled_c
 /** GET /admin/outreach-timeline (#0646): published events in the next 30 days with their posts. */
 export function getOutreachTimeline(): Promise<OutreachTimeline> {
   return apiGet<OutreachTimeline>('/admin/outreach-timeline');
+}
+
+/**
+ * GET /admin/outreach-luma (#0648): each upcoming published event against the
+ * Luma calendar. The server reads Luma's feed; the browser never calls Luma.
+ */
+export function getOutreachLuma(): Promise<OutreachLuma> {
+  return apiGet<OutreachLuma>('/admin/outreach-luma');
 }
 
 /** GET /admin/workshops/{id}/outreach/results — clicks from ShortLinks (#0546). Always 200 for a known workshop; `status` says whether the numbers are real. */

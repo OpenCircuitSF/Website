@@ -62,6 +62,11 @@ export const FIELD_LABELS: Record<string, { label: string; placeholder: string; 
     placeholder: '',
     help: 'Channels outreach drafts, counts and shows. A channel that is off is left out of Draft all, the summary line, results and the hand-posted rows; its drafts are kept and return if you switch it on again. A post already scheduled or posted there stays shown, so nothing goes out unseen. Every channel starts on. Instagram, TikTok and YouTube Shorts are posted by hand.',
   },
+  luma_calendar_id: {
+    label: 'Luma calendar',
+    placeholder: 'cal-UIMZwzLquNDI2DB',
+    help: 'The Luma calendar Outreach compares events with, read from its public calendar feed. Paste the calendar id (cal-…) or its iCal link. Type off to turn the check off.',
+  },
   outreach_post_hour: {
     label: 'Suggested posting hour',
     placeholder: '10',
@@ -159,6 +164,8 @@ export function fieldHint(key: string, value: string): string | null {
     }
     case 'outreach_channels':
       return channelsOn(v).length > 0 ? null : 'Turn on at least one channel.';
+    case 'luma_calendar_id':
+      return lumaCalendarOK(v) ? null : 'Must be a Luma calendar id (cal-…), its iCal link, or off.';
     case 'outreach_hashtags': {
       const tags = v.split(/\s+/);
       return tags.length <= 6 && tags.every((x) => /^#[\p{L}\p{N}]{1,40}$/u.test(x) && /\p{L}/u.test(x))
@@ -177,4 +184,17 @@ export function fieldHint(key: string, value: string): string | null {
 /** Whether a field is currently saved and therefore clearable. */
 export function isSaved(f: ServerSettingField): boolean {
   return f.source === 'database';
+}
+
+const LUMA_CALENDAR_ID = /^cal-[A-Za-z0-9]{4,64}$/;
+
+/** Mirrors internal/serversettings: "off", a calendar id, or a link whose id parameter is one (#0648). */
+function lumaCalendarOK(v: string): boolean {
+  if (v.toLowerCase() === 'off' || LUMA_CALENDAR_ID.test(v)) return true;
+  if (!/^http/i.test(v)) return false;
+  try {
+    return LUMA_CALENDAR_ID.test(new URL(v).searchParams.get('id') ?? '');
+  } catch {
+    return false;
+  }
 }

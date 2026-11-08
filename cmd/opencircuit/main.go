@@ -42,6 +42,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/inbound"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
+	"github.com/brennanMKE/OpenCircuitSF/internal/luma"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/media"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
@@ -392,6 +393,7 @@ func servePostgres(cfg *config.Config) error {
 	adminOutreachH.SetAccounts(conns.Account)
 	adminOutreachH.SetCardURL(serverSettings.BlueskyCardURL)
 	adminOutreachH.SetEnabledChannels(serverSettings.OutreachChannels)
+	adminOutreachH.SetLuma(luma.NewChecker(serverSettings.LumaCalendarID, ""))
 	adminOutreachH.SetConnections(handlers.NewAdminOutreachConnectionsHandler(conns, auditLogger))
 
 	// Admin image upload (#0433, reopening #0153): constructed
@@ -1630,6 +1632,7 @@ func adminRoutes(
 			adminRoute{http.MethodPost, "/admin/workshops/{id}/outreach/unschedule", http.HandlerFunc(adminOutreachH.UnscheduleSection)},
 			adminRoute{http.MethodGet, "/admin/outreach-results", http.HandlerFunc(adminOutreachH.ResultsSummary)},
 			adminRoute{http.MethodGet, "/admin/outreach-timeline", http.HandlerFunc(adminOutreachH.Timeline)},
+			adminRoute{http.MethodGet, "/admin/outreach-luma", http.HandlerFunc(adminOutreachH.Luma)},
 			adminRoute{http.MethodGet, "/admin/outreach-locations", http.HandlerFunc(adminOutreachH.ListLocations)},
 			adminRoute{http.MethodPost, "/admin/outreach-locations", http.HandlerFunc(adminOutreachH.CreateLocation)},
 			adminRoute{http.MethodPatch, "/admin/outreach-locations/{id}", http.HandlerFunc(adminOutreachH.PatchLocation)},

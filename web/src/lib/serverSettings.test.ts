@@ -101,5 +101,10 @@ describe('outreach channel list (#0588)', () => {
   it('hints only when nothing is on', () => {
     expect(fieldHint('outreach_channels', 'bluesky')).toBeNull();
     expect(fieldHint('outreach_channels', 'nope')).not.toBeNull();
+    expect(fieldHint('luma_calendar_id', 'cal-UIMZwzLquNDI2DB')).toBeNull();
+    expect(fieldHint('luma_calendar_id', 'OFF')).toBeNull();
+    expect(fieldHint('luma_calendar_id', 'https://api.luma.com/ics/get?entity=calendar&id=cal-UIMZwzLquNDI2DB')).toBeNull();
+    expect(fieldHint('luma_calendar_id', 'luma.com/opencircuitsf')).not.toBeNull();
+    expect(fieldHint('luma_calendar_id', 'cal-x')).not.toBeNull();
   });
 });

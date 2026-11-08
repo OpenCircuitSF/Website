@@ -17,6 +17,7 @@ const draftAllOutreach = vi.fn();
 const ensureOutreachHandLinks = vi.fn();
 const takedownOutreachPost = vi.fn();
 const listOutreachFlyers = vi.fn<() => Promise<{ flyers: { id: number; workshop_id: number }[] }>>();
+const getOutreachLuma = vi.fn(() => Promise.resolve({ status: 'ok', read_at: null, last_good_at: null, events: [], leftovers: [] } as unknown));
 vi.mock('../../lib/api', () => ({
   getWorkshopOutreach: (id: number) => getWorkshopOutreach(id),
   startOutreach: (id: number) => startOutreach(id),
@@ -25,6 +26,7 @@ vi.mock('../../lib/api', () => ({
   draftAllOutreach: (...a: unknown[]) => draftAllOutreach(...a),
   resetOutreach: (id: number) => resetOutreach(id),
   listOutreachFlyers: () => listOutreachFlyers(),
+  getOutreachLuma: () => getOutreachLuma(),
   createOutreachPost: vi.fn(),
   takedownOutreachPost: (id: number) => takedownOutreachPost(id),
   ApiError: class ApiError extends Error {
@@ -95,6 +97,22 @@ describe('OutreachWorkshop', () => {
     expect(screen.getByText(/published/)).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Edit event' }).getAttribute('href')).toBe('#/workshops/5');
     expect(screen.getByRole('link', { name: 'All outreach' }).getAttribute('href')).toBe('#/outreach');
+  });
+
+  it("shows the event's Luma line", async () => {
+    getWorkshopOutreach.mockResolvedValue(view());
+    getWorkshopOutreachResults.mockResolvedValue({ status: 'not_started', posts: [], totals: null } as unknown as OutreachResults);
+    getOutreachLuma.mockResolvedValueOnce({
+      status: 'ok', read_at: '2026-11-07T23:41:00Z', last_good_at: '2026-11-07T23:41:00Z', leftovers: [],
+      events: [{ workshop_id: 5, state: 'differs', luma_url: 'https://luma.com/abc', luma_title: 'Soldering 101', diffs: [
+        { field: 'start', label: 'Start', site: '6:30 PM', luma: '6:00 PM' },
+        { field: 'end', label: 'End', site: '9:00 PM', luma: '8:00 PM' },
+      ] }],
+    });
+    render(OutreachWorkshop, { workshopId: 5 });
+    const line = await screen.findByText(/^Luma: Differs/);
+    expect(line.textContent).toContain('Luma: Differs · Start: site 6:30 PM, Luma 6:00 PM · End: site 9:00 PM, Luma 8:00 PM · Open on Luma');
+    expect(screen.getByRole('link', { name: 'Open on Luma' }).getAttribute('href')).toBe('https://luma.com/abc');
   });
 
   it('orders the status board, the section tabs, the one section, Flyers, Links and clicks (#0640)', async () => {

@@ -21,6 +21,7 @@ vi.mock('../../lib/api', () => ({
   listOutreach: vi.fn(() => Promise.resolve({ outreach: [] })),
   listAdminWorkshops: vi.fn(() => Promise.resolve({ workshops: [] })),
   getOutreachTimeline: vi.fn(() => Promise.resolve({ now: '2026-11-06T18:00:00Z', events: [] })),
+  getOutreachLuma: vi.fn(() => Promise.resolve({ status: 'ok', read_at: null, last_good_at: null, events: [], leftovers: [] })),
   ApiError: class ApiError extends Error {},
 }));
 

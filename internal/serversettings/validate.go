@@ -2,7 +2,9 @@ package serversettings
 
 import (
 	"net/mail"
+	"net/url"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -28,6 +30,7 @@ const (
 	msgHashtags   = "must be up to 6 hashtags, each # followed by up to 40 letters or digits (not digits alone), such as #sanfrancisco"
 	msgChannels   = "must name at least one of bluesky, mastodon, instagram, tiktok, youtube, separated by commas"
 	msgPostHour   = "must be a whole hour from 0 to 23 (Pacific time)"
+	msgLuma       = "must be a Luma calendar id (cal-…), its iCal link, or off"
 )
 
 // Normalize validates value for key and returns the form to store. It returns
@@ -43,7 +46,7 @@ func Normalize(key, value string) (string, error) {
 		KeyEmailListDomain: msgListDomain, KeySESSandbox: msgBool,
 		KeySESInboundBucket: msgBucket, KeySendBatchSize: msgBatch,
 		KeyBlueskyCardURL: msgCardURL, KeyOutreachHashtags: msgHashtags, KeyOutreachPostHour: msgPostHour,
-		KeyOutreachChannels: msgChannels,
+		KeyOutreachChannels: msgChannels, KeyLumaCalendarID: msgLuma,
 	}[key]
 	if value == "" || len(value) > maxValueLen || hasControl(value) {
 		return bad(msg)
@@ -94,6 +97,12 @@ func Normalize(key, value string) (string, error) {
 			return bad(msg)
 		}
 		return strings.Join(names, ","), nil
+	case KeyLumaCalendarID:
+		id, ok := normalizeLumaCalendar(value)
+		if !ok {
+			return bad(msg)
+		}
+		return id, nil
 	case KeyOutreachPostHour:
 		n, err := strconv.Atoi(value)
 		if err != nil || n < 0 || n > 23 {
@@ -210,4 +219,26 @@ func NormalizeChannels(s string) ([]string, bool) {
 		}
 	}
 	return out, len(out) > 0
+}
+
+var lumaCalendarID = regexp.MustCompile(`^cal-[A-Za-z0-9]{4,64}$`)
+
+// normalizeLumaCalendar accepts "off" (any case), a bare calendar id, or a
+// feed link whose id query parameter is one, and returns "off" or the id.
+func normalizeLumaCalendar(v string) (string, bool) {
+	if strings.EqualFold(v, LumaOff) {
+		return LumaOff, true
+	}
+	if lumaCalendarID.MatchString(v) {
+		return v, true
+	}
+	if strings.HasPrefix(strings.ToLower(v), "http") {
+		u, err := url.Parse(v)
+		if err == nil {
+			if id := u.Query().Get("id"); lumaCalendarID.MatchString(id) {
+				return id, true
+			}
+		}
+	}
+	return "", false
 }
