@@ -44,6 +44,9 @@ type SettingsHandler struct {
 	// server is the Server settings handler, attached at wiring; nil when the
 	// process runs without a database.
 	server *AdminServerSettingsHandler
+	// apiTokens is the API tokens handler (#0652), attached at wiring; nil
+	// when the process runs without a database.
+	apiTokens *APITokensHandler
 }
 
 // SetServerSettings attaches the server settings handler, so its routes are
@@ -60,6 +63,22 @@ func (h *SettingsHandler) ServerSettings() *AdminServerSettingsHandler {
 		return nil
 	}
 	return h.server
+}
+
+// SetAPITokens attaches the API tokens handler, so its admin routes and the
+// /api/v1/ routes are mounted exactly when it is present (#0652).
+func (h *SettingsHandler) SetAPITokens(t *APITokensHandler) {
+	if h != nil {
+		h.apiTokens = t
+	}
+}
+
+// APITokens returns the attached API tokens handler, or nil.
+func (h *SettingsHandler) APITokens() *APITokensHandler {
+	if h == nil {
+		return nil
+	}
+	return h.apiTokens
 }
 
 // NewSettingsHandler constructs a SettingsHandler over the data layer. A nil

@@ -98,12 +98,14 @@ func TestAdminRoutesRegisteredOnlyViaTable(t *testing.T) {
 		lit, ok := call.Args[0].(*ast.BasicLit)
 		if !ok || lit.Kind != token.STRING {
 			// Not a literal pattern — the adminRoutes loop's
-			// `r.method+" "+r.path` lands here. That is the only
-			// non-literal pattern mux.Handle/HandleFunc is called with
+			// `r.method+" "+r.path` lands here, as does the /api/v1/
+			// loop's `"GET "+r.Path` (#0652). Those are the only two
+			// non-literal patterns mux.Handle/HandleFunc is called with
 			// in this file (verified by inspection; see the doc
-			// comment above), so it is not further validated here —
+			// comment above), so they are not further validated here —
 			// TestMountAndServe_AdminRoutesRequireSessionAndAdmin
-			// (admin_wiring_test.go) is what proves ITS guard.
+			// (admin_wiring_test.go) is what proves their guards. The
+			// /api/v1/ patterns sit outside the /admin scope checked here.
 			return true
 		}
 

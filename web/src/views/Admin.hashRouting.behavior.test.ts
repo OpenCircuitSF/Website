@@ -47,6 +47,9 @@ vi.mock('../lib/api', () => ({
   getSettings: () => getSettings(),
   updateSetting: vi.fn(),
   getOutreachConnections: vi.fn(() => Promise.resolve({ groups: [] })),
+  listApiTokens: vi.fn(() => Promise.resolve({ tokens: [] })),
+  createApiToken: vi.fn(),
+  revokeApiToken: vi.fn(),
   getServerSettings: vi.fn(() => Promise.resolve({ groups: [] })),
   updateOutreachConnections: vi.fn(),
   testOutreachConnection: vi.fn(),
@@ -188,7 +191,7 @@ describe('Admin.svelte hash routing (#0527)', () => {
       await waitFor(() => expect(scrolled).toContain('settings-outreach'));
       const jump = screen.getByRole('navigation', { name: 'Settings sections' });
       const hrefs = [...jump.querySelectorAll('a')].map((a) => a.getAttribute('href'));
-      expect(hrefs).toEqual(['#/settings?section=general', '#/settings?section=server', '#/settings?section=outreach']);
+      expect(hrefs).toEqual(['#/settings?section=general', '#/settings?section=server', '#/settings?section=outreach', '#/settings?section=api']);
       expect(document.getElementById('settings-outreach')?.textContent).toContain('Connections');
     } finally {
       Element.prototype.scrollIntoView = original;

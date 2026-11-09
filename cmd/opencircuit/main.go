@@ -31,6 +31,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/time/rate"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/apitokens"
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
@@ -416,6 +417,10 @@ func servePostgres(cfg *config.Config) error {
 	}
 	adminMediaH := handlers.NewAdminMediaHandlerLive(serverSettings.MediaDir, auditLogger)
 	settingsH.SetServerSettings(handlers.NewAdminServerSettingsHandler(serverSettings, auditLogger))
+	// API tokens (#0652): the admin token routes and the token-only /api/v1/
+	// routes. Postgres-only, so dev mode attaches nothing and both 404.
+	apiTokensH := handlers.NewAPITokensHandler(apitokens.NewStore(pool), auditLogger)
+	settingsH.SetAPITokens(apiTokensH)
 
 	// Admin subscribers screen (#0032, PRD §5.2/§6.2): list/search/detail,
 	// manual suppress, clear-complaint, and manual add. manualAdd (subscribeH)
@@ -1405,6 +1410,15 @@ func adminRoutes(
 			adminRoute{http.MethodPatch, "/admin/server-settings", http.HandlerFunc(s.Patch)},
 		)
 	}
+	if t := settingsH.APITokens(); t != nil {
+		routes = append(routes,
+			// #0652: API token management. Session-only like every admin
+			// route; an API token never authenticates here.
+			adminRoute{http.MethodGet, "/admin/api-tokens", http.HandlerFunc(t.List)},
+			adminRoute{http.MethodPost, "/admin/api-tokens", http.HandlerFunc(t.Create)},
+			adminRoute{http.MethodPost, "/admin/api-tokens/{id}/revoke", http.HandlerFunc(t.Revoke)},
+		)
+	}
 	if adminInterestsH != nil {
 		routes = append(routes,
 			adminRoute{http.MethodGet, "/admin/interests", http.HandlerFunc(adminInterestsH.List)},
@@ -1795,6 +1809,15 @@ func mountAndServe(
 	// structure is meant to make hard to make.
 	for _, r := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminEventTypesH, adminVenuesH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, adminOutreachH) {
 		mux.Handle(r.method+" "+r.path, requireAdmin(r.handler))
+	}
+
+	// Token-authenticated /api/v1/ routes (#0652): GET only, token only,
+	// never a session. The method is fixed here so a token route can never
+	// write; #0653 adds its route with AddV1Route.
+	if t := settingsH.APITokens(); t != nil {
+		for _, r := range t.V1Routes() {
+			mux.Handle("GET "+r.Path, middleware.RequireAPIToken(t.Resolver(), r.Scope)(r.Handler))
+		}
 	}
 
 	// Current user profile — behind RequireSession; returns the caller's

@@ -413,6 +413,12 @@ const (
 	// values.
 	ActionServerSettingsUpdated = "server_settings.updated"
 
+	// ActionAPITokenCreated and ActionAPITokenRevoked record an admin
+	// creating or revoking an API token (#0652). The actor is the admin;
+	// metadata is the name, prefix and (on create) scopes, never the token.
+	ActionAPITokenCreated = "api_token.created"
+	ActionAPITokenRevoked = "api_token.revoked"
+
 	// Email campaign lifecycle (PRD §5.2/§6.6/§8; #0041's campaign CRUD
 	// API). Named email_campaign.* per the deleted-constants note just
 	// below — this is a distinct concept from ShortLinks' campaigns
@@ -629,6 +635,9 @@ const (
 	// TargetServerSettings is the target type for ActionServerSettingsUpdated
 	// (#0566). The settings are keyed rows, so TargetID is left nil.
 	TargetServerSettings = "server_settings"
+	// TargetAPIToken is the target type for the api_token actions (#0652);
+	// TargetID is the api_tokens id.
+	TargetAPIToken = "api_token"
 	// TargetInboundMail is the target type for ActionInboundMailParked
 	// (#0499). Like TargetSNSTopic above, the target has no BIGINT id — the
 	// S3 object key is a string, recorded in metadata instead — so TargetID

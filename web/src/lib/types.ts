@@ -1257,6 +1257,27 @@ export interface ServerSettingGroup {
   fields: ServerSettingField[];
 }
 
+/** An API token as the admin list shows it (#0652). Never carries the secret. */
+export interface ApiToken {
+  id: number;
+  name: string;
+  prefix: string;
+  scopes: string[];
+  created_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
+
+export interface ApiTokenList {
+  tokens: ApiToken[];
+}
+
+/** POST /admin/api-tokens's response: the secret appears here only. */
+export interface CreatedApiToken {
+  token: ApiToken;
+  secret: string;
+}
+
 export interface ServerSettings {
   groups: ServerSettingGroup[];
 }

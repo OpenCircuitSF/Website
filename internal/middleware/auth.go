@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/apitokens"
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 )
 
@@ -103,6 +104,12 @@ func RequireSession(resolver SessionResolver) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := sessionToken(r)
 			if token == "" {
+				writeUnauthenticated(w)
+				return
+			}
+			// API tokens authenticate /api/v1/ only and never a session
+			// route (#0652): refuse one before any session lookup.
+			if apitokens.LooksLikeToken(token) {
 				writeUnauthenticated(w)
 				return
 			}

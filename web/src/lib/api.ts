@@ -15,6 +15,9 @@ import type {
   CrtCommand,
   OutreachConnections,
   ServerSettings,
+  ApiToken,
+  ApiTokenList,
+  CreatedApiToken,
   ConnectionGroup,
   ConnectionTestResult,
   OutreachDraftAllResult,
@@ -1593,6 +1596,21 @@ export function updateOutreachConnections(values: Record<string, string>): Promi
 /** GET /admin/server-settings — the operational settings, each with its source. */
 export function getServerSettings(): Promise<ServerSettings> {
   return apiGet<ServerSettings>('/admin/server-settings');
+}
+
+/** The admin's API tokens (#0652). */
+export function listApiTokens(): Promise<ApiTokenList> {
+  return apiGet<ApiTokenList>('/admin/api-tokens');
+}
+
+/** Creates an API token; the response's secret is shown once. */
+export function createApiToken(name: string, scopes: string[]): Promise<CreatedApiToken> {
+  return apiPost<CreatedApiToken>('/admin/api-tokens', { name, scopes });
+}
+
+/** Revokes an API token; it stops working on its next request. */
+export function revokeApiToken(id: number): Promise<{ token: ApiToken }> {
+  return apiPost<{ token: ApiToken }>(`/admin/api-tokens/${id}/revoke`);
 }
 
 /** PATCH /admin/server-settings — set fields, or clear one with an empty string. */

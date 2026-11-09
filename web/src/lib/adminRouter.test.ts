@@ -208,6 +208,10 @@ describe('settings sections (#0584)', () => {
     expect(settingsSectionFromQuery(route!.query)).toBe('outreach');
   });
 
+  it('finds the api settings section', () => {
+    expect(settingsSectionFromQuery(new URLSearchParams('section=api'))).toBe('api');
+  });
+
   it('ignores an unknown section', () => {
     expect(settingsSectionFromQuery(new URLSearchParams('section=nope'))).toBeNull();
     expect(settingsSectionFromQuery(new URLSearchParams())).toBeNull();

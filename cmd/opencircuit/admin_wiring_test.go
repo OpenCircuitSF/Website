@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/apitokens"
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
@@ -125,6 +126,9 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// #0566: attach the server settings handler so both of its routes are
 	// swept by the 401/403 proof below.
 	settingsH.SetServerSettings(handlers.NewAdminServerSettingsHandler(serversettings.NewManager(serversettings.NewStore(pool), nil, nil, nil, nil), auditLogger))
+	// #0652: attach the API tokens handler so its three admin routes are
+	// swept below, and /api/v1/token is mounted for the bearer checks.
+	settingsH.SetAPITokens(handlers.NewAPITokensHandler(apitokens.NewStore(pool), auditLogger))
 	adminUsersH := handlers.NewAdminUsersHandler(store, auditLogger)
 	adminAuditH := handlers.NewAdminAuditHandler(audit.NewReader(pool))
 	interestsStore := interests.NewStore(pool)
@@ -282,6 +286,19 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// has no bearing on the auth assertions themselves.
 	targetUserID := seedAdminWiringUser(t, pool, "wiring-target@example.com", false)
 
+	// #0652: two real API tokens. bearerSecret is sent as a Bearer token to
+	// every admin route and must be refused (criterion 4); the second is the
+	// {id} target the admin case's revoke consumes.
+	apiTokenStore := apitokens.NewStore(pool)
+	bearerTok, bearerSecret, err := apiTokenStore.Create(context.Background(), "wiring bearer", []string{apitokens.ScopeEngagementRead}, nil, time.Now())
+	if err != nil {
+		t.Fatalf("seed bearer api token: %v", err)
+	}
+	targetAPIToken, _, err := apiTokenStore.Create(context.Background(), "wiring target", []string{apitokens.ScopeEngagementRead}, nil, time.Now())
+	if err != nil {
+		t.Fatalf("seed target api token: %v", err)
+	}
+
 	// A dedicated throwaway interest for the /admin/interests/{id} family,
 	// seeded through the real store rather than a literal id. AGENTS.md §8b
 	// exists because of exactly this test: #0024's first pass targeted a
@@ -418,10 +435,13 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	cases := []struct {
 		name   string
 		cookie string // "" means no cookie at all
+		bearer string // when set: Authorization: Bearer <bearer>, no cookie
 		want   func(status int) bool
 	}{
-		{"no session", "", func(status int) bool { return status == http.StatusUnauthorized }},
-		{"non-admin session", "wiring-nonadmin-token", func(status int) bool { return status == http.StatusForbidden }},
+		// #0652: a real API token never authenticates an admin route.
+		{"api token as bearer", "", bearerSecret, func(status int) bool { return status == http.StatusUnauthorized }},
+		{"no session", "", "", func(status int) bool { return status == http.StatusUnauthorized }},
+		{"non-admin session", "wiring-nonadmin-token", "", func(status int) bool { return status == http.StatusForbidden }},
 		// The admin session must reach the real handler — i.e. neither guard
 		// response — not necessarily succeed outright. Several routes below
 		// need a request body this test does not construct (a well-formed
@@ -429,12 +449,12 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 		// payload); a 400 from the real handler is exactly as strong a proof
 		// that RequireAdmin let the request through as a 200 is, and avoids
 		// this test needing to know every handler's request shape.
-		{"admin session", "wiring-admin-token", func(status int) bool {
+		{"admin session", "wiring-admin-token", "", func(status int) bool {
 			return status != http.StatusUnauthorized && status != http.StatusForbidden
 		}},
 	}
 	for _, route := range adminRoutes(settingsH, adminUsersH, adminAuditH, adminInterestsH, adminEventTypesH, adminVenuesH, adminSubscribersH, adminImportsH, adminPendingH, adminSuppressionsH, adminDeliverabilityH, adminCampaignsH, adminCampaignAudienceH, adminCampaignPreviewH, adminCampaignPreflightH, adminCampaignStatsH, adminCampaignArchiveH, adminWorkshopsH, adminMediaH, adminDashboardH, adminVersionH, adminCrtCommandsH, adminOutreachH) {
-		path := resolveAdminRoutePath(route.path, targetUserID, targetInterest.ID, targetEventType.ID, targetVenue.ID, targetSubscriber.ID, targetCampaign.ID, targetWorkshop.ID, targetCrtCommand.ID)
+		path := resolveAdminRoutePath(route.path, targetUserID, targetInterest.ID, targetEventType.ID, targetVenue.ID, targetSubscriber.ID, targetCampaign.ID, targetWorkshop.ID, targetCrtCommand.ID, targetAPIToken.ID)
 		for _, c := range cases {
 			req, err := http.NewRequest(route.method, baseURL+path, nil)
 			if err != nil {
@@ -442,6 +462,9 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 			}
 			if c.cookie != "" {
 				req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: c.cookie})
+			}
+			if c.bearer != "" {
+				req.Header.Set("Authorization", "Bearer "+c.bearer)
 			}
 			resp, err := client.Do(req)
 			if err != nil {
@@ -452,6 +475,46 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 				t.Errorf("%s: %s %s status = %d, unexpected for this case", c.name, route.method, path, resp.StatusCode)
 			}
 		}
+	}
+
+	// #0652: /api/v1/token on the real mux — Bearer only, GET only.
+	v1 := func(method, url, bearer, cookie string) int {
+		t.Helper()
+		req, err := http.NewRequest(method, url, nil)
+		if err != nil {
+			t.Fatalf("build v1 request: %v", err)
+		}
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		if cookie != "" {
+			req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: cookie})
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("v1 request: %v", err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	v1URL := baseURL + "/api/v1/token"
+	if got := v1(http.MethodGet, v1URL, bearerSecret, ""); got != http.StatusOK {
+		t.Errorf("GET /api/v1/token with Bearer = %d, want 200", got)
+	}
+	if got := v1(http.MethodGet, v1URL+"?access_token="+bearerSecret, "", ""); got != http.StatusUnauthorized {
+		t.Errorf("GET /api/v1/token with ?access_token = %d, want 401", got)
+	}
+	if got := v1(http.MethodGet, v1URL, "", "wiring-admin-token"); got != http.StatusUnauthorized {
+		t.Errorf("GET /api/v1/token with admin session cookie = %d, want 401", got)
+	}
+	if got := v1(http.MethodPost, v1URL, bearerSecret, ""); got != http.StatusMethodNotAllowed {
+		t.Errorf("POST /api/v1/token with Bearer = %d, want 405", got)
+	}
+	if _, err := apiTokenStore.Revoke(context.Background(), bearerTok.ID, time.Now()); err != nil {
+		t.Fatalf("revoke bearer token: %v", err)
+	}
+	if got := v1(http.MethodGet, v1URL, bearerSecret, ""); got != http.StatusUnauthorized {
+		t.Errorf("GET /api/v1/token after revoke = %d, want 401", got)
 	}
 
 	select {
@@ -469,7 +532,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 // id; /admin/campaigns/... routes (#0041) take a campaign id, including its
 // /send and /cancel sub-routes. Routes with no {id} (e.g. /admin/settings,
 // /admin/audit, /admin/subscribers itself) pass through unchanged.
-func resolveAdminRoutePath(path string, userID, interestID, eventTypeID, venueID, subscriberID, campaignID, workshopID, crtCommandID int64) string {
+func resolveAdminRoutePath(path string, userID, interestID, eventTypeID, venueID, subscriberID, campaignID, workshopID, crtCommandID, apiTokenID int64) string {
 	switch {
 	case strings.HasPrefix(path, "/admin/users/"):
 		return strings.Replace(path, "{id}", fmt.Sprint(userID), 1)
@@ -487,6 +550,8 @@ func resolveAdminRoutePath(path string, userID, interestID, eventTypeID, venueID
 		return strings.Replace(path, "{id}", fmt.Sprint(workshopID), 1)
 	case strings.HasPrefix(path, "/admin/crt-commands/"):
 		return strings.Replace(path, "{id}", fmt.Sprint(crtCommandID), 1)
+	case strings.HasPrefix(path, "/admin/api-tokens/"):
+		return strings.Replace(path, "{id}", fmt.Sprint(apiTokenID), 1)
 	default:
 		return path
 	}
@@ -525,7 +590,7 @@ func truncateAdminWiringTables(t *testing.T, pool *pgxpool.Pool) {
 	ctx, cancel := context.WithTimeout(context.Background(), wiringDBOpTimeout)
 	defer cancel()
 	if _, err := pool.Exec(ctx,
-		`TRUNCATE sessions, passkey_credentials, audit_log, users RESTART IDENTITY CASCADE`,
+		`TRUNCATE sessions, passkey_credentials, audit_log, api_tokens, users RESTART IDENTITY CASCADE`,
 	); err != nil {
 		t.Fatalf("truncate tables: %v", err)
 	}

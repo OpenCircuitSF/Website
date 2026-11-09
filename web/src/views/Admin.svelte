@@ -14,6 +14,7 @@
     in the database (media directory, email identity, SES flags, batch size).
     Then OutreachConnections.svelte (#0564) holds the ShortLinks, Bluesky
     and Mastodon credentials, saved in the database.
+    Last, ApiTokens.svelte (#0652) lists, creates and revokes API tokens.
   - Users      — GET /admin/users plus POST .../{id}/deactivate|reactivate:
     list with status, deactivate a non-admin (reason dropdown + note, note
     required for "other"), reactivate with an optional note.
@@ -153,6 +154,7 @@
   import Pending from './admin/Pending.svelte';
   import Deliverability from './admin/Deliverability.svelte';
   import OutreachConnections from './admin/OutreachConnections.svelte';
+  import ApiTokens from './admin/ApiTokens.svelte';
   import ServerSettings from './admin/ServerSettings.svelte';
   import { ServerSettingsStore } from '../lib/serverSettingsStore.svelte';
   import CrtCommands from './admin/CrtCommands.svelte';
@@ -1449,6 +1451,7 @@
           <OutreachConnections bare />
         </Panel>
       </div>
+      <div id="settings-api"><ApiTokens /></div>
     {/if}
 
     {#if adminRoute.section === 'users'}
