@@ -37,6 +37,10 @@ later.
 - [SEO & social preview cards](seo.md) — server-injected meta tags, sitemap, structured data
 - [Workshop cover images](media.md) — the `/media/` Apache carve-out, the admin upload path, `isSafeCoverImage`
 
+## Integrations
+
+- [Home Assistant daily engagement check](home-assistant.md) — an API token, a REST sensor and a 9:00 AM automation that notifies you of new Bluesky and Mastodon engagement
+
 ## Working the tracker
 
 - [Obstacles](obstacles.md) — what stops work on an issue, the signal for each, and how to clear it before dispatch
