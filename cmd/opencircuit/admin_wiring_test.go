@@ -521,6 +521,12 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	if got := v1(http.MethodPost, engURL, bearerSecret, ""); got != http.StatusMethodNotAllowed {
 		t.Errorf("POST /api/v1/engagement with Bearer = %d, want 405", got)
 	}
+	if got := v1(http.MethodGet, engURL, "", ""); got != http.StatusUnauthorized {
+		t.Errorf("GET /api/v1/engagement with no token = %d, want 401", got)
+	}
+	if got := v1(http.MethodGet, engURL, "", "wiring-admin-token"); got != http.StatusUnauthorized {
+		t.Errorf("GET /api/v1/engagement with admin session cookie = %d, want 401", got)
+	}
 	if _, err := apiTokenStore.Revoke(context.Background(), bearerTok.ID, time.Now()); err != nil {
 		t.Fatalf("revoke bearer token: %v", err)
 	}
