@@ -762,13 +762,9 @@ func (h *AdminOutreachHandler) Start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// No StartsAt/EndsAt (#0651): a date window on the ShortLinks campaign
+	// hides every click made while promoting the event before it starts.
 	req := shortlinks.CreateCampaignRequest{Description: wk.Title, DefaultUTMCampaign: wk.Slug}
-	if wk.StartsAt != nil {
-		req.StartsAt = wk.StartsAt.UTC().Format(time.RFC3339)
-	}
-	if wk.EndsAt != nil {
-		req.EndsAt = wk.EndsAt.UTC().Format(time.RFC3339)
-	}
 	camp, err := h.links.EnsureCampaign(r.Context(), wk.Slug, req)
 	if err != nil {
 		writeShortLinksError(w, "ensure campaign", err)

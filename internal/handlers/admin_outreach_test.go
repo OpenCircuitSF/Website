@@ -452,7 +452,7 @@ func TestAdminOutreach_StartRules(t *testing.T) {
 		t.Errorf("panel = %+v", p)
 	}
 	if len(e.links.slugs) != 1 || e.links.slugs[0] != pub.Slug || e.links.campaigns[0].Description != pub.Title ||
-		e.links.campaigns[0].DefaultUTMCampaign != pub.Slug || e.links.campaigns[0].StartsAt == "" {
+		e.links.campaigns[0].DefaultUTMCampaign != pub.Slug || e.links.campaigns[0].StartsAt != "" || e.links.campaigns[0].EndsAt != "" { // #0651: no date window
 		t.Errorf("EnsureCampaign args: slugs=%v reqs=%+v", e.links.slugs, e.links.campaigns)
 	}
 	if code, _ := e.do(t, http.MethodPost, fmt.Sprintf("/admin/workshops/%d/outreach", pub.ID), ""); code != http.StatusOK {
