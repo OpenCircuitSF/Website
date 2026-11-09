@@ -162,8 +162,8 @@ automation editor's **Edit in YAML**.
   before the request, so a daily 9:00 AM run covers every moment once.
 - Installs older than 2024.10 use `trigger:` / `platform: time` / `service:`
   in place of `triggers:` / `trigger: time` / `action:`.
-- `notify.send_message` with a `notify.*` entity target also works, but it has
-  no title.
+- `notify.send_message` with a `notify.*` entity target also works. Its `title`
+  field is optional, and only notify entities that support titles use it.
 - **To notify every day,** delete the `condition` step. On quiet days the
   message is the "No new engagement…" sentence.
 
@@ -250,5 +250,5 @@ Checked against these official pages on 2026-11-08:
 - `homeassistant.update_entity`: <https://www.home-assistant.io/actions/homeassistant.update_entity/>
 - Stop, and a condition step stopping the steps after it: <https://www.home-assistant.io/building-blocks/stop>
 - Companion app notifications (`notify.mobile_app_*` with `title` and `message`): <https://companion.home-assistant.io/docs/notifications/notifications-basic/>
-- Notifications (`notify.send_message`): <https://www.home-assistant.io/integrations/notify/>
-- Templating (`state_attr`): <https://www.home-assistant.io/docs/configuration/templating/>
+- Notifications (`notify.send_message`): <https://www.home-assistant.io/actions/notify.send_message/>
+- Working with states (`state_attr`): <https://www.home-assistant.io/docs/templating/states/>
