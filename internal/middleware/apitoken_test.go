@@ -1,11 +1,14 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -188,5 +191,58 @@ func TestRequireSession_APITokenRefusedWithoutLookup(t *testing.T) {
 	h.ServeHTTP(rec, reqAuth("Bearer "+secret, ""))
 	if rec.Code != http.StatusUnauthorized || res.calls != 0 {
 		t.Fatalf("code %d, ResolveSession calls %d", rec.Code, res.calls)
+	}
+}
+
+// TestRequireAPIToken_FailuresAreNoStore pins #0652's review follow-up: the
+// 401, 403 and 500 responses carry Cache-Control: no-store too (#0653).
+func TestRequireAPIToken_FailuresAreNoStore(t *testing.T) {
+	res, secret := newTokenFixture(t, "other:read")
+	errRes, errSecret := newTokenFixture(t, apitokens.ScopeEngagementRead)
+	errRes.err = errors.New("db down")
+	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
+	prev := slog.Default()
+	slog.SetDefault(quiet)
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	for _, c := range []struct {
+		name string
+		res  APITokenResolver
+		auth string
+		want int
+	}{
+		{"missing", res, "", http.StatusUnauthorized},
+		{"unknown", res, "Bearer " + errSecret, http.StatusUnauthorized},
+		{"wrong scope", res, "Bearer " + secret, http.StatusForbidden},
+		{"resolver error", errRes, "Bearer " + errSecret, http.StatusInternalServerError},
+	} {
+		rec, _ := serveToken(c.res, apitokens.ScopeEngagementRead, v1Req(c.auth))
+		if rec.Code != c.want {
+			t.Errorf("%s: code %d, want %d", c.name, rec.Code, c.want)
+		}
+		if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+			t.Errorf("%s: Cache-Control %q, want no-store", c.name, got)
+		}
+	}
+}
+
+// TestRequireAPIToken_ResolverErrorLogsWithoutToken: the 500 path logs one
+// error line naming the failure and the error, never the token (#0653).
+func TestRequireAPIToken_ResolverErrorLogsWithoutToken(t *testing.T) {
+	res, secret := newTokenFixture(t, apitokens.ScopeEngagementRead)
+	res.err = errors.New("db down")
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	if rec, _ := serveToken(res, "", v1Req("Bearer "+secret)); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("code %d", rec.Code)
+	}
+	out := buf.String()
+	if strings.Count(out, "\n") != 1 || !strings.Contains(out, "level=ERROR") ||
+		!strings.Contains(out, "api token lookup failed") || !strings.Contains(out, "db down") {
+		t.Fatalf("log = %q", out)
+	}
+	if strings.Contains(out, secret) || strings.Contains(out, secret[:12]) || strings.Contains(out, secret[len(secret)-8:]) {
+		t.Fatalf("log names the token: %q", out)
 	}
 }

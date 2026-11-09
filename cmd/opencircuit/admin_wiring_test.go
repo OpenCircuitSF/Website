@@ -128,7 +128,10 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	settingsH.SetServerSettings(handlers.NewAdminServerSettingsHandler(serversettings.NewManager(serversettings.NewStore(pool), nil, nil, nil, nil), auditLogger))
 	// #0652: attach the API tokens handler so its three admin routes are
 	// swept below, and /api/v1/token is mounted for the bearer checks.
-	settingsH.SetAPITokens(handlers.NewAPITokensHandler(apitokens.NewStore(pool), auditLogger))
+	apiTokensH := handlers.NewAPITokensHandler(apitokens.NewStore(pool), auditLogger)
+	// #0653: the engagement route, mounted as main.go mounts it.
+	apiTokensH.AddV1Route("/api/v1/engagement", apitokens.ScopeEngagementRead, handlers.NewEngagementAPIHandler(outreach.NewStore(pool)))
+	settingsH.SetAPITokens(apiTokensH)
 	adminUsersH := handlers.NewAdminUsersHandler(store, auditLogger)
 	adminAuditH := handlers.NewAdminAuditHandler(audit.NewReader(pool))
 	interestsStore := interests.NewStore(pool)
@@ -509,6 +512,14 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	}
 	if got := v1(http.MethodPost, v1URL, bearerSecret, ""); got != http.StatusMethodNotAllowed {
 		t.Errorf("POST /api/v1/token with Bearer = %d, want 405", got)
+	}
+	// #0653: /api/v1/engagement on the real mux.
+	engURL := baseURL + "/api/v1/engagement"
+	if got := v1(http.MethodGet, engURL, bearerSecret, ""); got != http.StatusOK {
+		t.Errorf("GET /api/v1/engagement with Bearer = %d, want 200", got)
+	}
+	if got := v1(http.MethodPost, engURL, bearerSecret, ""); got != http.StatusMethodNotAllowed {
+		t.Errorf("POST /api/v1/engagement with Bearer = %d, want 405", got)
 	}
 	if _, err := apiTokenStore.Revoke(context.Background(), bearerTok.ID, time.Now()); err != nil {
 		t.Fatalf("revoke bearer token: %v", err)

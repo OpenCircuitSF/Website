@@ -421,6 +421,8 @@ func servePostgres(cfg *config.Config) error {
 	// routes. Postgres-only, so dev mode attaches nothing and both 404.
 	apiTokensH := handlers.NewAPITokensHandler(apitokens.NewStore(pool), auditLogger)
 	settingsH.SetAPITokens(apiTokensH)
+	// #0653: Home Assistant's daily engagement check, read-only, GET only.
+	apiTokensH.AddV1Route("/api/v1/engagement", apitokens.ScopeEngagementRead, handlers.NewEngagementAPIHandler(outreachStore))
 
 	// Admin subscribers screen (#0032, PRD §5.2/§6.2): list/search/detail,
 	// manual suppress, clear-complaint, and manual add. manualAdd (subscribeH)

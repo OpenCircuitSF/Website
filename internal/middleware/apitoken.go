@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -52,10 +53,13 @@ func apiBearerToken(r *http.Request) string {
 
 // RequireAPIToken guards a /api/v1/ route (#0652). A missing, malformed,
 // unknown or revoked token gets the same 401; a valid token lacking scope gets
-// 403. An empty scope accepts any valid token. Nothing here logs.
+// 403. An empty scope accepts any valid token. Every response, failure or
+// not, is Cache-Control: no-store. The only log line is an unexpected
+// resolver error (the 500), and it never names the presented token.
 func RequireAPIToken(resolver APITokenResolver, scope string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
 			tok := apiBearerToken(r)
 			if tok == "" {
 				writeAPIUnauthenticated(w)
@@ -67,6 +71,7 @@ func RequireAPIToken(resolver APITokenResolver, scope string) func(http.Handler)
 					writeAPIUnauthenticated(w)
 					return
 				}
+				slog.Error("api token lookup failed", "err", err)
 				writeJSONError(w, http.StatusInternalServerError, "internal_error")
 				return
 			}
@@ -74,7 +79,6 @@ func RequireAPIToken(resolver APITokenResolver, scope string) func(http.Handler)
 				writeJSONError(w, http.StatusForbidden, "forbidden")
 				return
 			}
-			w.Header().Set("Cache-Control", "no-store")
 			p := &APIToken{ID: t.ID, Name: t.Name, Prefix: t.Prefix, Scopes: t.Scopes}
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), apiTokenContextKey, p)))
 		})
