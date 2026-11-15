@@ -17,9 +17,11 @@
     onmeter?: (id: MeterId) => void;
     onjack?: (id: string) => void;
     ondial?: (id: string) => void;
+    /** A dial setting to point the reader at; highlighted until the dial is on it. */
+    hint?: string | null;
     children?: Snippet;
   }
-  let { meterId, dial, black, red, reading, note = null, onmeter, onjack, ondial, children }: Props = $props();
+  let { meterId, dial, black, red, reading, note = null, onmeter, onjack, ondial, hint = null, children }: Props = $props();
 
   const m = $derived(METERS[meterId]);
   const pos = $derived(dialById(m, dial));
@@ -97,6 +99,7 @@
             <g
               class="spot dial"
               class:sel={p.id === dial}
+              class:hint={p.id === hint && p.id !== dial}
               role="button"
               tabindex="0"
               aria-label={p.name}
@@ -105,6 +108,9 @@
               onkeydown={key(() => ondial(p.id))}
             >
               <circle class="hit" cx={x} cy={y} r="15" />
+              {#if p.id === hint && p.id !== dial}
+                <circle class="halo" cx={x} cy={y} r="19" aria-hidden="true" />
+              {/if}
               <circle class="ring" cx={x} cy={y} r="15" />
             </g>
           {:else if p.id === dial}
@@ -268,6 +274,34 @@
   }
   .spot:focus-visible .ring {
     stroke-width: 4;
+  }
+  .spot.hint .ring {
+    stroke: var(--accent);
+    stroke-dasharray: 4 3;
+  }
+  .halo {
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 3;
+    opacity: 0.6;
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: halo 1.4s ease-out infinite;
+  }
+  @keyframes halo {
+    from {
+      transform: scale(0.8);
+      opacity: 0.8;
+    }
+    to {
+      transform: scale(1.5);
+      opacity: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .halo {
+      animation: none;
+    }
   }
   .lead {
     fill: none;

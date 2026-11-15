@@ -71,6 +71,18 @@ describe('guide demos', () => {
     expect(r.getByText('No beep')).toBeTruthy();
   });
 
+  it('multimeter continuity: points at the symbol until the dial is on it', async () => {
+    const r = render(ContinuityDemo);
+    const spot = r.getByRole('button', { name: 'Continuity and diode (beep)' });
+    expect(spot.classList.contains('hint')).toBe(true);
+    expect(r.getByText('Find this symbol on the dial')).toBeTruthy();
+    expect(r.getByRole('img', { name: /Continuity symbol/ })).toBeTruthy();
+    await fireEvent.click(r.getByRole('button', { name: 'Turn the dial to continuity' }));
+    expect(spot.classList.contains('hint')).toBe(false);
+    expect(spot.getAttribute('aria-pressed')).toBe('true');
+    expect(r.getByText('BEEP')).toBeTruthy();
+  });
+
   it('multimeter voltage: 9 V on the 20 range, minus sign when swapped', async () => {
     const r = render(VoltageDemo);
     await fireEvent.click(r.getByRole('button', { name: 'DC volts, 20 V range' }));
