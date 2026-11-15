@@ -528,3 +528,85 @@ export const LED_CIRCUIT: Target = {
 };
 
 export const BATTERY_9V: Target = VOLTAGE_TARGETS[1];
+
+// ---- Dial hints (user feedback, 2026-11-14) ----
+// Each measuring demo starts with the dial on OFF. Until the reader turns it
+// to the right setting, that setting pulses and a card says what its symbol
+// looks like and where it sits on the meter in view.
+
+export type DialHintGuide = 'continuity' | 'voltage' | 'current';
+
+export interface DialHint {
+  /** The dial position id to point at. */
+  target: string;
+  /** Which symbol to draw on the card. */
+  symbol: 'cont' | 'dcv' | 'dca';
+  /** Short name used in the heading and button: "Turn the dial to …". */
+  setting: string;
+  /** What the symbol looks like. */
+  what: string;
+  /** Where it is on this meter, and anything else to set. */
+  where: string;
+}
+
+export const DIAL_HINTS: Record<DialHintGuide, Record<MeterId, DialHint>> = {
+  continuity: {
+    a: {
+      target: 'cont',
+      symbol: 'cont',
+      setting: 'continuity',
+      what: 'A diode (a triangle pointing at a bar) with sound waves beside it. Some meters print a speaker or •))) instead.',
+      where: 'On this meter it is on the right of the dial, between hFE and 10A.',
+    },
+    b: {
+      target: 'cont',
+      symbol: 'cont',
+      setting: 'continuity',
+      what: 'A diode (a triangle pointing at a bar) with sound waves beside it. Some meters print a speaker or •))) instead.',
+      where: 'On this meter it is at the bottom of the dial, between Ω and Hz%.',
+    },
+  },
+  voltage: {
+    a: {
+      target: 'dcv20',
+      symbol: 'dcv',
+      setting: 'DC volts, 20',
+      what: 'V with a solid line over a dashed line means DC volts. V with a wavy line (V~) is AC, for wall power. Never use it here.',
+      where:
+        'On this meter DC volts is the group on the left. Pick 20: it reads up to 19.99 V, enough for a 9 V battery or the board’s 5V pin. For a AA, 2 gives one more digit.',
+    },
+    b: {
+      target: 'dcv',
+      symbol: 'dcv',
+      setting: 'DC volts',
+      what: 'V with a solid line over a dashed line means DC volts. V with a wavy line (V~) is AC, for wall power. Never use it here.',
+      where: 'On this meter it is at the upper right, between V~ and mV. It picks the range itself, so there is nothing else to set.',
+    },
+  },
+  current: {
+    a: {
+      target: 'dca20m',
+      symbol: 'dca',
+      setting: 'DC current, 20m',
+      what: 'A with a solid line over a dashed line means DC current. The m means milliamps: 20m reads up to 19.99 mA.',
+      where:
+        'On this meter DC current is the group at the lower right. An LED draws under 20 mA, so pick 20m. Red stays in VΩmA for milliamps.',
+    },
+    b: {
+      target: 'ma',
+      symbol: 'dca',
+      setting: 'mA',
+      what: 'mA means milliamps of DC current. An LED draws under 20 mA, so mA is the right setting.',
+      where: 'On this meter it is on the left of the dial, between µA and A. Then move red to the mA µA jack.',
+    },
+  },
+};
+
+/** The note shown while the dial is still off. */
+export function dialOffNote(h: DialHint): { tone: Tone; title: string; body: string } {
+  return {
+    tone: 'info',
+    title: `Turn the dial to ${h.setting}`,
+    body: 'Click the flashing setting on the dial, or use the button.',
+  };
+}

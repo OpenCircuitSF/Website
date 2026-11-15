@@ -71,11 +71,26 @@ describe('guide demos', () => {
     expect(r.getByText('No beep')).toBeTruthy();
   });
 
+  for (const [name, Demo, setting] of [
+    ['voltage', VoltageDemo, 'DC volts, 20'],
+    ['current', CurrentDemo, 'DC current, 20m'],
+    ['continuity', ContinuityDemo, 'continuity'],
+  ] as const) {
+    it(`multimeter ${name}: shows how to set the dial, and the button sets it`, async () => {
+      const r = render(Demo);
+      expect(r.getByText(`Turn the dial to ${setting}`, { selector: 'strong' })).toBeTruthy();
+      expect(r.container.querySelectorAll('.spot.dial.hint')).toHaveLength(1);
+      await fireEvent.click(r.getByRole('button', { name: `Turn the dial to ${setting}` }));
+      expect(r.getByText(`The dial is on ${setting}`)).toBeTruthy();
+      expect(r.container.querySelectorAll('.spot.dial.hint')).toHaveLength(0);
+    });
+  }
+
   it('multimeter continuity: points at the symbol until the dial is on it', async () => {
     const r = render(ContinuityDemo);
     const spot = r.getByRole('button', { name: 'Continuity and diode (beep)' });
     expect(spot.classList.contains('hint')).toBe(true);
-    expect(r.getByText('Find this symbol on the dial')).toBeTruthy();
+    expect(r.getByText('Set the dial')).toBeTruthy();
     expect(r.getByRole('img', { name: /Continuity symbol/ })).toBeTruthy();
     await fireEvent.click(r.getByRole('button', { name: 'Turn the dial to continuity' }));
     expect(spot.classList.contains('hint')).toBe(false);

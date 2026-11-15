@@ -3,7 +3,8 @@
   // the LED circuit and let the current flow through the meter. Probes from a
   // current jack straight across the battery blow the fuse.
   import MultimeterMeter from './MultimeterMeter.svelte';
-  import { BATTERY_9V, LED_CIRCUIT, METERS, jackById, measure, type MeterId } from './multimeter';
+  import DialHintCard from './DialHintCard.svelte';
+  import { BATTERY_9V, DIAL_HINTS, LED_CIRCUIT, METERS, dialOffNote, jackById, measure, type MeterId } from './multimeter';
 
   type Hookup = 'series' | 'across';
   let meterId = $state<MeterId>('a');
@@ -14,6 +15,7 @@
   let jackNote = $state<string | null>(null);
 
   const m = $derived(METERS[meterId]);
+  const hint = $derived(DIAL_HINTS.current[meterId]);
   const target = $derived(hookup === 'series' ? LED_CIRCUIT : BATTERY_9V);
   const reading = $derived(measure({ meter: m, dial, black: 'com', red, blown }, target));
   // Across the battery the loop is whole, so the LED stays lit unless the
@@ -48,11 +50,13 @@
   black="com"
   {red}
   {reading}
-  note={{ tone: reading.tone, title: reading.title, body: jackNote ?? reading.message }}
+  note={jackNote === null && dial === 'off' ? dialOffNote(hint) : { tone: reading.tone, title: reading.title, body: jackNote ?? reading.message }}
+  hint={hint.target}
   onmeter={pickMeter}
   onjack={plug}
   ondial={(id) => (dial = id)}
 >
+  <DialHintCard {hint} {dial} onset={(id) => (dial = id)} />
   <p class="how">Click a jack to move the red probe. Red is in <strong>{jackById(m, red)?.label}</strong>.</p>
   <div class="picker" role="radiogroup" aria-label="Connect the probes">
     <button type="button" role="radio" aria-checked={hookup === 'series'} class:on={hookup === 'series'} onclick={() => (hookup = 'series')}>
