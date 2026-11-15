@@ -13,7 +13,7 @@ type GuideSignups struct {
 	UTMCampaign string // "" when the visit carried none
 	UTMContent  string // "gp{id}" for a #0658 guide-post link; "" otherwise
 	Requested   int    // distinct subscribers with a signup_requested event in [from, to)
-	Confirmed   int    // of those, how many have a confirmed event at or after that request
+	Confirmed   int    // of those, how many confirmed after that request and before their next one (#0664)
 }
 
 // SignupsByGuide counts signups attributed to a guide page (#0662) whose
@@ -22,7 +22,9 @@ type GuideSignups struct {
 // (signupEventDetail), which is written only where a real signup starts, so
 // bots, suppressed addresses and ordinary resends never count. An erased
 // subscriber's events have a NULL subscriber_id and drop out of the counts by
-// design.
+// design. A request is credited only with a confirmation that precedes the
+// subscriber's next signup_requested event (#0664), so a later restart from
+// another form does not hand its confirmation back to the guide.
 func (s *Store) SignupsByGuide(ctx context.Context, from, to time.Time) ([]GuideSignups, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT e.detail->>'guide',
@@ -33,7 +35,13 @@ func (s *Store) SignupsByGuide(ctx context.Context, from, to time.Time) ([]Guide
 		           SELECT 1 FROM subscriber_events c
 		            WHERE c.subscriber_id = e.subscriber_id
 		              AND c.action = $4
-		              AND c.created_at >= e.created_at))
+		              AND c.created_at >= e.created_at
+		              AND NOT EXISTS (
+		                  SELECT 1 FROM subscriber_events n
+		                   WHERE n.subscriber_id = e.subscriber_id
+		                     AND n.action = $3
+		                     AND n.created_at > e.created_at
+		                     AND n.created_at <= c.created_at)))
 		  FROM subscriber_events e
 		 WHERE e.action = $3
 		   AND e.detail->>'guide' IS NOT NULL

@@ -143,3 +143,26 @@ func TestSignupsByGuide_ConfirmBeforeRequestNotCounted(t *testing.T) {
 		t.Errorf("rows = %+v, want Requested 1 Confirmed 0", got)
 	}
 }
+
+// A guide signup left unconfirmed, then restarted from /subscribe with no
+// guide and confirmed there, is not credited to the guide (#0664).
+func TestSignupsByGuide_ConfirmAfterLaterRestartNotCounted(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	g := testGuide(t, "g")
+	sub := guideSignup(t, store, g, "")
+	if _, err := store.Unsubscribe(ctx, sub.ID, SourceOneClick, longAgo().Add(time.Minute)); err != nil {
+		t.Fatalf("Unsubscribe: %v", err)
+	}
+	restarted, err := store.RestartSignup(ctx, sub.ID, RestartSignupInput{ConfirmTTL: time.Hour}, longAgo().Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("RestartSignup: %v", err)
+	}
+	if _, err := store.Confirm(ctx, *restarted.ConfirmToken, longAgo().Add(3*time.Minute)); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+	if got := guideSignupsFor(t, store, g, time.Now().Add(-time.Hour)); len(got) != 1 || got[0].Requested != 1 || got[0].Confirmed != 0 {
+		t.Errorf("rows = %+v, want Requested 1 Confirmed 0", got)
+	}
+}
