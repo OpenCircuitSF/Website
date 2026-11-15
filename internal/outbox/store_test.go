@@ -1580,3 +1580,30 @@ func TestOutbox_Counts_ExcludesOutreachPosts(t *testing.T) {
 			before.Queued, after.Queued, before.Abandoned, after.Abandoned)
 	}
 }
+
+// TestOutbox_Counts_ExcludesGuidePosts is #0658's twin of the test above: a
+// guide_post row is a social post too and never counts as mail.
+func TestOutbox_Counts_ExcludesGuidePosts(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+
+	before, err := store.Counts(ctx)
+	if err != nil {
+		t.Fatalf("Counts (before): %v", err)
+	}
+	id, err := store.Enqueue(ctx, Item{Kind: KindGuidePost, Recipient: uniqueRecipient(t)})
+	if err != nil {
+		t.Fatalf("Enqueue guide post: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM outbound_queue WHERE id = $1`, id)
+	})
+	after, err := store.Counts(ctx)
+	if err != nil {
+		t.Fatalf("Counts (after): %v", err)
+	}
+	if after.Queued != before.Queued {
+		t.Errorf("Counts moved after a guide_post row: queued %d->%d", before.Queued, after.Queued)
+	}
+}

@@ -1,6 +1,7 @@
 package seo
 
 import (
+	"bytes"
 	"encoding/xml"
 	"html"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/bluesky"
 	"github.com/brennanMKE/OpenCircuitSF/internal/guides"
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 )
@@ -159,4 +161,37 @@ func guidePaths() []string {
 		out = append(out, g.Path())
 	}
 	return out
+}
+
+func TestGuideCard_ReturnsCatalogCard(t *testing.T) {
+	site := NewSite([]byte(testTemplate), testBaseURL, nil, nil)
+	mux := http.NewServeMux()
+	mux.Handle("GET /guides/{slug}/og.png", site.GuideCardHandler())
+	for _, g := range guides.Topics() {
+		data, mime, err := site.GuideCard(g.Slug)
+		if err != nil || mime != "image/png" {
+			t.Fatalf("%s: GuideCard = %v, %q", g.Slug, err, mime)
+		}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/guides/"+g.Slug+"/og.png", nil))
+		if !bytes.Equal(rec.Body.Bytes(), data) {
+			t.Errorf("%s: GuideCard bytes differ from the served card", g.Slug)
+		}
+	}
+	if _, _, err := site.GuideCard("nope"); err == nil {
+		t.Error("unknown slug: want an error")
+	}
+}
+
+func TestGuideCard_FitsBlueskyThumbLimit(t *testing.T) {
+	site := NewSite([]byte(testTemplate), testBaseURL, nil, nil)
+	for _, g := range guides.Topics() {
+		data, _, err := site.GuideCard(g.Slug)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(data) > bluesky.MaxThumbBytes {
+			t.Errorf("%s card is %d bytes, over Bluesky's %d", g.Slug, len(data), bluesky.MaxThumbBytes)
+		}
+	}
 }

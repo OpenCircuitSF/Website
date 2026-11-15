@@ -843,3 +843,42 @@ func TestPublisher_ChannelConfiguredFollowsClientSource(t *testing.T) {
 		t.Error("bluesky must stay unconfigured")
 	}
 }
+
+type fakeCompanion struct {
+	started chan struct{}
+	stopped chan struct{}
+}
+
+func (f *fakeCompanion) Run(ctx context.Context) {
+	close(f.started)
+	select {
+	case <-f.stopped:
+	case <-ctx.Done():
+	}
+}
+
+func (f *fakeCompanion) Stop(context.Context) error { close(f.stopped); return nil }
+
+// TestPublisher_StartsAndStopsCompanion is #0658's: the guide-post
+// publisher rides on this one's Run and Stop.
+func TestPublisher_StartsAndStopsCompanion(t *testing.T) {
+	comp := &fakeCompanion{started: make(chan struct{}), stopped: make(chan struct{})}
+	p := NewPublisher(PublisherDeps{Store: &Store{}, Outbox: &outbox.Store{}, Companion: comp, PollInterval: time.Hour})
+	p.stopOnce.Do(func() { close(p.stopCh) }) // Run returns before any pass
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go p.Run(ctx)
+	select {
+	case <-comp.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("companion was not started")
+	}
+	if err := p.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	select {
+	case <-comp.stopped:
+	default:
+		t.Fatal("companion was not stopped")
+	}
+}

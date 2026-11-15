@@ -1,7 +1,7 @@
 # Database Schema & Migrations
 
 PostgreSQL, schema managed by [`golang-migrate`](https://github.com/golang-migrate/migrate)
-(`migrations/`, numbered `000001`–`000051`). No ORM — every
+(`migrations/`, numbered `000001`–`000052`). No ORM — every
 store issues hand-written SQL through `pgx/v5`.
 
 ## Applying migrations
@@ -121,6 +121,7 @@ why the activity log is not a second package of its own.
 | `000049_create_outreach_newsletter_links` | Creates `outreach_newsletter_links` (`#0643`): one newsletter ShortLink per (email campaign, workshop), unique on the pair, cascading from both. Kept apart from `outreach_links`, whose readers assume every row is an Outreach channel slot |
 | `000050_luma_calendar_setting` | Widens `server_setting_values_key_check` (`000042`) with `luma_calendar_id` (`#0648`): the Luma calendar whose public iCal feed Outreach compares published events with (default `cal-UIMZwzLquNDI2DB`, or `off`), edited through `internal/serversettings`. A new migration, not an edit to `000042`, which production has applied |
 | `000051_create_api_tokens` | Creates `api_tokens` (`#0652`): admin-created bearer tokens for `/api/v1/`. Stores `name`, `token_hash` (SHA-256 of the token, unique, 32 bytes; the token itself is never stored), `display_prefix` (first 12 characters, `ocsf_…`), `scopes` (`api_tokens_scopes_check` allows only `engagement:read`), `created_by`, `created_at`, `last_used_at` (written at most once a minute per token) and `revoked_at` (a revoked token is kept for the list but never authenticates). Owned by `internal/apitokens` |
+| `000052_create_guide_posts` | Creates `guide_posts` (`#0658`): one scheduled Bluesky or Mastodon post linking a topic guide (`/guides/{slug}`), separate from workshop Outreach. Stores `guide_slug` (checked against `internal/guides` in Go), `channel`, `body`, `destination_url` (the guide URL with UTM tags and `utm_content=gp{id}`, unique per row), `campaign_slug` (the ShortLinks campaign, `guide-posts` by default, chosen per draft), `short_link_key`/`short_url` (the row's own tracked link; a partial unique index on the key), `status` (`draft`, `scheduled`, `queued`, `posted`, `failed`; anything past `draft` needs a short link), `scheduled_at`, `posted_at`, `remote_id`, `remote_url`, `last_error` and `attempt_generation`. Sent through `outbound_queue` rows of kind `guide_post`. Owned by `internal/guideposts` |
 
 `internal/subscribers` (`imports.go`) owns `subscriber_imports`, alongside
 every other table that package already owns — see that file's doc comment.

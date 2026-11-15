@@ -2,6 +2,7 @@ package seo
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -235,6 +236,22 @@ func (s *Site) GuideCardHandler() http.HandlerFunc {
 		}
 		s.serveCard(w, r, "guide:"+g.Slug, g.Title, guideCardMeta(g))
 	}
+}
+
+// GuideCard returns the PNG Open Graph card for the guide slug, the same
+// bytes GuideCardHandler serves (#0658: the Bluesky thumbnail of a guide
+// post). The returned slice is the card cache's own; the caller must not
+// modify it. An unknown slug is an error.
+func (s *Site) GuideCard(slug string) (data []byte, mime string, err error) {
+	g, ok := guides.Lookup(slug)
+	if !ok {
+		return nil, "", fmt.Errorf("seo: unknown guide %q", slug)
+	}
+	data, _, err = s.cards.get("guide:"+g.Slug, g.Title, guideCardMeta(g))
+	if err != nil {
+		return nil, "", err
+	}
+	return data, "image/png", nil
 }
 
 // RobotsHandler serves GET /robots.txt (#0020). robots.txt has no dynamic

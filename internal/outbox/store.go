@@ -106,6 +106,15 @@ const (
 	// it is scheduled, so a post scheduled weeks out never inflates the
 	// queue counts the admin dashboard shows.
 	KindOutreachPost Kind = "outreach_post"
+
+	// KindGuidePost (#0658) is NOT an email either. Like KindOutreachPost it
+	// reuses this queue for a post to Bluesky or Mastodon, here a topic
+	// guide's link rather than a workshop's. The payload is only
+	// {"post_id": N}: the guide_posts row is the source of truth, re-read at
+	// send time. Rows of this kind are claimed only by internal/guideposts'
+	// Publisher, never by the mail worker or the Outreach publisher, and the
+	// Recipient column carries a label rather than an address.
+	KindGuidePost Kind = "guide_post"
 )
 
 // AllKinds is the explicit sentinel meaning "every kind" — pass it to
@@ -969,8 +978,8 @@ func (s *Store) HasPriorAttempt(ctx context.Context, kind Kind, recipient string
 }
 
 // Counts returns the queue-depth summary for #0061's admin overview. It
-// counts mail only: KindOutreachPost rows are social posts, not messages, and
-// are excluded so a bad social credential never reads as undelivered mail
+// counts mail only: KindOutreachPost and KindGuidePost rows are social posts,
+// not messages, and are excluded so a bad social credential never reads as undelivered mail
 // (#0553).
 func (s *Store) Counts(ctx context.Context) (Counts, error) {
 	var c Counts
@@ -983,9 +992,9 @@ func (s *Store) Counts(ctx context.Context) (Counts, error) {
 		    count(*) FILTER (WHERE status = $4),
 		    count(*) FILTER (WHERE status = $5),
 		    extract(epoch FROM now() - min(created_at) FILTER (WHERE status = $1))
-		 FROM outbound_queue WHERE kind <> $6`,
+		 FROM outbound_queue WHERE kind <> ALL($6)`,
 		StatusQueued, StatusSending, StatusSent, StatusAbandoned, StatusSkipped,
-		string(KindOutreachPost),
+		[]string{string(KindOutreachPost), string(KindGuidePost)},
 	).Scan(&c.Queued, &c.Sending, &c.Sent, &c.Abandoned, &c.Skipped, &oldestSecs)
 	if err != nil {
 		return Counts{}, fmt.Errorf("outbox: counting: %w", err)

@@ -1,6 +1,6 @@
 // Short topic guides (/guides/{slug}): one idea each, built around one
 // interactive demo, short enough to share on Bluesky and Mastodon. The
-// catalog metadata (slug, title, hook, minutes, tags) lives in
+// catalog metadata (slug, title, hook, minutes, tags, post copy) lives in
 // web/src/content/guides/guides.json, which the router and the Go server also read;
 // this file holds only each topic's page body, keyed by slug.
 import { TOPIC_GUIDES, type TopicMeta } from '../guides';
@@ -21,8 +21,6 @@ export interface TopicBody {
   ideas: { title: string; body: string }[];
   /** The one thing to remember. */
   takeaway: string;
-  /** Suggested text for a social post (the link is appended). */
-  post: string;
 }
 
 export type Topic = TopicMeta & TopicBody;
@@ -46,7 +44,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
     ],
     takeaway: 'Addressable LEDs are a relay, not a bus. Follow the arrows printed on the strip.',
-    post: 'No LED on an addressable strip has an address. Watch how one wire tells a whole strip what to do, and the ways it fails silently.',
   },
   'delay-vs-millis': {
     demo: DelayDemo,
@@ -66,7 +63,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
     ],
     takeaway: 'If anything else will ever need to happen, use millis(), not delay().',
-    post: 'Press the button. The board using delay() misses most presses. The one using millis() never does. A 3-minute interactive explainer.',
   },
   'baud-rate': {
     demo: BaudDemo,
@@ -86,7 +82,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
     ],
     takeaway: 'Garbage means the connection works. Check that both baud rates match.',
-    post: 'Garbage characters in your serial monitor? Your wiring is probably fine. See exactly why a baud-rate mismatch scrambles text, with a live decoder.',
   },
   'charge-only-cables': {
     demo: CableDemo,
@@ -106,7 +101,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
     ],
     takeaway: 'No serial port? Swap the cable first. It’s the answer most of the time.',
-    post: 'Board lights up but your computer can’t see it? Charge-only USB cables look identical to data cables. See what’s missing inside.',
   },
   'led-power-budget': {
     demo: PowerDemo,
@@ -126,7 +120,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
     ],
     takeaway: 'Color and brightness decide the current. Budget for white at full brightness.',
-    post: 'Why does my LED strip keep rebooting the board on white? An interactive look at how much current LEDs draw, and how much USB can give.',
   },
   'esp32-c3-supermini-pinout': {
     demo: PinoutExplorer,
@@ -146,7 +139,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
     ],
     takeaway: 'Most pins are free to use. Treat 2, 8 and 9 with care, and never put 5V on a GPIO.',
-    post: 'An interactive pinout for the tiny ESP32-C3 SuperMini: tap any pin to see what it does, including the three that can stop your board from booting.',
   },
 };
 

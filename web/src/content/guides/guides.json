@@ -20,7 +20,8 @@
       "tags": [
         "LEDs",
         "serial"
-      ]
+      ],
+      "post": "No LED on an addressable strip has an address. Watch how one wire tells a whole strip what to do, and the ways it fails silently."
     },
     {
       "slug": "delay-vs-millis",
@@ -30,7 +31,8 @@
       "tags": [
         "code",
         "timing"
-      ]
+      ],
+      "post": "Press the button. The board using delay() misses most presses. The one using millis() never does. A 3-minute interactive explainer."
     },
     {
       "slug": "baud-rate",
@@ -41,7 +43,8 @@
         "serial",
         "debugging"
       ],
-      "description": "Garbage characters in your serial monitor are good news: the wiring works, only the speed is wrong."
+      "description": "Garbage characters in your serial monitor are good news: the wiring works, only the speed is wrong.",
+      "post": "Garbage characters in your serial monitor? Your wiring is probably fine. See exactly why a baud-rate mismatch scrambles text, with a live decoder."
     },
     {
       "slug": "charge-only-cables",
@@ -51,7 +54,8 @@
       "tags": [
         "USB",
         "debugging"
-      ]
+      ],
+      "post": "Board lights up but your computer can’t see it? Charge-only USB cables look identical to data cables. See what’s missing inside."
     },
     {
       "slug": "led-power-budget",
@@ -61,7 +65,8 @@
       "tags": [
         "LEDs",
         "power"
-      ]
+      ],
+      "post": "Why does my LED strip keep rebooting the board on white? An interactive look at how much current LEDs draw, and how much USB can give."
     },
     {
       "slug": "esp32-c3-supermini-pinout",
@@ -71,7 +76,8 @@
       "tags": [
         "ESP32",
         "reference"
-      ]
+      ],
+      "post": "An interactive pinout for the tiny ESP32-C3 SuperMini: tap any pin to see what it does, including the three that can stop your board from booting."
     }
   ]
 }

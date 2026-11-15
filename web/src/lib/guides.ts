@@ -16,6 +16,8 @@ export interface GuideMeta {
 
 export interface TopicMeta extends GuideMeta {
   minutes: number;
+  /** Suggested text for a social post (the link is appended). */
+  post: string;
 }
 
 export type GuideKind = 'workshop' | 'topic';

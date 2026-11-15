@@ -45,4 +45,9 @@ describe('guide catalog (#0656)', () => {
       expect(g.description ?? g.hook).not.toMatch(/[\u0000-\u001f\u007f-\u009f­]/);
     }
   });
+
+  it('every topic carries post copy', () => {
+    for (const t of TOPIC_GUIDES) expect(t.post.trim()).not.toBe('');
+    for (const w of WORKSHOP_GUIDES) expect('post' in w).toBe(false);
+  });
 });

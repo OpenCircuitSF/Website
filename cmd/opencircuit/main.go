@@ -40,6 +40,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/devstore"
 	"github.com/brennanMKE/OpenCircuitSF/internal/events"
 	"github.com/brennanMKE/OpenCircuitSF/internal/eventtypes"
+	"github.com/brennanMKE/OpenCircuitSF/internal/guideposts"
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/inbound"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
@@ -372,7 +373,20 @@ func servePostgres(cfg *config.Config) error {
 		Interval: devTrackerInterval(cfg.BaseURL, os.Getenv("OUTREACH_TRACKER_INTERVAL"), slog.Default()),
 		Log:      slog.Default(),
 	})
+	// Guide posts (#0658): a second social publisher over the same accounts,
+	// started and stopped by the Outreach publisher as its Companion. Its
+	// Linker is built where the admin handler takes it (#0659).
+	guideStore := guideposts.NewStore(pool, outbox.NewStore(pool))
+	guidePublisher := guideposts.NewPublisher(guideposts.PublisherDeps{
+		Store:    guideStore,
+		Outbox:   outbox.NewStore(pool),
+		Settings: store,
+		Clients:  conns,
+		CardFn:   site.GuideCard,
+		Log:      slog.Default(),
+	})
 	outreachPublisher := outreach.NewPublisher(outreach.PublisherDeps{
+		Companion:   guidePublisher,
 		Tracker:     outreachTracker,
 		Store:       outreachStore,
 		Outbox:      outbox.NewStore(pool),

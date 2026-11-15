@@ -41,6 +41,8 @@ type Guide struct {
 	Description string
 	Minutes     int
 	Tags        []string
+	// Post is the suggested social-post copy, without the link; topics only.
+	Post string
 }
 
 // Path is the guide's public URL path.
@@ -58,6 +60,7 @@ type entry struct {
 	Description string   `json:"description"`
 	Minutes     int      `json:"minutes"`
 	Tags        []string `json:"tags"`
+	Post        string   `json:"post"`
 }
 
 type file struct {
@@ -93,6 +96,12 @@ func load(raw []byte) ([]Guide, error) {
 		if kind == Topic && e.Minutes <= 0 {
 			return fmt.Errorf("guides: topic %q needs minutes", e.Slug)
 		}
+		if kind == Topic && (strings.TrimSpace(e.Post) == "" || !isPlainText(e.Post)) {
+			return fmt.Errorf("guides: topic %q needs plain post copy", e.Slug)
+		}
+		if kind == Workshop && e.Post != "" {
+			return fmt.Errorf("guides: workshop guide %q must not carry post copy", e.Slug)
+		}
 		desc := e.Description
 		if desc == "" {
 			desc = e.Hook
@@ -100,7 +109,7 @@ func load(raw []byte) ([]Guide, error) {
 		if !isPlainText(desc) {
 			return fmt.Errorf("guides: %q meta description has a control character or soft hyphen; add a plain description", e.Slug)
 		}
-		out = append(out, Guide{Kind: kind, Slug: e.Slug, Title: e.Title, Hook: e.Hook, Description: desc, Minutes: e.Minutes, Tags: e.Tags})
+		out = append(out, Guide{Kind: kind, Slug: e.Slug, Title: e.Title, Hook: e.Hook, Description: desc, Minutes: e.Minutes, Tags: e.Tags, Post: e.Post})
 		return nil
 	}
 	for _, e := range f.WorkshopGuides {
