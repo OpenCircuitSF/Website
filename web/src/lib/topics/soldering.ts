@@ -216,7 +216,8 @@ export function jointAt(dialC: number, alloyId: 'sn63' | 'sac305', tip: TipShape
       seconds: 1,
       title: 'Too hot',
       body: 'It melts fast, but the flux burns off before it can clean the metal. The tip blackens quickly and joints come out dull and crusty.',
-      art: JOINT_ART.cold,
+      // Same drawing as a cold joint (dull, lumpy), but the alt text must not call it one.
+      art: { ...JOINT_ART.cold, alt: 'A dull, crusty lump of solder: the flux burnt off before the solder could wet the pad' },
     };
   }
   return {

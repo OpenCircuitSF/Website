@@ -27,10 +27,10 @@
   <div class="layout">
     <figure>
       <svg viewBox="0 0 320 120" role="img" aria-label="Soldering iron tip: {LOOK_TEXT[look].toLowerCase()}{tip.dirty ? ', with burnt flux on it' : ''}">
-        <rect x="6" y="38" width="120" height="44" rx="10" fill="#2B302B" stroke="#1F2621" stroke-width="2" />
+        <rect x="6" y="38" width="120" height="44" rx="10" fill="#2B302B" stroke="#6B736C" stroke-width="2" />
         <rect x="14" y="44" width="104" height="6" rx="3" fill="#FFFFFF" opacity="0.15" />
-        <rect x="124" y="46" width="70" height="28" fill="#9AA29C" stroke="#1F2621" stroke-width="2" />
-        <path d="M192,48 L292,58 Q306,60 306,60 Q306,60 292,62 L192,72 Z" fill={FILL[look]} stroke="#1F2621" stroke-width="2" />
+        <rect x="124" y="46" width="70" height="28" fill="#9AA29C" stroke="#6B736C" stroke-width="2" />
+        <path d="M192,48 L292,58 Q306,60 306,60 Q306,60 292,62 L192,72 Z" fill={FILL[look]} stroke="#6B736C" stroke-width="2" />
         {#if look === 'shiny'}
           <path d="M200,54 L284,59" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" opacity="0.85" />
         {/if}

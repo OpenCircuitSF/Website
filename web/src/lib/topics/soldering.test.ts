@@ -67,6 +67,12 @@ describe('iron temperature', () => {
     expect(jointAt(450, 'sn63', 'chisel').kind).toBe('scorch');
   });
 
+  it('a too-hot joint is never described as a cold one', () => {
+    const hot = jointAt(380, 'sn63', 'chisel');
+    expect(hot.art.src).toBe(JOINT_ART.cold.src);
+    expect(hot.art.alt.toLowerCase()).not.toContain('cold');
+  });
+
   it('a fine tip at a good setting is slow: contact beats the dial', () => {
     expect(jointAt(340, 'sn63', 'fine').kind).toBe('slow');
   });

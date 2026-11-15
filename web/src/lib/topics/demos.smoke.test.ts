@@ -106,4 +106,42 @@ describe('guide demos', () => {
     await fireEvent.click(r.getByText('Next →'));
     expect(r.getByRole('heading', { name: 'Tack one corner' })).toBeTruthy();
   });
+
+  // aria-disabled (not disabled) keeps focus on the button, so each handler
+  // must ignore the click itself (#0667 review).
+  it('aria-disabled soldering buttons ignore clicks', async () => {
+    const q = render(JointQuiz);
+    await fireEvent.click(q.getByRole('button', { name: 'Cold joint' }));
+    await fireEvent.click(q.getByRole('button', { name: 'Good joint' }));
+    expect(q.getByText('Correct!')).toBeTruthy();
+    expect(q.getByRole('button', { name: 'Good joint' }).getAttribute('aria-disabled')).toBe('true');
+    cleanup();
+
+    const t = render(TinningDemo);
+    await fireEvent.click(t.getByText('Join them'));
+    await fireEvent.click(t.getByText('Tin the wire'));
+    await fireEvent.click(t.getByText('Tin the pad'));
+    expect(t.getByRole('heading', { name: 'A weak blob' })).toBeTruthy();
+    cleanup();
+
+    const h = render(HeaderPinsDemo);
+    await fireEvent.click(h.getByText('← Back'));
+    expect(h.container.textContent).toContain('Step 1 of 6');
+    for (let i = 0; i < 8; i++) await fireEvent.click(h.getByText('Next →'));
+    expect(h.container.textContent).toContain('Step 6 of 6');
+  });
+
+  it('joint quiz: focus lands on "Try again" at the end and back on a choice after restarting', async () => {
+    const r = render(JointQuiz);
+    for (let i = 0; i < 7; i++) {
+      await fireEvent.click(r.getByRole('button', { name: 'Good joint' }));
+      await fireEvent.click(r.getByRole('button', { name: /Next joint|See score/ }));
+      await tick();
+    }
+    const again = r.getByRole('button', { name: 'Try again' });
+    expect(document.activeElement).toBe(again);
+    await fireEvent.click(again);
+    await tick();
+    expect(document.activeElement?.textContent).toBe('Good joint');
+  });
 });

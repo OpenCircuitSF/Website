@@ -18,14 +18,14 @@
       {#each pins as i (i)}
         <rect x={pinX(i) - 3} y={s.boardOn ? 82 : 84} width="6" height="70" fill="#D4A63A" stroke="#7A5A14" stroke-width="1" />
       {/each}
-      <rect x="40" y="118" width="280" height="14" rx="2" fill="#1A1A1A" stroke="#000" stroke-width="1" />
+      <rect x="40" y="118" width="280" height="14" rx="2" fill="#1A1A1A" stroke="#6B736C" stroke-width="1" />
       <!-- breadboard -->
       <rect x="16" y="140" width="328" height="52" rx="4" fill="#EDEAE0" stroke="#9A9688" stroke-width="2" />
       {#each pins as i (i)}
         <rect x={pinX(i) - 5} y="140" width="10" height="5" fill="#55524A" />
       {/each}
       {#if s.boardOn}
-        <rect x="34" y="104" width="292" height="12" rx="2" fill="#1C201C" stroke="#3A423A" stroke-width="2" />
+        <rect x="34" y="104" width="292" height="12" rx="2" fill="#1C201C" stroke="#6B736C" stroke-width="2" />
         {#each pins as i (i)}
           <rect x={pinX(i) - 10} y="100" width="20" height="4" fill="#C8783A" />
           {#if s.soldered.includes(i)}
@@ -45,8 +45,8 @@
         {@const x = pinX(s.iron)}
         <!-- mirrored for pins on the right half so the iron stays in frame -->
         <g class="iron" transform={s.iron >= HEADER_PINS / 2 ? `translate(${2 * x} 0) scale(-1 1)` : undefined}>
-          <path d="M{x + 6},90 L{x + 40},40 L{x + 48},46 Z" fill="#9AA29C" stroke="#1F2621" stroke-width="1.5" />
-          <rect x={x + 36} y="6" width="16" height="44" rx="4" transform="rotate(35 {x + 44} 40)" fill="#2B302B" stroke="#1F2621" stroke-width="1.5" />
+          <path d="M{x + 6},90 L{x + 40},40 L{x + 48},46 Z" fill="#9AA29C" stroke="#6B736C" stroke-width="1.5" />
+          <rect x={x + 36} y="6" width="16" height="44" rx="4" transform="rotate(35 {x + 44} 40)" fill="#2B302B" stroke="#6B736C" stroke-width="1.5" />
           <path d="M{x - 30},70 C{x - 20},76 {x - 12},84 {x - 6},88" fill="none" stroke="#C9D0D5" stroke-width="4" stroke-linecap="round" />
         </g>
       {/if}

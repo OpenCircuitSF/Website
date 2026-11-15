@@ -9,6 +9,7 @@
   let picked = $state<JointTypeId | null>(null);
   let score = $state(0);
   let choicesEl = $state<HTMLDivElement>();
+  let quizEl = $state<HTMLDivElement>();
 
   const done = $derived(round >= QUIZ_ORDER.length);
   const current = $derived(done ? null : jointTypeById(QUIZ_ORDER[round]));
@@ -29,17 +30,19 @@
   function next() {
     round += 1;
     picked = null;
-    // The Next button just disappeared; put focus on the new round's first choice.
-    tick().then(() => choicesEl?.querySelector('button')?.focus());
+    // The Next button just disappeared; put focus on the new round's first
+    // choice, or on "Try again" once the score is showing.
+    tick().then(() => (done ? quizEl?.querySelector<HTMLButtonElement>('.end button') : choicesEl?.querySelector('button'))?.focus());
   }
   function restart() {
     round = 0;
     picked = null;
     score = 0;
+    tick().then(() => choicesEl?.querySelector('button')?.focus());
   }
 </script>
 
-<div class="quiz">
+<div class="quiz" bind:this={quizEl}>
   {#if current}
     <p class="progress">Joint {round + 1} of {QUIZ_ORDER.length} · Score {score}</p>
     <div class="layout">
