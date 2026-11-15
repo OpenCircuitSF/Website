@@ -4,15 +4,17 @@
 // unit-testable without a DOM — see subscribe.test.ts. Mirrors admin.ts's
 // "pure logic lives in a .ts module" convention.
 
-/** The three UTM fields the wire contract carries (PRD §6.3). Always present in a
- * built request, defaulting to '' when nothing was captured. */
+/** The four UTM fields the wire contract carries (PRD §6.3; utm_content since
+ * #0662, naming the guide post a #0658 short link came from). Always present in
+ * a built request, defaulting to '' when nothing was captured. */
 export interface UtmParams {
   utm_source: string;
   utm_medium: string;
   utm_campaign: string;
+  utm_content: string;
 }
 
-const EMPTY_UTM: UtmParams = { utm_source: '', utm_medium: '', utm_campaign: '' };
+const EMPTY_UTM: UtmParams = { utm_source: '', utm_medium: '', utm_campaign: '', utm_content: '' };
 
 /** The sessionStorage key UTM attribution is cached under between the landing
  * pageview and the eventual subscribe submission (PRD §6.3: "SPA stores utm_* in
@@ -20,7 +22,7 @@ const EMPTY_UTM: UtmParams = { utm_source: '', utm_medium: '', utm_campaign: '' 
 export const UTM_STORAGE_KEY = 'oc_utm';
 
 /**
- * Parse utm_source/utm_medium/utm_campaign off a query string. Pure — no
+ * Parse utm_source/utm_medium/utm_campaign/utm_content off a query string. Pure — no
  * storage access. A field absent from `search` is simply absent from the
  * result (not set to ''), so captureUtmParams below can tell "no UTM params on
  * this pageview" apart from "explicitly cleared".
@@ -31,9 +33,11 @@ export function parseUtmParams(search: string): Partial<UtmParams> {
   const source = sp.get('utm_source');
   const medium = sp.get('utm_medium');
   const campaign = sp.get('utm_campaign');
+  const content = sp.get('utm_content');
   if (source) out.utm_source = source;
   if (medium) out.utm_medium = medium;
   if (campaign) out.utm_campaign = campaign;
+  if (content) out.utm_content = content;
   return out;
 }
 
@@ -72,6 +76,7 @@ export function loadUtmParams(storage: UtmStorage): UtmParams {
       utm_source: parsed.utm_source ?? '',
       utm_medium: parsed.utm_medium ?? '',
       utm_campaign: parsed.utm_campaign ?? '',
+      utm_content: parsed.utm_content ?? '',
     };
   } catch {
     return { ...EMPTY_UTM };
@@ -88,6 +93,9 @@ export interface SubscribeRequestBody {
   utm_source: string;
   utm_medium: string;
   utm_campaign: string;
+  utm_content: string;
+  /** The guide slug the form sat on (#0662), or '' off a guide page. */
+  signup_guide: string;
 }
 
 /** The fields SubscribeForm.svelte's local state supplies to build a request. */
@@ -100,6 +108,8 @@ export interface SubscribePayloadInput {
    * server's timing gate (PRD §6.3). */
   renderedAt: number;
   utm: UtmParams;
+  /** The guide slug this form sits on (#0662); omitted off a guide page. */
+  guide?: string;
 }
 
 /** Shape a SubscribeRequestBody from form state. Pure — trims the email, passes
@@ -113,6 +123,8 @@ export function buildSubscribeRequest(input: SubscribePayloadInput): SubscribeRe
     utm_source: input.utm.utm_source,
     utm_medium: input.utm.utm_medium,
     utm_campaign: input.utm.utm_campaign,
+    utm_content: input.utm.utm_content,
+    signup_guide: input.guide ?? '',
   };
 }
 
@@ -146,6 +158,20 @@ export function toggleSlug(selected: ReadonlySet<string>, slug: string): Set<str
     next.add(slug);
   }
   return next;
+}
+
+/**
+ * The interest slugs a subscribe form actually posts (#0662): the selected
+ * slugs that are in the active list, in active-list order. A preselected slug
+ * that is not active (a workshop can carry a deactivated tag) is never
+ * rendered as a checkbox, so posting it would earn a 400 the reader cannot
+ * see the cause of; dropping it matches what the reader saw.
+ */
+export function submittableInterests(
+  selected: ReadonlySet<string>,
+  active: readonly { slug: string }[],
+): string[] {
+  return active.filter((it) => selected.has(it.slug)).map((it) => it.slug);
 }
 
 /** The PATCH /api/preferences wire body (internal/handlers/preferences.go's

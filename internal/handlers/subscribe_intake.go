@@ -191,6 +191,8 @@ type subscribeIntakePayload struct {
 	UTMSource         string  `json:"utm_source"`
 	UTMMedium         string  `json:"utm_medium"`
 	UTMCampaign       string  `json:"utm_campaign"`
+	UTMContent        string  `json:"utm_content"`  // #0662; "" for rows queued before it
+	SignupGuide       string  `json:"signup_guide"` // #0662; "" for rows queued before it
 	ConfirmTTLSeconds int64   `json:"confirm_ttl_seconds"`
 }
 
@@ -337,6 +339,8 @@ func (h *SubscribeHandler) processIntakeRow(row outbox.Row) {
 		UTMSource:       payload.UTMSource,
 		UTMMedium:       payload.UTMMedium,
 		UTMCampaign:     payload.UTMCampaign,
+		UTMContent:      payload.UTMContent,
+		SignupGuide:     payload.SignupGuide,
 		ConfirmTTL:      time.Duration(payload.ConfirmTTLSeconds) * time.Second,
 	}
 

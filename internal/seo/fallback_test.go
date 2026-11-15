@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/guides"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 )
 
@@ -717,4 +718,55 @@ func TestFallbackDetailShowsTypeName(t *testing.T) {
 	if strings.Contains(body, "<p></p>") {
 		t.Errorf("an empty type rendered an empty line: %s", body)
 	}
+}
+
+// #0662: every guide page's fallback carries the events and newsletter
+// sections GuideEnd.svelte renders, with links to /events and /subscribe.
+func TestRender_GuidePageHasEventsAndNewsletterSections(t *testing.T) {
+	r := newTestRenderer(nil)
+	for _, g := range guides.All() {
+		body := string(r.Render(g.Path()))
+		for _, want := range []string{
+			"<h2>" + guideEndEventsH2 + "</h2>",
+			"<h2>" + guideEndSignupH2 + "</h2>",
+			`<a href="/events">` + guideEndEventsLink + `</a>`,
+			`<a href="/subscribe">`,
+			"<p>" + guideEndSignupLede + "</p>",
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s: fallback missing %q", g.Path(), want)
+			}
+		}
+		if n := strings.Count(body, "<h1"); n != 1 {
+			t.Errorf("%s: %d <h1>", g.Path(), n)
+		}
+	}
+}
+
+// #0662: the guide-end fallback copy must stay in step with GuideEnd.svelte.
+func TestGuideEndFallbackCopyMatchesSvelte(t *testing.T) {
+	raw, err := os.ReadFile(repoPath("web/src/lib/GuideEnd.svelte"))
+	if err != nil {
+		t.Fatalf("reading GuideEnd.svelte: %v", err)
+	}
+	copies := []string{guideEndEventsH2, guideEndEventsLink, guideEndSignupH2, guideEndSignupLede}
+	missing := func(src string) []string {
+		norm := normalizeSourceForCopyGuard(src, extractAppName(t))
+		var out []string
+		for _, s := range copies {
+			if !strings.Contains(norm, s) {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	if m := missing(string(raw)); len(m) > 0 {
+		t.Errorf("GuideEnd.svelte no longer contains %q -- the guide page's server fallback has drifted from the SPA", m)
+	}
+	t.Run("mutation", func(t *testing.T) {
+		mutated := strings.ReplaceAll(string(raw), "newsletter", "mailing list")
+		if len(missing(mutated)) == 0 {
+			t.Error("guard did not notice a changed newsletter heading")
+		}
+	})
 }

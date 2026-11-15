@@ -175,6 +175,13 @@ const (
 	guidesWorkshopLede = "Step-by-step companions to our in-person workshops."
 	guidesSeeAll       = "See all guides"
 
+	// #0662: the end of every guide page (web/src/lib/GuideEnd.svelte).
+	// TestGuideEndFallbackCopyMatchesSvelte checks each is in that file.
+	guideEndEventsH2   = "Upcoming events"
+	guideEndEventsLink = "See all events"
+	guideEndSignupH2   = "Get the newsletter"
+	guideEndSignupLede = "New guides and upcoming workshops by email. Pick the topics you want, and unsubscribe any time."
+
 	homeNextUpH2    = "Next up"
 	homeNextUpEmpty = `Nothing scheduled yet — check back soon, or subscribe below.`
 	homeSeeAll      = "See all events"
@@ -312,6 +319,11 @@ type pageTemplateData struct {
 	WorkshopGuideItems []guideListItem
 	GuideHook          string
 	SeeAllGuidesLabel  string
+	// #0662: the guide page's events and newsletter sections.
+	GuideEventsHeading string
+	GuideEventsLink    string
+	GuideSignupHeading string
+	GuideSignupLede    string
 
 	// pageArchiveEntry
 	DateAttr string // ArchiveEntry.ArchivedAt, raw RFC 3339, for <time datetime="...">
@@ -347,7 +359,7 @@ const pageTemplateSource = `
 {{else if eq .Kind "archiveIndex"}}<p>{{.ArchiveLede}}</p>{{if .ArchiveItems}}<ul>{{range .ArchiveItems}}<li><a href="/archive/{{.Slug}}">{{.Subject}}</a> <time datetime="{{.DateAttr}}">{{.DateLabel}}</time>{{if .Preheader}}<p>{{.Preheader}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.ArchiveEmpty}}</p>{{end}}
 {{else if eq .Kind "workshop"}}{{if .TypeName}}<p>{{.TypeName}}</p>{{end}}{{if .Canceled}}<p>This event has been canceled.</p>{{end}}<dl><dt>When</dt><dd><time datetime="{{.StartsAt}}">{{.DateLabel}}</time></dd><dt>Where</dt><dd>{{if .LocationLines}}{{range .LocationLines}}{{.}}<br>{{end}}{{else}}Location TBA{{end}}</dd></dl>{{if .SignupHref}}<p><a href="{{.SignupHref}}" target="_blank" rel="noopener noreferrer">Register for this event</a></p>{{end}}{{if .BodyHTML}}<div class="workshop-body">{{.BodyHTML}}</div>{{end}}<p><a href="/events">See all events</a></p>
 {{else if eq .Kind "guidesIndex"}}<p>{{.GuidesLede}}</p><ul>{{range .GuideItems}}<li><a href="{{.Href}}">{{.Title}}</a><p>{{.Hook}}</p></li>{{end}}</ul><section><h2>{{.GuidesHeading}}</h2><p class="text-muted">{{.GuidesWorkshopLede}}</p><ul>{{range .WorkshopGuideItems}}<li><a href="{{.Href}}">{{.Title}}</a><p>{{.Hook}}</p></li>{{end}}</ul></section>
-{{else if eq .Kind "guide"}}<p>{{.GuideHook}}</p><p><a href="/guides">{{.SeeAllGuidesLabel}}</a></p>
+{{else if eq .Kind "guide"}}<p>{{.GuideHook}}</p><section><h2>{{.GuideEventsHeading}}</h2><p><a href="/events">{{.GuideEventsLink}}</a></p></section><section><h2>{{.GuideSignupHeading}}</h2><p>{{.GuideSignupLede}}</p><p><a href="/subscribe">{{.GuideSignupHeading}}</a></p></section><p><a href="/guides">{{.SeeAllGuidesLabel}}</a></p>
 {{else if eq .Kind "archiveEntry"}}<p><time datetime="{{.DateAttr}}">{{.DateLabel}}</time></p>{{if .BodyHTML}}<div class="archive-body">{{.BodyHTML}}</div>{{end}}<p><a href="/archive">See the archive</a></p>
 {{end}}</main>{{end}}`
 
@@ -456,6 +468,8 @@ func (r *Renderer) renderPage(p pageContent) (pageHTML string, cacheable bool) {
 		}
 		return r.execTemplate(pageTemplateData{
 			Kind: "guide", H1: g.Title, GuideHook: g.Hook, SeeAllGuidesLabel: guidesSeeAll,
+			GuideEventsHeading: guideEndEventsH2, GuideEventsLink: guideEndEventsLink,
+			GuideSignupHeading: guideEndSignupH2, GuideSignupLede: guideEndSignupLede,
 		}), true
 	default:
 		return "", true

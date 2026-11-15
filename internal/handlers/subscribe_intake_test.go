@@ -627,3 +627,34 @@ func TestSubscribeIntakeWorker_ClaimsRowsIndividuallyNotAsBatch(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 }
+
+// TestSubscribeIntakeWorker_RecoveredRowKeepsGuideAttribution (#0662): an
+// orphaned intake row reprocessed by the recovery poller keeps its guide and
+// utm_content attribution on the signup_requested event.
+func TestSubscribeIntakeWorker_RecoveredRowKeepsGuideAttribution(t *testing.T) {
+	pool := subscribeTestPool(t)
+	h, _ := subscribeMux(t, pool, nil)
+	email := subscribeUniqueEmail(t)
+	if _, err := h.intake.Enqueue(context.Background(), outbox.Item{
+		Kind:      outbox.KindSubscribeIntake,
+		Recipient: email,
+		Payload: subscribeIntakePayload{
+			ConfirmTTLSeconds: int64(subscribeConfirmTTL.Seconds()),
+			SignupGuide:       "delay-vs-millis",
+			UTMContent:        "gp7",
+		},
+	}); err != nil {
+		t.Fatalf("seeding an orphaned intake row: %v", err)
+	}
+	deadline := time.Now().Add(intakePollInterval*2 + 5*time.Second)
+	for !subscriberExists(t, pool, email) && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !subscriberExists(t, pool, email) {
+		t.Fatal("no subscriber row appeared within the deadline")
+	}
+	d := signupRequestedDetailFor(t, pool, email)
+	if d["guide"] != "delay-vs-millis" || d["utm_content"] != "gp7" {
+		t.Errorf("detail = %v, want guide and utm_content kept", d)
+	}
+}

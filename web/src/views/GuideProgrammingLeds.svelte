@@ -6,6 +6,7 @@
   import TerminalPanel from '../lib/TerminalPanel.svelte';
   import Prompt from '../lib/Prompt.svelte';
   import TraceDivider from '../lib/TraceDivider.svelte';
+  import GuideEnd from '../lib/GuideEnd.svelte';
   import LedStrip from '../lib/guide/LedStrip.svelte';
   import StepList from '../lib/guide/StepList.svelte';
   import BoardPinout from '../lib/guide/BoardPinout.svelte';
@@ -210,6 +211,10 @@
       {/if}
     </p>
   </section>
+
+  <TraceDivider />
+
+  <GuideEnd kind="workshop" slug={GUIDE.slug} />
 </main>
 
 <style>

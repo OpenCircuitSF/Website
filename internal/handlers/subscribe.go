@@ -150,6 +150,7 @@ import (
 	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
+	"github.com/brennanMKE/OpenCircuitSF/internal/guides"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
@@ -724,6 +725,11 @@ func (h *SubscribeHandler) Close(ctx context.Context) error {
 //   - utm_source / utm_medium / utm_campaign: attribution captured from the
 //     landing URL, per PRD §6.3's "SPA stores utm_* in sessionStorage on
 //     first paint".
+//   - utm_content: the fourth UTM tag (#0662). A #0658 guide-post short
+//     link sets it to "gp{id}"; kept only in the signup event's detail.
+//   - signup_guide: the slug of the guide page the form sat on (#0662), or
+//     "". An unknown slug is dropped silently (signupGuideOrEmpty) and never
+//     changes the response.
 type subscribeRequest struct {
 	Email       string   `json:"email"`
 	Interests   []string `json:"interests"`
@@ -732,6 +738,32 @@ type subscribeRequest struct {
 	UTMSource   string   `json:"utm_source"`
 	UTMMedium   string   `json:"utm_medium"`
 	UTMCampaign string   `json:"utm_campaign"`
+	UTMContent  string   `json:"utm_content"`
+	SignupGuide string   `json:"signup_guide"`
+}
+
+// maxUTMContentBytes bounds the utm_content kept in a signup event's detail
+// (#0662).
+const maxUTMContentBytes = 100
+
+// signupGuideOrEmpty returns s's guide slug if it names a known guide
+// (internal/guides), else "". Constant-cost and query-free, so it adds no
+// branch-dependent work to Subscribe (#0088).
+func signupGuideOrEmpty(s string) string {
+	if g, ok := guides.Lookup(strings.TrimSpace(s)); ok {
+		return g.Slug
+	}
+	return ""
+}
+
+// utmContentOrEmpty trims s and returns it if it is 1 to maxUTMContentBytes
+// bytes long, else "" (#0662).
+func utmContentOrEmpty(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > maxUTMContentBytes {
+		return ""
+	}
+	return s
 }
 
 // subscribeResponse is the uniform 202 body every branch of Subscribe
@@ -838,6 +870,8 @@ func (h *SubscribeHandler) Subscribe(w http.ResponseWriter, r *http.Request) {
 		UTMSource:       req.UTMSource,
 		UTMMedium:       req.UTMMedium,
 		UTMCampaign:     req.UTMCampaign,
+		UTMContent:      utmContentOrEmpty(req.UTMContent),
+		SignupGuide:     signupGuideOrEmpty(req.SignupGuide),
 		ConfirmTTL:      subscribeConfirmTTL,
 	}
 
@@ -874,6 +908,8 @@ func (h *SubscribeHandler) Subscribe(w http.ResponseWriter, r *http.Request) {
 				UTMSource:         evidence.UTMSource,
 				UTMMedium:         evidence.UTMMedium,
 				UTMCampaign:       evidence.UTMCampaign,
+				UTMContent:        evidence.UTMContent,
+				SignupGuide:       evidence.SignupGuide,
 				ConfirmTTLSeconds: int64(evidence.ConfirmTTL.Seconds()),
 			},
 			Delay: intakeGraceDelay,
@@ -911,6 +947,8 @@ func (h *SubscribeHandler) newSignup(ctx context.Context, email string, interest
 		UTMSource:       evidence.UTMSource,
 		UTMMedium:       evidence.UTMMedium,
 		UTMCampaign:     evidence.UTMCampaign,
+		UTMContent:      evidence.UTMContent,
+		SignupGuide:     evidence.SignupGuide,
 		ConfirmTTL:      evidence.ConfirmTTL,
 	}, now)
 	if err != nil {

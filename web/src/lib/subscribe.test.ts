@@ -23,6 +23,7 @@ import {
   COMPLAINED_NO_RESUBSCRIBE_MESSAGE_TAIL,
   COMPLAINED_CONTACT_EMAIL,
   type UtmStorage,
+  submittableInterests,
 } from './subscribe';
 
 // A trivial in-memory Storage fake — no jsdom required, matching theme.test.ts's
@@ -43,11 +44,14 @@ describe('parseUtmParams', () => {
     expect(parseUtmParams('?foo=bar')).toEqual({});
   });
 
-  it('extracts all three params when present', () => {
-    expect(parseUtmParams('?utm_source=instagram&utm_medium=social&utm_campaign=solder-oct')).toEqual({
+  it('extracts all four params when present', () => {
+    expect(
+      parseUtmParams('?utm_source=instagram&utm_medium=social&utm_campaign=solder-oct&utm_content=gp12'),
+    ).toEqual({
       utm_source: 'instagram',
       utm_medium: 'social',
       utm_campaign: 'solder-oct',
+      utm_content: 'gp12',
     });
   });
 
@@ -68,23 +72,30 @@ describe('captureUtmParams / loadUtmParams', () => {
       utm_source: 'instagram',
       utm_medium: '',
       utm_campaign: 'solder-oct',
+      utm_content: '',
     });
+  });
+
+  it('keeps utm_content when it is the only tag captured', () => {
+    const storage = fakeStorage();
+    captureUtmParams('?utm_content=gp3', storage);
+    expect(loadUtmParams(storage)).toEqual({ utm_source: '', utm_medium: '', utm_campaign: '', utm_content: 'gp3' });
   });
 
   it('does not overwrite previously captured attribution with an empty pageview', () => {
     const storage = fakeStorage();
     captureUtmParams('?utm_source=instagram', storage);
     captureUtmParams('', storage); // a later pageview with no UTM params
-    expect(loadUtmParams(storage)).toEqual({ utm_source: 'instagram', utm_medium: '', utm_campaign: '' });
+    expect(loadUtmParams(storage)).toEqual({ utm_source: 'instagram', utm_medium: '', utm_campaign: '', utm_content: '' });
   });
 
   it('loadUtmParams defaults to all-empty when nothing was ever captured', () => {
-    expect(loadUtmParams(fakeStorage())).toEqual({ utm_source: '', utm_medium: '', utm_campaign: '' });
+    expect(loadUtmParams(fakeStorage())).toEqual({ utm_source: '', utm_medium: '', utm_campaign: '', utm_content: '' });
   });
 
   it('loadUtmParams tolerates malformed stored JSON', () => {
     const storage = fakeStorage({ [UTM_STORAGE_KEY]: 'not json{{{' });
-    expect(loadUtmParams(storage)).toEqual({ utm_source: '', utm_medium: '', utm_campaign: '' });
+    expect(loadUtmParams(storage)).toEqual({ utm_source: '', utm_medium: '', utm_campaign: '', utm_content: '' });
   });
 });
 
@@ -95,7 +106,7 @@ describe('buildSubscribeRequest', () => {
       interests: ['homelab', 'soldering'],
       website: '',
       renderedAt: 1_700_000_000_000,
-      utm: { utm_source: 'instagram', utm_medium: 'social', utm_campaign: 'solder-oct' },
+      utm: { utm_source: 'instagram', utm_medium: 'social', utm_campaign: 'solder-oct', utm_content: 'gp1' },
     });
     expect(body).toEqual({
       email: 'person@example.com',
@@ -105,7 +116,21 @@ describe('buildSubscribeRequest', () => {
       utm_source: 'instagram',
       utm_medium: 'social',
       utm_campaign: 'solder-oct',
+      utm_content: 'gp1',
+      signup_guide: '',
     });
+  });
+
+  it('sends signup_guide when a guide is given', () => {
+    const body = buildSubscribeRequest({
+      email: 'a@example.com',
+      interests: [],
+      website: '',
+      renderedAt: 0,
+      utm: { utm_source: '', utm_medium: '', utm_campaign: '', utm_content: '' },
+      guide: 'delay-vs-millis',
+    });
+    expect(body.signup_guide).toBe('delay-vs-millis');
   });
 
   it('never rejects a non-ASCII local part client-side — passes it through unchanged (trimmed)', () => {
@@ -114,7 +139,7 @@ describe('buildSubscribeRequest', () => {
       interests: [],
       website: '',
       renderedAt: 0,
-      utm: { utm_source: '', utm_medium: '', utm_campaign: '' },
+      utm: { utm_source: '', utm_medium: '', utm_campaign: '', utm_content: '' },
     });
     expect(body.email).toBe('büro@example.com');
   });
@@ -323,5 +348,18 @@ describe('COMPLAINED_CONTACT_EMAIL (#0090 bounce fix)', () => {
   it('drops the server no-op message\'s "No change: " lead-in and recapitalises', () => {
     expect(COMPLAINED_NO_RESUBSCRIBE_MESSAGE).not.toContain('No change:');
     expect(COMPLAINED_NO_RESUBSCRIBE_MESSAGE.startsWith('This address is marked')).toBe(true);
+  });
+});
+
+describe('submittableInterests (#0662)', () => {
+  const active = [{ slug: 'beginner' }, { slug: 'soldering' }, { slug: 'homelab' }];
+  it('keeps only selected slugs that are active', () => {
+    expect(submittableInterests(new Set(['soldering', 'retired']), active)).toEqual(['soldering']);
+  });
+  it('orders by the active list, not by selection order', () => {
+    expect(submittableInterests(new Set(['homelab', 'beginner']), active)).toEqual(['beginner', 'homelab']);
+  });
+  it('returns [] when the active list is empty', () => {
+    expect(submittableInterests(new Set(['soldering']), [])).toEqual([]);
   });
 });

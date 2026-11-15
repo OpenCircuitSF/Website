@@ -7,6 +7,7 @@
   import TerminalPanel from '../lib/TerminalPanel.svelte';
   import Prompt from '../lib/Prompt.svelte';
   import TraceDivider from '../lib/TraceDivider.svelte';
+  import GuideEnd from '../lib/GuideEnd.svelte';
   import ShareBar from '../lib/topics/ShareBar.svelte';
   import MiniStrip from '../lib/topics/MiniStrip.svelte';
   import { TOPICS, topicBySlug } from '../lib/topics/topics';
@@ -67,6 +68,10 @@
         </p>
       </div>
     </section>
+
+    {#key topic.slug}
+      <GuideEnd kind="topic" slug={topic.slug} />
+    {/key}
 
     <TraceDivider />
 

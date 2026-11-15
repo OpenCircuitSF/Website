@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -2761,4 +2762,85 @@ func TestList_And_GetByID_ScanSubscriberColumnOrderRoundTrip(t *testing.T) {
 		t.Fatalf("List(%q) returned total=%d len=%d, want exactly 1", email, total, len(listed))
 	}
 	assertFields(t, "List (qualifiedSubscriberColumns)", listed[0])
+}
+
+// signupRequestedDetail reads the detail of subscriberID's most recent
+// signup_requested event (#0662).
+func signupRequestedDetail(t *testing.T, pool *pgxpool.Pool, subscriberID int64) map[string]any {
+	t.Helper()
+	var d map[string]any
+	if err := pool.QueryRow(context.Background(),
+		`SELECT detail FROM subscriber_events WHERE subscriber_id = $1 AND action = 'signup_requested' ORDER BY id DESC LIMIT 1`,
+		subscriberID).Scan(&d); err != nil {
+		t.Fatalf("reading signup_requested detail: %v", err)
+	}
+	return d
+}
+
+func TestCreate_SignupEventCarriesGuideAttribution(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	sub, err := store.Create(context.Background(), NewSignup{
+		Email: uniqueEmail(t), ConfirmTTL: time.Hour,
+		UTMCampaign: "guides", UTMContent: "gp12", SignupGuide: "delay-vs-millis",
+	}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	d := signupRequestedDetail(t, pool, sub.ID)
+	want := map[string]any{"kind": "new", "guide": "delay-vs-millis", "utm_campaign": "guides", "utm_content": "gp12"}
+	if !reflect.DeepEqual(d, want) {
+		t.Errorf("detail = %v, want %v", d, want)
+	}
+}
+
+func TestCreate_SignupEventOmitsEmptyAttribution(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	sub, err := store.Create(context.Background(), NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, time.Now())
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if d := signupRequestedDetail(t, pool, sub.ID); !reflect.DeepEqual(d, map[string]any{"kind": "new"}) {
+		t.Errorf("detail = %v, want exactly {kind: new}", d)
+	}
+}
+
+func TestRestartSignup_SignupEventCarriesGuideAttribution(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	now := time.Now().Add(-72 * time.Hour) // keep clear of Growth30Days' windows
+	created, err := store.Create(ctx, NewSignup{Email: uniqueEmail(t), ConfirmTTL: time.Hour}, now)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Unsubscribe(ctx, created.ID, SourceOneClick, now.Add(time.Minute)); err != nil {
+		t.Fatalf("Unsubscribe: %v", err)
+	}
+	if _, err := store.RestartSignup(ctx, created.ID, RestartSignupInput{
+		ConfirmTTL: time.Hour, SignupGuide: "programming-leds", UTMContent: "gp3",
+	}, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("RestartSignup: %v", err)
+	}
+	want := map[string]any{"kind": "restarted", "guide": "programming-leds", "utm_content": "gp3"}
+	if d := signupRequestedDetail(t, pool, created.ID); !reflect.DeepEqual(d, want) {
+		t.Errorf("detail = %v, want %v", d, want)
+	}
+}
+
+func TestClaimAndEnqueueConfirmation_ConvertingEventCarriesGuideAttribution(t *testing.T) {
+	pool := testPool(t)
+	subStore := NewStore(pool)
+	now := time.Now().UTC().Truncate(time.Second)
+	invited, _ := commitInvite(t, NewImportStore(pool), uniqueImportEmail(t), now)
+	if claimed, err := subStore.ClaimAndEnqueueConfirmation(context.Background(), invited, now.Add(time.Minute), time.Hour, time.Hour,
+		RestartSignupInput{SignupIP: "203.0.113.5", SignupGuide: "delay-vs-millis", UTMCampaign: "guides"},
+	); err != nil || !claimed {
+		t.Fatalf("ClaimAndEnqueueConfirmation: claimed=%v err=%v", claimed, err)
+	}
+	want := map[string]any{"kind": "self_after_invite", "guide": "delay-vs-millis", "utm_campaign": "guides"}
+	if d := signupRequestedDetail(t, pool, invited.ID); !reflect.DeepEqual(d, want) {
+		t.Errorf("detail = %v, want %v", d, want)
+	}
 }

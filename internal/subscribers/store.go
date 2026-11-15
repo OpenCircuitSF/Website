@@ -324,7 +324,12 @@ type NewSignup struct {
 	UTMSource       string
 	UTMMedium       string
 	UTMCampaign     string
-	ConfirmTTL      time.Duration
+	// UTMContent and SignupGuide (#0662) are event-detail-only attribution:
+	// written into the signup_requested event's detail, never into a
+	// subscribers column. See signupEventDetail.
+	UTMContent  string
+	SignupGuide string
+	ConfirmTTL  time.Duration
 	// Synthetic marks the created row migration 000019's synthetic column
 	// (see the package doc comment). Every real caller — the public
 	// subscribe endpoint (#0026) and the admin manual-add flow (#0032) —
@@ -523,7 +528,7 @@ func (s *Store) Create(ctx context.Context, in NewSignup, now time.Time) (Subscr
 			SubscriberID: &sub.ID,
 			Email:        sub.Email,
 			Action:       ActionSignupRequested,
-			Detail:       map[string]any{"kind": "new"},
+			Detail:       signupEventDetail("new", signupAttribution{Guide: in.SignupGuide, UTMCampaign: in.UTMCampaign, UTMContent: in.UTMContent}),
 		}); err != nil {
 			return Subscriber{}, fmt.Errorf("subscribers: recording signup_requested for %d: %w", sub.ID, err)
 		}
@@ -751,7 +756,7 @@ func (s *Store) ClaimAndEnqueueConfirmation(ctx context.Context, sub Subscriber,
 			SubscriberID: &locked.ID,
 			Email:        locked.Email,
 			Action:       ActionSignupRequested,
-			Detail:       map[string]any{"kind": "self_after_invite"},
+			Detail:       signupEventDetail("self_after_invite", signupAttribution{Guide: evidence.SignupGuide, UTMCampaign: evidence.UTMCampaign, UTMContent: evidence.UTMContent}),
 		}); err != nil {
 			return false, fmt.Errorf("subscribers: recording self_after_invite event for %d: %w", sub.ID, err)
 		}
@@ -1375,7 +1380,35 @@ type RestartSignupInput struct {
 	UTMSource       string
 	UTMMedium       string
 	UTMCampaign     string
-	ConfirmTTL      time.Duration
+	// UTMContent and SignupGuide (#0662) are event-detail-only attribution,
+	// like NewSignup's: never written to a subscribers column.
+	UTMContent  string
+	SignupGuide string
+	ConfirmTTL  time.Duration
+}
+
+// signupAttribution is the website attribution a signup_requested event's
+// detail carries (#0662): the guide page the form sat on, and the campaign
+// tags of the visit.
+type signupAttribution struct {
+	Guide, UTMCampaign, UTMContent string
+}
+
+// signupEventDetail builds a signup_requested event's detail: {"kind": kind}
+// plus "guide", "utm_campaign" and "utm_content" for whichever are non-empty
+// (#0662). SignupsByGuide reads these keys.
+func signupEventDetail(kind string, in signupAttribution) map[string]any {
+	d := map[string]any{"kind": kind}
+	if in.Guide != "" {
+		d["guide"] = in.Guide
+	}
+	if in.UTMCampaign != "" {
+		d["utm_campaign"] = in.UTMCampaign
+	}
+	if in.UTMContent != "" {
+		d["utm_content"] = in.UTMContent
+	}
+	return d
 }
 
 // RestartSignup is the "unsubscribed → treat as a new signup; fresh confirm
@@ -1558,7 +1591,7 @@ func (s *Store) RestartSignup(ctx context.Context, id int64, in RestartSignupInp
 			SubscriberID: &sub.ID,
 			Email:        sub.Email,
 			Action:       ActionSignupRequested,
-			Detail:       map[string]any{"kind": "restarted"},
+			Detail:       signupEventDetail("restarted", signupAttribution{Guide: in.SignupGuide, UTMCampaign: in.UTMCampaign, UTMContent: in.UTMContent}),
 		}); err != nil {
 			return Subscriber{}, fmt.Errorf("subscribers: recording signup_requested for restart %d: %w", sub.ID, err)
 		}

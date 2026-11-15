@@ -40,6 +40,7 @@
     captureUtmParams,
     loadUtmParams,
     toggleSlug,
+    submittableInterests,
     type UtmParams,
   } from './subscribe';
   import type { PublicInterest } from './types';
@@ -49,11 +50,15 @@
     /** Slugs to pre-check on mount (#0029: "used by workshop pages in
      * #0054") -- applied once the active interest list has loaded, so a
      * slug that has since been deactivated is simply not offered rather
-     * than silently checked-but-invisible. */
+     * than silently checked-but-invisible. A preselected slug that is not
+     * active is never posted either (#0662, submittableInterests). */
     preselect?: string[];
+    /** The guide slug this form sits on (#0662), sent as signup_guide for
+     * attribution. */
+    guide?: string;
   }
 
-  let { preselect = [] }: Props = $props();
+  let { preselect = [], guide }: Props = $props();
 
   let email = $state('');
   let website = $state(''); // honeypot -- must stay empty for a real visitor
@@ -67,7 +72,7 @@
   let activeInterests = $state<PublicInterest[]>([]);
   let interestsLoadError = $state(false);
   let renderedAt = $state(0);
-  let utm = $state<UtmParams>({ utm_source: '', utm_medium: '', utm_campaign: '' });
+  let utm = $state<UtmParams>({ utm_source: '', utm_medium: '', utm_campaign: '', utm_content: '' });
 
   let submitting = $state(false);
   let errorMessage = $state<string | null>(null);
@@ -112,10 +117,11 @@
 
     const body = buildSubscribeRequest({
       email,
-      interests: Array.from(selected),
+      interests: submittableInterests(selected, activeInterests),
       website,
       renderedAt,
       utm,
+      guide,
     });
 
     try {

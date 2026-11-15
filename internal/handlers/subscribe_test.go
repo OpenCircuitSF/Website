@@ -2277,3 +2277,133 @@ func TestSubscribe_MutationDeferredDoesNotBlockResponse(t *testing.T) {
 		})
 	}
 }
+
+// withGuideAttribution adds #0662's signup_guide and utm_content fields.
+func withGuideAttribution(body map[string]any, guide, content string) map[string]any {
+	body["signup_guide"] = guide
+	body["utm_content"] = content
+	body["utm_campaign"] = "guides"
+	return body
+}
+
+// signupRequestedDetailFor reads the detail of email's latest
+// signup_requested event (#0662).
+func signupRequestedDetailFor(t *testing.T, pool *pgxpool.Pool, email string) map[string]any {
+	t.Helper()
+	var d map[string]any
+	if err := pool.QueryRow(context.Background(),
+		`SELECT detail FROM subscriber_events WHERE email = $1 AND action = 'signup_requested' ORDER BY id DESC LIMIT 1`,
+		email).Scan(&d); err != nil {
+		t.Fatalf("reading signup_requested detail for %s: %v", email, err)
+	}
+	return d
+}
+
+func TestSubscribe_SignupGuideRecordedOnEvent(t *testing.T) {
+	pool := subscribeTestPool(t)
+	h, mux := subscribeMux(t, pool, nil)
+	email := subscribeUniqueEmail(t)
+	resp := doSubscribe(t, h, mux, withGuideAttribution(subscribeBody(email, nil, time.Now()), "delay-vs-millis", "gp12"))
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+	d := signupRequestedDetailFor(t, pool, email)
+	if d["guide"] != "delay-vs-millis" || d["utm_content"] != "gp12" || d["utm_campaign"] != "guides" {
+		t.Errorf("detail = %v, want guide, utm_content and utm_campaign recorded", d)
+	}
+}
+
+func TestSubscribe_UnknownSignupGuideDropped(t *testing.T) {
+	pool := subscribeTestPool(t)
+	h, mux := subscribeMux(t, pool, nil)
+	email := subscribeUniqueEmail(t)
+	resp := doSubscribe(t, h, mux, withGuideAttribution(subscribeBody(email, nil, time.Now()), "no-such-guide", ""))
+	if resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202", resp.StatusCode)
+	}
+	if d := signupRequestedDetailFor(t, pool, email); d["guide"] != nil {
+		t.Errorf("detail = %v, want no guide key for an unknown slug", d)
+	}
+}
+
+// TestSubscribe_GuideAttributionDoesNotChangeResponse: attribution never
+// changes the uniform 202 (AGENTS.md §9), on any branch.
+func TestSubscribe_GuideAttributionDoesNotChangeResponse(t *testing.T) {
+	pool := subscribeTestPool(t)
+	now := time.Now()
+	suppressed := map[string]bool{}
+	type pair struct{ plain, attributed string }
+	mk := func(status string) pair {
+		p := pair{subscribeUniqueEmail(t) + "-" + status + "-a", subscribeUniqueEmail(t) + "-" + status + "-b"}
+		for _, e := range []string{p.plain, p.attributed} {
+			switch status {
+			case "new":
+			case "suppressed":
+				suppressed[e] = true
+			case subscribers.StatusPending:
+				tok := "tok-" + e
+				seedSubscriberRow(t, pool, e, status, &tok, nil)
+			default:
+				seedSubscriberRow(t, pool, e, status, nil, nil)
+			}
+		}
+		return p
+	}
+	cases := map[string]pair{
+		"new":        mk("new"),
+		"active":     {activeEmailFor(t, pool), activeEmailFor(t, pool)},
+		"pending":    mk(subscribers.StatusPending),
+		"suppressed": mk("suppressed"),
+		"complained": mk(subscribers.StatusComplained),
+	}
+	h, mux := subscribeMux(t, pool, fakeSuppressionChecker{suppressed: suppressed})
+	want, err := json.Marshal(subscribeUniformBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, p := range cases {
+		plain := doSubscribe(t, h, mux, subscribeBody(p.plain, nil, now))
+		attr := doSubscribe(t, h, mux, withGuideAttribution(subscribeBody(p.attributed, nil, now), "delay-vs-millis", "gp1"))
+		pb, ab := readBody(t, plain), readBody(t, attr)
+		if plain.StatusCode != http.StatusAccepted || attr.StatusCode != http.StatusAccepted {
+			t.Errorf("%s: status plain=%d attributed=%d, want 202", name, plain.StatusCode, attr.StatusCode)
+		}
+		if !bytes.Equal(pb, ab) || !bytes.Equal(bytes.TrimSpace(ab), want) {
+			t.Errorf("%s: bodies plain=%q attributed=%q, want both %q", name, pb, ab, want)
+		}
+		if !headersEqual(headersIgnoringDate(plain.Header), headersIgnoringDate(attr.Header)) {
+			t.Errorf("%s: headers differ: %v vs %v", name, plain.Header, attr.Header)
+		}
+	}
+}
+
+func TestSignupGuideOrEmpty(t *testing.T) {
+	for in, want := range map[string]string{
+		"delay-vs-millis":     "delay-vs-millis",
+		"  delay-vs-millis  ": "delay-vs-millis",
+		"programming-leds":    "programming-leds",
+		"":                    "",
+		"no-such-guide":       "",
+		"DELAY-VS-MILLIS":     "",
+	} {
+		if got := signupGuideOrEmpty(in); got != want {
+			t.Errorf("signupGuideOrEmpty(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestUTMContentOrEmpty(t *testing.T) {
+	long := strings.Repeat("x", maxUTMContentBytes)
+	for in, want := range map[string]string{
+		"gp12":     "gp12",
+		"  gp12 ":  "gp12",
+		"":         "",
+		"   ":      "",
+		long:       long,
+		long + "x": "",
+	} {
+		if got := utmContentOrEmpty(in); got != want {
+			t.Errorf("utmContentOrEmpty(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
