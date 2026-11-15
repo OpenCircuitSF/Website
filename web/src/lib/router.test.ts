@@ -35,6 +35,7 @@ const staticRouteCases: [string, string][] = [
   ['/', 'home'],
   ['/events', 'workshops'],
   ['/archive', 'archive'],
+  ['/guides', 'guides'],
   ['/about', 'about'],
   ['/privacy', 'privacy'],
   ['/subscribe', 'subscribe'],
@@ -260,5 +261,13 @@ describe('legacyRedirectTarget (#0614)', () => {
   it('no longer routes /workshops itself', () => {
     expect(parsePath('/workshops').name).toBe('not-found');
     expect(parsePath('/workshops/solder').name).toBe('not-found');
+  });
+  it('serves a workshop guide slug instead of redirecting it', () => {
+    expect(legacyRedirectTarget('/workshops/programming-leds')).toBeNull();
+    expect(legacyRedirectTarget('/workshops/programming-leds/')).toBeNull();
+    expect(parsePath('/workshops/programming-leds').name).toBe('workshop-guide');
+    expect(parsePath('/workshops/programming-leds/').params.slug).toBe('programming-leds');
+    // A numbered event slug is not a guide: it keeps its #0614 redirect.
+    expect(legacyRedirectTarget('/workshops/programming-leds-3')).toBe('/events/programming-leds-3');
   });
 });

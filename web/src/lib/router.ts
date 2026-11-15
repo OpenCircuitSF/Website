@@ -28,6 +28,9 @@ export type RouteName =
   | 'workshop-detail'
   | 'archive'
   | 'archive-detail'
+  | 'workshop-guide'
+  | 'guides'
+  | 'topic-guide'
   | 'about'
   | 'privacy'
   | 'subscribe'
@@ -70,6 +73,7 @@ export const STATIC_ROUTES: Readonly<Record<string, RouteName>> = {
   '/': 'home',
   '/events': 'workshops',
   '/archive': 'archive',
+  '/guides': 'guides',
   '/about': 'about',
   '/privacy': 'privacy',
   '/subscribe': 'subscribe',
@@ -97,6 +101,27 @@ const ARCHIVE_DETAIL = /^\/archive\/([^/]+)$/;
 const LEGACY_WORKSHOP_DETAIL = /^\/workshops\/([^/]+)$/;
 
 /**
+ * Student workshop guides: static, client-side pages at /workshops/{slug}.
+ * A fixed list in code, never a store lookup, so the #0614 redirect below
+ * still reveals nothing about drafts. Every /workshops/{slug} NOT in this
+ * list keeps its 301 to /events/{slug}. Mirror any change in
+ * internal/handlers/legacy_workshop_redirects.go.
+ */
+/** Short topic guides at /guides/{slug}. Must match lib/topics/topics.ts
+ * (topics.test.ts checks); kept here so the router doesn't import demos. */
+export const TOPIC_GUIDE_SLUGS: ReadonlySet<string> = new Set([
+  'one-wire-many-leds',
+  'delay-vs-millis',
+  'baud-rate',
+  'charge-only-cables',
+  'led-power-budget',
+  'esp32-c3-supermini-pinout',
+]);
+const TOPIC_GUIDE_DETAIL = /^\/guides\/([^/]+)$/;
+
+export const WORKSHOP_GUIDE_SLUGS: ReadonlySet<string> = new Set(['programming-leds']);
+
+/**
  * The /events URL an old /workshops path now lives at (#0614), or null for
  * every other path. Mirrors internal/handlers/legacy_workshop_redirects.go:
  * the server answers a hard load with a 301, and this covers client-side
@@ -110,7 +135,7 @@ export function legacyRedirectTarget(pathname: string, search = ''): string | nu
     return query ? `/events?type=workshop&${query}` : '/events?type=workshop';
   }
   const match = LEGACY_WORKSHOP_DETAIL.exec(path);
-  if (match) {
+  if (match && !WORKSHOP_GUIDE_SLUGS.has(match[1])) {
     return query ? `/events/${match[1]}?${query}` : `/events/${match[1]}`;
   }
   return null;
@@ -165,6 +190,16 @@ export function parsePath(pathname: string, search = ''): Route {
   const match = WORKSHOP_DETAIL.exec(path);
   if (match) {
     return { name: 'workshop-detail', path, params: { slug: decodeURIComponent(match[1]) }, query };
+  }
+
+  const guideMatch = LEGACY_WORKSHOP_DETAIL.exec(path);
+  if (guideMatch && WORKSHOP_GUIDE_SLUGS.has(guideMatch[1])) {
+    return { name: 'workshop-guide', path, params: { slug: guideMatch[1] }, query };
+  }
+
+  const topicMatch = TOPIC_GUIDE_DETAIL.exec(path);
+  if (topicMatch && TOPIC_GUIDE_SLUGS.has(topicMatch[1])) {
+    return { name: 'topic-guide', path, params: { slug: topicMatch[1] }, query };
   }
 
   const archiveMatch = ARCHIVE_DETAIL.exec(path);

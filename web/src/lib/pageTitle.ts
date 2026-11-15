@@ -86,6 +86,13 @@ const STATIC_HEADING: Record<RouteName, string> = {
   // the campaign has loaded (status === 'loaded'); this is what a fresh
   // navigation shows in the meantime.
   'archive-detail': 'Archive',
+  // workshop-guide -- web/src/views/GuideProgrammingLeds.svelte (the only guide so far)
+  'workshop-guide': 'Programming LEDs',
+  // guarded — web/src/views/GuidesIndex.svelte
+  guides: 'Guides',
+  // fallback — web/src/views/TopicGuide.svelte's <h1> is the topic's own
+  // title from lib/topics/topics.ts, which this table doesn't import.
+  'topic-guide': 'Guide',
   // guarded — web/src/views/About.svelte, whose <h1> is #0520's shared
   // source (web/src/content/about.json's own h1): this table reads the same
   // file the view and the server renderer read.

@@ -84,6 +84,21 @@
   --series-6: #008300;
   --series-other: var(--text-faint);
 
+  /*
+   * Workshop guide hardware (/workshops/{guide}): the props the LED simulator draws --
+   * the wood backing the kit's strip is mounted on, the black PCB of the
+   * strip and board, an unlit LED, and the three wire colors of the wiring
+   * diagram. Physical-object colors, so they barely move between themes.
+   */
+  --guide-wood:      #C99A63;
+  --guide-wood-edge: #9C7140;
+  --guide-pcb:       #1C201C;
+  --guide-pcb-edge:  #3A423A;
+  --guide-led-off:   #2B302B;
+  --guide-wire-5v:   #D23B2F;
+  --guide-wire-gnd:  #2B2B2B;
+  --guide-wire-data: #2E8B3E;
+
   /* Spacing — 8px grid */
   --space-1: 4px;
   --space-2: 8px;
@@ -140,6 +155,15 @@
     --danger-subtle:   #2A1512;
     --danger-hover-bg: #3A1B17;
 
+    --guide-wood:      #8C6A44;
+    --guide-wood-edge: #5E4429;
+    --guide-pcb:       #050605;
+    --guide-pcb-edge:  #2A322B;
+    --guide-led-off:   #1A1E1A;
+    --guide-wire-5v:   #FF5F56;
+    --guide-wire-gnd:  #C9D1C9;
+    --guide-wire-data: #68FF23;
+
     --series-1: #3987e5;
     --series-2: #d95926;
     --series-3: #199e70;
@@ -176,6 +200,15 @@
   --success-subtle:  var(--accent-subtle);
   --danger-subtle:   #2A1512;
   --danger-hover-bg: #3A1B17;
+
+  --guide-wood:      #8C6A44;
+  --guide-wood-edge: #5E4429;
+  --guide-pcb:       #050605;
+  --guide-pcb-edge:  #2A322B;
+  --guide-led-off:   #1A1E1A;
+  --guide-wire-5v:   #FF5F56;
+  --guide-wire-gnd:  #C9D1C9;
+  --guide-wire-data: #68FF23;
 
   --series-1: #3987e5;
   --series-2: #d95926;

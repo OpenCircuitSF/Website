@@ -25,6 +25,9 @@
   import PreferenceCenter from './views/PreferenceCenter.svelte';
   import Unsubscribe from './views/Unsubscribe.svelte';
   import NotFound from './views/NotFound.svelte';
+  import GuideProgrammingLeds from './views/GuideProgrammingLeds.svelte';
+  import GuidesIndex from './views/GuidesIndex.svelte';
+  import TopicGuide from './views/TopicGuide.svelte';
 
   let sessionChecked = $state(false);
 
@@ -158,6 +161,13 @@
     <WorkshopsIndex />
   {:else if $currentRoute.name === 'workshop-detail'}
     <WorkshopDetail />
+  {:else if $currentRoute.name === 'workshop-guide'}
+    <!-- WORKSHOP_GUIDE_SLUGS (router.ts) has one entry so far. -->
+    <GuideProgrammingLeds />
+  {:else if $currentRoute.name === 'guides'}
+    <GuidesIndex />
+  {:else if $currentRoute.name === 'topic-guide'}
+    <TopicGuide />
   {:else if $currentRoute.name === 'archive'}
     <ArchiveIndex />
   {:else if $currentRoute.name === 'archive-detail'}
