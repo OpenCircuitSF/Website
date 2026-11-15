@@ -12,6 +12,13 @@ import ProbesDemo from './ProbesDemo.svelte';
 import ContinuityDemo from './ContinuityDemo.svelte';
 import VoltageDemo from './VoltageDemo.svelte';
 import CurrentDemo from './CurrentDemo.svelte';
+// Soldering guides (#0667)
+import SolderWireDemo from './SolderWireDemo.svelte';
+import IronTempDemo from './IronTempDemo.svelte';
+import TinningDemo from './TinningDemo.svelte';
+import JointQuiz from './JointQuiz.svelte';
+import TipCareDemo from './TipCareDemo.svelte';
+import HeaderPinsDemo from './HeaderPinsDemo.svelte';
 
 afterEach(cleanup);
 
@@ -88,5 +95,95 @@ describe('guide demos', () => {
     await fireEvent.click(r.getByText('→ Upload'));
     await tick();
     expect(r.container.textContent).toContain('Could not exclusively lock port');
+  });
+
+  // Soldering guides (#0667)
+  it('solder wire: plumbing solder is flagged, 63/37 melts at 183 °C', async () => {
+    const r = render(SolderWireDemo);
+    expect(r.container.textContent).toContain('183 °C');
+    await fireEvent.click(r.getByRole('radio', { name: 'Plumbing solder' }));
+    expect(r.container.textContent).toContain('Never use it on electronics');
+  });
+
+  it('iron temperature: 340 °C makes a good leaded joint, too cool for lead-free', async () => {
+    const r = render(IronTempDemo);
+    await fireEvent.input(r.getByRole('slider'), { target: { value: '340' } });
+    expect(r.getByRole('heading', { name: 'Good joint' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: 'Lead-free SAC305' }));
+    expect(r.getByRole('heading', { name: 'It works, slowly' })).toBeTruthy();
+  });
+
+  it('tinning: both tinned joins in about a second; bare makes a blob', async () => {
+    const r = render(TinningDemo);
+    await fireEvent.click(r.getByText('Join them'));
+    expect(r.getByRole('heading', { name: 'A weak blob' })).toBeTruthy();
+    await fireEvent.click(r.getByText('Start over'));
+    await fireEvent.click(r.getByText('Tin the wire'));
+    await fireEvent.click(r.getByText('Tin the pad'));
+    await fireEvent.click(r.getByText('Join them'));
+    expect(r.getByRole('heading', { name: 'Clean joint in about a second' })).toBeTruthy();
+  });
+
+  it('joint quiz: naming the first joint correctly scores a point', async () => {
+    const r = render(JointQuiz);
+    await fireEvent.click(r.getByRole('button', { name: 'Cold joint' }));
+    expect(r.getByText('Correct!')).toBeTruthy();
+    await fireEvent.click(r.getByText('Next joint →'));
+    expect(r.container.textContent).toContain('Joint 2 of 7 · Score 1');
+  });
+
+  it('tip care: storing a bare tip twice turns it black and it stops taking solder', async () => {
+    const r = render(TipCareDemo);
+    await fireEvent.click(r.getByText('Switch off with a bare tip'));
+    await fireEvent.click(r.getByText('Switch off with a bare tip'));
+    expect(r.getByText('Black, oxidized')).toBeTruthy();
+    expect(r.getByText('Won’t take solder')).toBeTruthy();
+    await fireEvent.click(r.getByText('Use tip tinner paste'));
+    expect(r.getByText('Shiny silver')).toBeTruthy();
+  });
+
+  it('header pins: the third step tacks one corner', async () => {
+    const r = render(HeaderPinsDemo);
+    await fireEvent.click(r.getByText('Next →'));
+    await fireEvent.click(r.getByText('Next →'));
+    expect(r.getByRole('heading', { name: 'Tack one corner' })).toBeTruthy();
+  });
+
+  // aria-disabled (not disabled) keeps focus on the button, so each handler
+  // must ignore the click itself (#0667 review).
+  it('aria-disabled soldering buttons ignore clicks', async () => {
+    const q = render(JointQuiz);
+    await fireEvent.click(q.getByRole('button', { name: 'Cold joint' }));
+    await fireEvent.click(q.getByRole('button', { name: 'Good joint' }));
+    expect(q.getByText('Correct!')).toBeTruthy();
+    expect(q.getByRole('button', { name: 'Good joint' }).getAttribute('aria-disabled')).toBe('true');
+    cleanup();
+
+    const t = render(TinningDemo);
+    await fireEvent.click(t.getByText('Join them'));
+    await fireEvent.click(t.getByText('Tin the wire'));
+    await fireEvent.click(t.getByText('Tin the pad'));
+    expect(t.getByRole('heading', { name: 'A weak blob' })).toBeTruthy();
+    cleanup();
+
+    const h = render(HeaderPinsDemo);
+    await fireEvent.click(h.getByText('← Back'));
+    expect(h.container.textContent).toContain('Step 1 of 6');
+    for (let i = 0; i < 8; i++) await fireEvent.click(h.getByText('Next →'));
+    expect(h.container.textContent).toContain('Step 6 of 6');
+  });
+
+  it('joint quiz: focus lands on "Try again" at the end and back on a choice after restarting', async () => {
+    const r = render(JointQuiz);
+    for (let i = 0; i < 7; i++) {
+      await fireEvent.click(r.getByRole('button', { name: 'Good joint' }));
+      await fireEvent.click(r.getByRole('button', { name: /Next joint|See score/ }));
+      await tick();
+    }
+    const again = r.getByRole('button', { name: 'Try again' });
+    expect(document.activeElement).toBe(again);
+    await fireEvent.click(again);
+    await tick();
+    expect(document.activeElement?.textContent).toBe('Good joint');
   });
 });

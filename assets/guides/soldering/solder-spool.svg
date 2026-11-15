@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 250" width="400" height="250">
+  <defs>
+    <linearGradient id="shiny" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8F99A0"/>
+      <stop offset="0.35" stop-color="#E9EEF1"/>
+      <stop offset="0.6" stop-color="#C3CBD0"/>
+      <stop offset="1" stop-color="#7D868C"/>
+    </linearGradient>
+    <linearGradient id="insul" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#E0564A"/>
+      <stop offset="0.4" stop-color="#C8372D"/>
+      <stop offset="1" stop-color="#8E2119"/>
+    </linearGradient>
+    <linearGradient id="pcb" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3C8A4A"/>
+      <stop offset="1" stop-color="#245C30"/>
+    </linearGradient>
+    <linearGradient id="copper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#E9A066"/>
+      <stop offset="1" stop-color="#B8672F"/>
+    </linearGradient>
+    <radialGradient id="flange" cx="0.4" cy="0.35" r="0.75">
+      <stop offset="0" stop-color="#6F7E8A"/>
+      <stop offset="1" stop-color="#3E4851"/>
+    </radialGradient>
+  </defs>
+  <circle cx="140" cy="125" r="104" fill="url(#flange)" stroke="#1F2621" stroke-width="2.5"/>
+  <circle cx="140" cy="125" r="88" fill="#C9D0D5" stroke="#1F2621" stroke-width="2"/>
+  <circle cx="140" cy="125" r="48" fill="none" stroke="#8C959B" stroke-width="1.5" opacity="0.7"/>
+  <circle cx="140" cy="125" r="54" fill="none" stroke="#8C959B" stroke-width="1.5" opacity="0.7"/>
+  <circle cx="140" cy="125" r="60" fill="none" stroke="#8C959B" stroke-width="1.5" opacity="0.7"/>
+  <circle cx="140" cy="125" r="66" fill="none" stroke="#8C959B" stroke-width="1.5" opacity="0.7"/>
+  <circle cx="140" cy="125" r="72" fill="none" stroke="#8C959B" stroke-width="1.5" opacity="0.7"/>
+  <circle cx="140" cy="125" r="78" fill="none" stroke="#8C959B" stroke-width="1.5" opacity="0.7"/>
+  <circle cx="140" cy="125" r="84" fill="none" stroke="#8C959B" stroke-width="1.5" opacity="0.7"/>
+  <path d="M80,73 A80,80 0 0 1 170,51" fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round" opacity="0.7"/>
+  <circle cx="140" cy="125" r="40" fill="url(#flange)" stroke="#1F2621" stroke-width="2"/>
+  <circle cx="140" cy="125" r="16" fill="#151A16" stroke="#1F2621" stroke-width="2"/>
+  <path d="M200,61 C250,45 280,95 316,103" fill="none" stroke="#1F2621" stroke-width="9" stroke-linecap="round"/>
+  <path d="M200,61 C250,45 280,95 316,103" fill="none" stroke="#C9D0D5" stroke-width="6" stroke-linecap="round"/>
+  <path d="M320,103 L336,139" stroke="#87977F" stroke-width="2" stroke-dasharray="4 4"/>
+  <circle cx="350" cy="175" r="46" fill="#121712" stroke="#87977F" stroke-width="3"/>
+  <circle cx="350" cy="175" r="34" fill="url(#shiny)" stroke="#1F2621" stroke-width="2"/>
+  <circle cx="350" cy="175" r="13" fill="#D9A441" stroke="#8A5A00" stroke-width="2"/>
+  <circle cx="346" cy="171" r="4" fill="#F4D58A"/>
+</svg>
