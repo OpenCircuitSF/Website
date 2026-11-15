@@ -50,6 +50,7 @@ import { APP_NAME } from './branding';
 import aboutPage from '../content/about.json';
 import privacyPage from '../content/privacy.json';
 import type { Route, RouteName } from './router';
+import { topicGuideBySlug } from './guides';
 
 const SUFFIX = ` — ${APP_NAME}`;
 
@@ -91,7 +92,7 @@ const STATIC_HEADING: Record<RouteName, string> = {
   // guarded — web/src/views/GuidesIndex.svelte
   guides: 'Guides',
   // fallback — web/src/views/TopicGuide.svelte's <h1> is the topic's own
-  // title from lib/topics/topics.ts, which this table doesn't import.
+  // catalog title; titleForRoute uses it when the slug is known.
   'topic-guide': 'Guide',
   // guarded — web/src/views/About.svelte, whose <h1> is #0520's shared
   // source (web/src/content/about.json's own h1): this table reads the same
@@ -133,6 +134,10 @@ const STATIC_HEADING: Record<RouteName, string> = {
  * no DOM access -- so it's unit-testable without jsdom, matching this
  * project's DOM-avoidance convention for testable logic. */
 export function titleForRoute(route: Route): string {
+  if (route.name === 'topic-guide') {
+    const topic = topicGuideBySlug(route.params.slug ?? '');
+    if (topic) return formatTitle(topic.title);
+  }
   return formatTitle(STATIC_HEADING[route.name]);
 }
 

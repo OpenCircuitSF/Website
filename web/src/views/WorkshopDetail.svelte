@@ -34,6 +34,7 @@
     COVER_IMAGE_HEIGHT,
   } from '../lib/workshopDetail';
   import type { PublicWorkshop } from '../lib/types';
+  import { workshopGuideForEventSlug } from '../lib/guides';
   import TerminalPanel from '../lib/TerminalPanel.svelte';
   import Prompt from '../lib/Prompt.svelte';
   import Panel from '../lib/Panel.svelte';
@@ -78,6 +79,7 @@
   // this exact response) rather than through a client-side Markdown
   // renderer. It is trusted, sanitized HTML by the time it reaches here.
   const bodyHTML = $derived(workshop?.body_html ?? '');
+  const guide = $derived(workshop ? workshopGuideForEventSlug(workshop.slug) : undefined);
 
   function goToWorkshops(): void {
     navigate('/events');
@@ -169,6 +171,12 @@
           >
             Register for this event
           </a>
+        </p>
+      {/if}
+
+      {#if guide}
+        <p class="row">
+          <a class="student-guide-link" href="/workshops/{guide.slug}">Student guide</a>
         </p>
       {/if}
 

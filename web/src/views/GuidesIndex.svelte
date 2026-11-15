@@ -4,6 +4,7 @@
   import Prompt from '../lib/Prompt.svelte';
   import MiniStrip from '../lib/topics/MiniStrip.svelte';
   import { TOPICS } from '../lib/topics/topics';
+  import { WORKSHOP_GUIDES } from '../lib/guides';
 </script>
 
 <main id="main-content" class="app-shell guides">
@@ -35,12 +36,14 @@
   <section class="workshops">
     <h2>Workshop guides</h2>
     <p class="text-muted">Step-by-step companions to our in-person workshops.</p>
-    <a class="card wide" href="/workshops/programming-leds">
-      <MiniStrip seed={7} count={10} />
-      <span class="tags"><span>workshop</span><span>60 min</span><span>beginner</span></span>
-      <strong>Programming LEDs</strong>
-      <span class="hook">Flash an ESP32-C3, light up an LED strip, then change the code and make it do something new.</span>
-    </a>
+    {#each WORKSHOP_GUIDES as g (g.slug)}
+      <a class="card wide" href="/workshops/{g.slug}">
+        <MiniStrip seed={7} count={10} />
+        <span class="tags">{#each g.tags as tag (tag)}<span>{tag}</span>{/each}</span>
+        <strong>{g.title}</strong>
+        <span class="hook">{g.hook}</span>
+      </a>
+    {/each}
   </section>
 </main>
 

@@ -204,7 +204,7 @@
     </ul>
     <p class="intro">
       All the code and notes are on GitHub:
-      <a href={GUIDE.repoUrl} target="_blank" rel="noopener">github.com/OpenCircuitSF/Workshops</a>.
+      <a href={GUIDE.repoUrl} target="_blank" rel="noopener noreferrer">github.com/OpenCircuitSF/Workshops</a>.
       {#if doneCount > 0}
         <button type="button" class="link" onclick={() => progress.clear()}>Reset my checklist</button>
       {/if}

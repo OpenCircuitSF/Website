@@ -30,6 +30,7 @@
 
   const NAV_LINKS: readonly NavLink[] = [
     { href: '/events', label: 'Events', routes: ['workshops', 'workshop-detail'] },
+    { href: '/guides', label: 'Guides', routes: ['guides', 'topic-guide', 'workshop-guide'] },
     { href: '/about', label: 'About', routes: ['about'] },
     { href: '/subscribe', label: 'Subscribe', routes: ['subscribe', 'subscribe-thanks'] },
   ];

@@ -32,7 +32,7 @@
           <pre class="code"><code>{step.code}</code></pre>
         {/if}
         {#if step.link}
-          <p><a href={step.link.href} target="_blank" rel="noopener">{step.link.label} ↗</a></p>
+          <p><a href={step.link.href} target="_blank" rel="noopener noreferrer">{step.link.label} ↗</a></p>
         {/if}
         <p class="expect"><span class="expect-tag">You should see</span> {step.expect}</p>
         {#if extras[step.id]}

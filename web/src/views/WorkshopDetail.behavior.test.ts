@@ -60,4 +60,20 @@ describe('WorkshopDetail (#0614)', () => {
     await screen.findByText('See all events');
     expect(document.body.textContent?.toLowerCase()).not.toContain('workshop');
   });
+
+  it('links the student guide from a Programming LEDs event', async () => {
+    getPublicWorkshop.mockResolvedValue(hackNight({ slug: 'programming-leds-2', title: 'Programming LEDs' }));
+    mount();
+    await screen.findByRole('heading', { name: 'Programming LEDs' });
+    const link = screen.getByRole('link', { name: 'Student guide' });
+    expect(link.getAttribute('href')).toBe('/workshops/programming-leds');
+    expect(link.getAttribute('target')).toBeNull();
+  });
+
+  it('shows no student guide link for other events', async () => {
+    getPublicWorkshop.mockResolvedValue(hackNight({ slug: 'programming-leds-advanced' }));
+    mount();
+    await screen.findByRole('heading', { name: 'Friday build' });
+    expect(screen.queryByRole('link', { name: 'Student guide' })).toBeNull();
+  });
 });

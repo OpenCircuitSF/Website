@@ -1,0 +1,77 @@
+{
+  "workshopGuides": [
+    {
+      "slug": "programming-leds",
+      "title": "Programming LEDs",
+      "hook": "Flash an ESP32-C3, light up an LED strip, then change the code and make it do something new.",
+      "tags": [
+        "workshop",
+        "60 min",
+        "beginner"
+      ]
+    }
+  ],
+  "topics": [
+    {
+      "slug": "one-wire-many-leds",
+      "title": "How one wire drives a whole strip of LEDs",
+      "hook": "No LED on the strip has an address. So how does LED 7 know which color is its?",
+      "minutes": 3,
+      "tags": [
+        "LEDs",
+        "serial"
+      ]
+    },
+    {
+      "slug": "delay-vs-millis",
+      "title": "Why delay() makes your project ignore you",
+      "hook": "Press the button. The board with delay() will miss most of your presses.",
+      "minutes": 3,
+      "tags": [
+        "code",
+        "timing"
+      ]
+    },
+    {
+      "slug": "baud-rate",
+      "title": "Baud rate: why your serial monitor shows garbage",
+      "hook": "\"­¾ýÿ¿þ\" in your serial monitor is good news: the wiring works, only the speed is wrong.",
+      "minutes": 4,
+      "tags": [
+        "serial",
+        "debugging"
+      ],
+      "description": "Garbage characters in your serial monitor are good news: the wiring works, only the speed is wrong."
+    },
+    {
+      "slug": "charge-only-cables",
+      "title": "The USB cable that looks fine and isn’t",
+      "hook": "The board lights up, but your laptop can’t see it. It’s probably the cable.",
+      "minutes": 2,
+      "tags": [
+        "USB",
+        "debugging"
+      ]
+    },
+    {
+      "slug": "led-power-budget",
+      "title": "How many LEDs can USB power?",
+      "hook": "A ten-LED strip on full white can draw more than a USB port supplies, and the board starts rebooting.",
+      "minutes": 3,
+      "tags": [
+        "LEDs",
+        "power"
+      ]
+    },
+    {
+      "slug": "esp32-c3-supermini-pinout",
+      "title": "ESP32-C3 SuperMini pinout, explained",
+      "hook": "Sixteen pins, a few with surprises. Tap any pin to see what it does.",
+      "minutes": 3,
+      "tags": [
+        "ESP32",
+        "reference"
+      ]
+    }
+  ]
+}

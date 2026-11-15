@@ -11,4 +11,9 @@ describe('Header (#0614)', () => {
     expect(screen.getAllByRole('link', { name: 'Events' })[0].getAttribute('href')).toBe('/events');
     expect(screen.queryByRole('link', { name: 'Workshops' })).toBeNull();
   });
+
+  it('links Guides to /guides', () => {
+    render(Header);
+    expect(screen.getAllByRole('link', { name: 'Guides' })[0].getAttribute('href')).toBe('/guides');
+  });
 });

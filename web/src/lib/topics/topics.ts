@@ -1,7 +1,9 @@
 // Short topic guides (/guides/{slug}): one idea each, built around one
 // interactive demo, short enough to share on Bluesky and Mastodon. The
-// slugs must match TOPIC_GUIDE_SLUGS in lib/router.ts (topics.test.ts
-// checks). The router keeps its own copy so it doesn't import every demo.
+// catalog metadata (slug, title, hook, minutes, tags) lives in
+// web/src/content/guides/guides.json, which the router and the Go server also read;
+// this file holds only each topic's page body, keyed by slug.
+import { TOPIC_GUIDES, type TopicMeta } from '../guides';
 import type { Component } from 'svelte';
 import ChainDemo from '../guide/ChainDemo.svelte';
 import BaudDemo from './BaudDemo.svelte';
@@ -10,13 +12,8 @@ import DelayDemo from './DelayDemo.svelte';
 import PinoutExplorer from './PinoutExplorer.svelte';
 import PowerDemo from './PowerDemo.svelte';
 
-export interface Topic {
-  slug: string;
-  title: string;
-  /** One line: the hook on cards and in social posts. */
-  hook: string;
-  minutes: number;
-  tags: string[];
+/** The page body of one topic guide; its metadata comes from the catalog. */
+export interface TopicBody {
   demo: Component;
   /** Shown above the demo: what to do with it. */
   tryIt: string;
@@ -28,13 +25,10 @@ export interface Topic {
   post: string;
 }
 
-export const TOPICS: Topic[] = [
-  {
-    slug: 'one-wire-many-leds',
-    title: 'How one wire drives a whole strip of LEDs',
-    hook: 'No LED on the strip has an address. So how does LED 7 know which color is its?',
-    minutes: 3,
-    tags: ['LEDs', 'serial'],
+export type Topic = TopicMeta & TopicBody;
+
+export const TOPIC_BODIES: Record<string, TopicBody> = {
+  'one-wire-many-leds': {
     demo: ChainDemo,
     tryIt: 'Send a frame and watch each LED take the first color and pass the rest along. Then break it.',
     ideas: [
@@ -54,12 +48,7 @@ export const TOPICS: Topic[] = [
     takeaway: 'Addressable LEDs are a relay, not a bus. Follow the arrows printed on the strip.',
     post: 'No LED on an addressable strip has an address. Watch how one wire tells a whole strip what to do, and the ways it fails silently.',
   },
-  {
-    slug: 'delay-vs-millis',
-    title: 'Why delay() makes your project ignore you',
-    hook: 'Press the button. The board with delay() will miss most of your presses.',
-    minutes: 3,
-    tags: ['code', 'timing'],
+  'delay-vs-millis': {
     demo: DelayDemo,
     tryIt: 'Both boards blink the same LED. Tap the button a few times and compare the scores.',
     ideas: [
@@ -79,12 +68,7 @@ export const TOPICS: Topic[] = [
     takeaway: 'If anything else will ever need to happen, use millis(), not delay().',
     post: 'Press the button. The board using delay() misses most presses. The one using millis() never does. A 3-minute interactive explainer.',
   },
-  {
-    slug: 'baud-rate',
-    title: 'Baud rate: why your serial monitor shows garbage',
-    hook: '"­¾ýÿ¿þ" in your serial monitor is good news: the wiring works, only the speed is wrong.',
-    minutes: 4,
-    tags: ['serial', 'debugging'],
+  'baud-rate': {
     demo: BaudDemo,
     tryIt: 'The board sends at 115200 baud. Change the speed the monitor listens at and watch where it samples the wire.',
     ideas: [
@@ -104,12 +88,7 @@ export const TOPICS: Topic[] = [
     takeaway: 'Garbage means the connection works. Check that both baud rates match.',
     post: 'Garbage characters in your serial monitor? Your wiring is probably fine. See exactly why a baud-rate mismatch scrambles text, with a live decoder.',
   },
-  {
-    slug: 'charge-only-cables',
-    title: 'The USB cable that looks fine and isn’t',
-    hook: 'The board lights up, but your laptop can’t see it. It’s probably the cable.',
-    minutes: 2,
-    tags: ['USB', 'debugging'],
+  'charge-only-cables': {
     demo: CableDemo,
     tryIt: 'Pick a cable, plug it in, and compare what the board and the laptop each notice.',
     ideas: [
@@ -129,12 +108,7 @@ export const TOPICS: Topic[] = [
     takeaway: 'No serial port? Swap the cable first. It’s the answer most of the time.',
     post: 'Board lights up but your computer can’t see it? Charge-only USB cables look identical to data cables. See what’s missing inside.',
   },
-  {
-    slug: 'led-power-budget',
-    title: 'How many LEDs can USB power?',
-    hook: 'A ten-LED strip on full white can draw more than a USB port supplies, and the board starts rebooting.',
-    minutes: 3,
-    tags: ['LEDs', 'power'],
+  'led-power-budget': {
     demo: PowerDemo,
     tryIt: 'Push brightness to full on white and watch the current. Then turn on the power limit.',
     ideas: [
@@ -154,12 +128,7 @@ export const TOPICS: Topic[] = [
     takeaway: 'Color and brightness decide the current. Budget for white at full brightness.',
     post: 'Why does my LED strip keep rebooting the board on white? An interactive look at how much current LEDs draw, and how much USB can give.',
   },
-  {
-    slug: 'esp32-c3-supermini-pinout',
-    title: 'ESP32-C3 SuperMini pinout, explained',
-    hook: 'Sixteen pins, a few with surprises. Tap any pin to see what it does.',
-    minutes: 3,
-    tags: ['ESP32', 'reference'],
+  'esp32-c3-supermini-pinout': {
     demo: PinoutExplorer,
     tryIt: 'Tap a pin on the photo, or use the filters to find the analog pins, the strapping pins and the onboard LED.',
     ideas: [
@@ -179,7 +148,13 @@ export const TOPICS: Topic[] = [
     takeaway: 'Most pins are free to use. Treat 2, 8 and 9 with care, and never put 5V on a GPIO.',
     post: 'An interactive pinout for the tiny ESP32-C3 SuperMini: tap any pin to see what it does, including the three that can stop your board from booting.',
   },
-];
+};
+
+export const TOPICS: Topic[] = TOPIC_GUIDES.map((m) => {
+  const body = TOPIC_BODIES[m.slug];
+  if (!body) throw new Error(`topics: no body for catalog topic ${m.slug}`);
+  return { ...m, ...body };
+});
 
 export function topicBySlug(slug: string): Topic | undefined {
   return TOPICS.find((t) => t.slug === slug);

@@ -17,6 +17,7 @@
 
 import { tick } from 'svelte';
 import { writable } from 'svelte/store';
+import { TOPIC_GUIDES, WORKSHOP_GUIDES } from './guides';
 
 /** Every view the SPA can route to. Includes the Phase 1 auth views
  * (login/account/admin/register-verify/recover-verify) alongside the public
@@ -100,26 +101,19 @@ const WORKSHOP_DETAIL = /^\/events\/([^/]+)$/;
 const ARCHIVE_DETAIL = /^\/archive\/([^/]+)$/;
 const LEGACY_WORKSHOP_DETAIL = /^\/workshops\/([^/]+)$/;
 
-/**
- * Student workshop guides: static, client-side pages at /workshops/{slug}.
- * A fixed list in code, never a store lookup, so the #0614 redirect below
- * still reveals nothing about drafts. Every /workshops/{slug} NOT in this
- * list keeps its 301 to /events/{slug}. Mirror any change in
- * internal/handlers/legacy_workshop_redirects.go.
- */
-/** Short topic guides at /guides/{slug}. Must match lib/topics/topics.ts
- * (topics.test.ts checks); kept here so the router doesn't import demos. */
-export const TOPIC_GUIDE_SLUGS: ReadonlySet<string> = new Set([
-  'one-wire-many-leds',
-  'delay-vs-millis',
-  'baud-rate',
-  'charge-only-cables',
-  'led-power-budget',
-  'esp32-c3-supermini-pinout',
-]);
+/** Short topic guides at /guides/{slug}. The slugs come from the shared
+ * catalog web/src/content/guides/guides.json, which the Go server also embeds. */
+export const TOPIC_GUIDE_SLUGS: ReadonlySet<string> = new Set(TOPIC_GUIDES.map((g) => g.slug));
 const TOPIC_GUIDE_DETAIL = /^\/guides\/([^/]+)$/;
 
-export const WORKSHOP_GUIDE_SLUGS: ReadonlySet<string> = new Set(['programming-leds']);
+/**
+ * Student workshop guides: static, client-side pages at /workshops/{slug}.
+ * The slugs come from the shared catalog web/src/content/guides/guides.json, embedded
+ * in the Go binary too, never a store lookup, so the #0614 redirect below
+ * still reveals nothing about drafts. Every /workshops/{slug} NOT in this
+ * list keeps its 301 to /events/{slug}.
+ */
+export const WORKSHOP_GUIDE_SLUGS: ReadonlySet<string> = new Set(WORKSHOP_GUIDES.map((g) => g.slug));
 
 /**
  * The /events URL an old /workshops path now lives at (#0614), or null for

@@ -5,7 +5,9 @@ import { onMount } from 'svelte';
 
 export class Clock {
   elapsed = $state(0);
-  playing = $state(true);
+  // Under prefers-reduced-motion the clock starts paused, so the strips sit
+  // still until the user presses play.
+  playing = $state(!prefersReducedMotion());
   #origin = 0;
   #pausedAt = 0;
 
@@ -44,4 +46,9 @@ export class Clock {
     this.#pausedAt = ms;
     this.elapsed = ms;
   }
+}
+
+function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }

@@ -34,7 +34,7 @@
 
 <div class="share" role="group" aria-label="Share this guide">
   <span class="label">Share</span>
-  <a class="btn" href={bsky} target="_blank" rel="noopener">Bluesky ↗</a>
+  <a class="btn" href={bsky} target="_blank" rel="noopener noreferrer">Bluesky ↗</a>
   <button type="button" class="btn" onclick={() => copy('post')}>{copied === 'post' ? 'Copied ✓' : 'Copy post for Mastodon'}</button>
   <button type="button" class="btn" onclick={() => copy('link')}>{copied === 'link' ? 'Copied ✓' : 'Copy link'}</button>
   {#if canShare}
