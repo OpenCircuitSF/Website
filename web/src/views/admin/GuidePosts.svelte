@@ -2,7 +2,8 @@
   The admin Guide outreach section (#0660): the shell. It loads the posts
   list and the recently-shared overview, owns the dialogs and the status
   line, and mounts one of three sub-views from the hash query. Every
-  decision is in lib/guidePosts.ts; topic data comes from the API.
+  decision is in lib/guidePosts.ts; topic data comes from the API. Posts made
+  together on several channels show as one share (#0665).
 -->
 <script lang="ts">
   import Button from '../../lib/Button.svelte';
@@ -23,12 +24,16 @@
   import {
     asSentence,
     campaignHint,
+    canScheduleAgainTogether,
+    createAcross,
     clicksErrorMessage,
     defaultScheduleAt,
-    groupPosts,
+    groupShares,
     hasQueued,
     isValidCampaign,
     linkErrorMessage,
+    outcomeSummary,
+    shareChannelLabels,
     signupsErrorMessage,
     type PostAction,
   } from '../../lib/guidePosts';
@@ -88,7 +93,7 @@
     return parts.join(' ');
   });
 
-  const groups = $derived(list ? groupPosts(list.posts, view === 'posts' ? guide : null) : { active: [], posted: [] });
+  const groups = $derived(list ? groupShares(list.posts, view === 'posts' ? guide : null) : { active: [], posted: [] });
   const channelFor = (name: string) =>
     list?.channels.find((c) => c.name === name) ?? { name, label: name, char_limit: 0, configured: false };
   const titleFor = (slug: string) => list?.topics.find((t) => t.slug === slug)?.title ?? slug;
@@ -98,7 +103,8 @@
     | { kind: 'schedule'; post: GuidePostRow; value: string }
     | { kind: 'send'; post: GuidePostRow; retry: boolean }
     | { kind: 'delete'; post: GuidePostRow }
-    | { kind: 'again'; post: GuidePostRow; campaign: string };
+    | { kind: 'again'; post: GuidePostRow; campaign: string }
+    | { kind: 'againShare'; posts: GuidePostRow[]; campaign: string };
   let dialog = $state<Dialog | null>(null);
   let dialogInFlight = $state(false);
   let dialogError = $state<string | null>(null);
@@ -138,12 +144,35 @@
       void runAction(() => sendGuidePost(d.post.id), d.retry ? 'Retrying.' : 'Posting.');
     } else if (d.kind === 'delete') {
       void runAction(() => deleteGuidePost(d.post.id), 'Draft deleted.');
-    } else {
+    } else if (d.kind === 'again') {
       void runAction(
         async () => createdMessage(await copyGuidePost(d.post.id, d.campaign.trim()), 'Draft created'),
         'Draft created.',
       );
+    } else {
+      void runAgainShare(d.posts, d.campaign.trim());
     }
+  }
+
+  // One campaign prompt, one copy per channel; each channel reports on its own.
+  async function runAgainShare(posts: GuidePostRow[], campaign: string): Promise<void> {
+    dialogInFlight = true;
+    dialogError = null;
+    const idFor = new Map(posts.map((p) => [p.channel, p.id]));
+    const outcomes = await createAcross(
+      posts.map((p) => channelFor(p.channel)),
+      (channel) => copyGuidePost(idFor.get(channel) as number, campaign),
+      null,
+    );
+    dialogInFlight = false;
+    const message = outcomeSummary(outcomes, null);
+    if (outcomes.every((o) => o.post === null)) {
+      dialogError = message;
+      return;
+    }
+    dialog = null;
+    actionMessage = message;
+    await load();
   }
 
   async function onAction(action: PostAction, post: GuidePostRow): Promise<void> {
@@ -168,9 +197,9 @@
     await load();
   }
 
-  async function onCreated(r: GuidePostCreated): Promise<void> {
-    composerOpen = false;
-    actionMessage = createdMessage(r, 'Draft created');
+  async function onCreated(message: string, done: boolean): Promise<void> {
+    if (done) composerOpen = false;
+    actionMessage = message;
     await load();
   }
 
@@ -179,16 +208,38 @@
     if (dialog.kind === 'schedule') return 'Schedule post';
     if (dialog.kind === 'send') return dialog.retry ? 'Retry post' : 'Post now';
     if (dialog.kind === 'delete') return 'Delete draft';
+    if (dialog.kind === 'againShare') return `Schedule again on ${shareChannelLabels(dialog.posts, list?.channels ?? [])}`;
     return 'Schedule again';
   });
   const dialogConfirmDisabled = $derived(
     dialog?.kind === 'schedule'
       ? fromLocalInputValue(dialog.value) === null
-      : dialog?.kind === 'again'
+      : dialog?.kind === 'again' || dialog?.kind === 'againShare'
         ? !isValidCampaign(dialog.campaign)
         : false,
   );
 </script>
+
+{#snippet shareBlock(share: GuidePostRow[])}
+  {#if share.length > 1}
+    {@const labels = shareChannelLabels(share, list?.channels ?? [])}
+    <section class="share" data-share={share.map((p) => p.id).join(',')} aria-label={`Shared together on ${labels}`}>
+      <p class="share-head">Shared together on {labels}</p>
+      {#each share as post (post.id)}
+        <GuidePostCard {post} channel={channelFor(post.channel)} topicTitle={titleFor(post.guide_slug)} onAction={(a, p) => void onAction(a, p)} {onSave} />
+      {/each}
+      {#if canScheduleAgainTogether(share)}
+        <div>
+          <Button onclick={() => openDialog({ kind: 'againShare', posts: share, campaign: list?.suggested_campaign ?? '' })}>
+            Schedule again on {labels}…
+          </Button>
+        </div>
+      {/if}
+    </section>
+  {:else}
+    <GuidePostCard post={share[0]} channel={channelFor(share[0].channel)} topicTitle={titleFor(share[0].guide_slug)} onAction={(a, p) => void onAction(a, p)} {onSave} />
+  {/if}
+{/snippet}
 
 <SubNav label="Guide outreach sections" items={[
   { href: adminGuidePostsHash('overview'), label: 'Recently shared', current: view === 'overview' },
@@ -214,8 +265,9 @@
             topics={list.topics}
             channels={list.channels}
             suggestedCampaign={list.suggested_campaign}
+            postHour={list.post_hour}
             initialGuide={guide}
-            onCreated={(r) => void onCreated(r)}
+            onCreated={(m, done) => void onCreated(m, done)}
             onCancel={() => {
               composerOpen = false;
               if (guide) window.location.hash = adminGuidePostsHash('posts');
@@ -229,13 +281,13 @@
         <p><a href={adminGuidePostsHash('posts')}>Show all guides</a></p>
       {/if}
 
-      {#each groups.active as post (post.id)}
-        <GuidePostCard {post} channel={channelFor(post.channel)} topicTitle={titleFor(post.guide_slug)} onAction={(a, p) => void onAction(a, p)} {onSave} />
+      {#each groups.active as share (share[0].id)}
+        {@render shareBlock(share)}
       {/each}
       {#if groups.posted.length > 0}
         <h3>Posted</h3>
-        {#each groups.posted as post (post.id)}
-          <GuidePostCard {post} channel={channelFor(post.channel)} topicTitle={titleFor(post.guide_slug)} onAction={(a, p) => void onAction(a, p)} {onSave} />
+        {#each groups.posted as share (share[0].id)}
+          {@render shareBlock(share)}
         {/each}
       {/if}
       {#if groups.active.length === 0 && groups.posted.length === 0}
@@ -252,7 +304,7 @@
     title={dialogTitle}
     inFlight={dialogInFlight}
     errorMessage={dialogError}
-    confirmLabel={dialog.kind === 'delete' ? 'Delete' : dialog.kind === 'schedule' ? 'Schedule' : dialog.kind === 'again' ? 'Create draft' : 'Post now'}
+    confirmLabel={dialog.kind === 'delete' ? 'Delete' : dialog.kind === 'schedule' ? 'Schedule' : dialog.kind === 'again' ? 'Create draft' : dialog.kind === 'againShare' ? 'Create drafts' : 'Post now'}
     danger={dialog.kind === 'delete'}
     confirmDisabled={dialogConfirmDisabled}
     onConfirm={confirmDialog}
@@ -267,6 +319,14 @@
       <p>This posts to {channelFor(dialog.post.channel).label} right away and can't be undone.</p>
     {:else if dialog.kind === 'delete'}
       <p>Delete this draft? Its short link stays in ShortLinks.</p>
+    {:else if dialog.kind === 'againShare'}
+      <p>A new draft on each channel, with the same text and a new short link each.</p>
+      <label class="field">Campaign
+        <input type="text" bind:value={dialog.campaign} />
+      </label>
+      {#if !isValidCampaign(dialog.campaign)}
+        <p class="note">{campaignHint}</p>
+      {/if}
     {:else}
       <p>A new draft with the same text and a new short link.</p>
       <label class="field">Campaign
@@ -290,6 +350,15 @@
     margin-bottom: var(--space-3);
   }
   .note {
+    color: var(--text-muted);
+  }
+  .share {
+    border-left: 3px solid var(--accent);
+    padding-left: var(--space-3);
+    margin-bottom: var(--space-3);
+  }
+  .share-head {
+    margin: 0 0 var(--space-2);
     color: var(--text-muted);
   }
   .post-body {

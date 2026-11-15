@@ -6,7 +6,15 @@ import { asSentence, countCharacters, isOverLimit, LINK_TOKEN, toLocalInputValue
 import { linkFailureReasonLabel } from './outreachLinks';
 import { formatClicks, postStatusWords } from './outreachResults';
 import { formatPacificDateTime } from './pacificTime';
-import type { GuidePost, GuidePostChannel, GuidePostRow, GuideShare, GuideSignupCounts, GuideTopic } from './types';
+import type {
+  GuidePost,
+  GuidePostChannel,
+  GuidePostCreated,
+  GuidePostRow,
+  GuideShare,
+  GuideSignupCounts,
+  GuideTopic,
+} from './types';
 
 export { asSentence, formatClicks };
 
@@ -276,4 +284,146 @@ export function postResultRows(
 /** True while any post is queued, so the page keeps refreshing. */
 export function hasQueued(posts: Pick<GuidePost, 'status'>[]): boolean {
   return posts.some((p) => p.status === 'queued');
+}
+
+// ── One draft, several channels (#0665) ──
+
+/** The channels ticked when the composer opens: every connected one. */
+export function defaultTickedChannels(channels: Pick<GuidePostChannel, 'name' | 'configured'>[]): string[] {
+  return channels.filter((c) => c.configured).map((c) => c.name);
+}
+
+/** The composer's create button: one draft, several, or create-and-schedule. */
+export function createButtonLabel(ticked: number, scheduleValue: string): string {
+  if (scheduleValue.trim() !== '') return 'Create and schedule';
+  return ticked > 1 ? 'Create drafts' : 'Create draft';
+}
+
+/** What happened on one channel during a multi-channel create. */
+export interface ChannelOutcome {
+  channel: string;
+  label: string;
+  post: GuidePost | null;
+  linkError: string | null;
+  error: string | null;
+  scheduled: boolean;
+  scheduleError: string | null;
+}
+
+const errText = (e: unknown) => asSentence(e instanceof Error ? e.message : String(e));
+
+/** Creates one draft per channel, in order, then schedules each one when
+ * `schedule` is given. A failure on one channel never stops the next one. The
+ * failure is recorded on that channel's outcome. This function never throws. */
+export async function createAcross(
+  channels: Pick<GuidePostChannel, 'name' | 'label'>[],
+  create: (channel: string) => Promise<GuidePostCreated>,
+  schedule: ((id: number) => Promise<unknown>) | null,
+): Promise<ChannelOutcome[]> {
+  const out: ChannelOutcome[] = [];
+  for (const c of channels) {
+    const o: ChannelOutcome = { channel: c.name, label: c.label, post: null, linkError: null, error: null, scheduled: false, scheduleError: null };
+    try {
+      const r = await create(c.name);
+      o.post = r.post;
+      o.linkError = r.link_error;
+    } catch (e) {
+      o.error = errText(e);
+    }
+    if (o.post && schedule) {
+      try {
+        await schedule(o.post.id);
+        o.scheduled = true;
+      } catch (e) {
+        o.scheduleError = errText(e);
+      }
+    }
+    out.push(o);
+  }
+  return out;
+}
+
+/** The status line after a multi-channel create: one sentence per channel. */
+export function outcomeSummary(outcomes: ChannelOutcome[], scheduledAt: string | null): string {
+  return outcomes
+    .map((o) => {
+      if (o.error !== null || o.post === null) return `${o.label}: the draft was not created. ${o.error ?? ''}`.trim();
+      let s = `${o.label} draft created`;
+      if (o.post.short_url) s += ` with ${o.post.short_url}`;
+      if (o.linkError !== null)
+        s += `, but its short link could not be made (${linkFailureReasonLabel(o.linkError)}); it is made when you schedule or post`;
+      if (o.scheduled) s += `${o.linkError !== null ? '. It is' : ', and'} scheduled for ${scheduledAt ? formatPacificDateTime(scheduledAt) : 'the chosen time'}`;
+      s += '.';
+      if (o.scheduleError !== null) s += ` It was not scheduled: ${o.scheduleError}`;
+      return s;
+    })
+    .join(' ');
+}
+
+/** True when every channel's draft was created (scheduling may still have failed). */
+export function allCreated(outcomes: ChannelOutcome[]): boolean {
+  return outcomes.every((o) => o.post !== null);
+}
+
+/** Posts from one create share guide, campaign and body, and were made within this window. */
+export const SHARE_WINDOW_MS = 2 * 60 * 1000;
+
+function siblings(a: GuidePostRow, b: GuidePostRow): boolean {
+  return (
+    a.guide_slug === b.guide_slug &&
+    a.campaign_slug === b.campaign_slug &&
+    a.body === b.body &&
+    a.channel !== b.channel &&
+    Math.abs(Date.parse(a.created_at) - Date.parse(b.created_at)) <= SHARE_WINDOW_MS
+  );
+}
+
+/** Like groupPosts, but posts made by one create are joined into a share
+ * (one post per channel). A share is active while any member is not posted, and it
+ * takes the place of its earliest member in groupPosts' order. A post on its own
+ * is a share of one. */
+export function groupShares(posts: GuidePostRow[], guide: string | null): { active: GuidePostRow[][]; posted: GuidePostRow[][] } {
+  const mine = guide ? posts.filter((p) => p.guide_slug === guide) : posts.slice();
+  const shares: GuidePostRow[][] = [];
+  const byCreated = mine.slice().sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at) || a.id - b.id);
+  const taken = new Set<number>();
+  for (const p of byCreated) {
+    if (taken.has(p.id)) continue;
+    taken.add(p.id);
+    const share = [p];
+    for (const q of byCreated) {
+      if (taken.has(q.id)) continue;
+      if (share.every((m) => siblings(m, q))) {
+        share.push(q);
+        taken.add(q.id);
+      }
+    }
+    shares.push(share);
+  }
+  // A share sits where its earliest member falls in groupPosts' order. Inside
+  // a share, the most urgent status comes first, then the channel name.
+  const { active, posted } = groupPosts(mine, null);
+  const order = new Map<number, number>();
+  [...active, ...posted].forEach((p, i) => order.set(p.id, i));
+  const rank = (p: GuidePostRow) => order.get(p.id) ?? 0;
+  const statusRank = (p: GuidePostRow) => ACTIVE_RANK[p.status] ?? 9;
+  const place = new Map(shares.map((s) => [s, Math.min(...s.map(rank))]));
+  for (const s of shares) s.sort((a, b) => statusRank(a) - statusRank(b) || (a.channel < b.channel ? -1 : a.channel > b.channel ? 1 : 0));
+  shares.sort((a, b) => (place.get(a) ?? 0) - (place.get(b) ?? 0));
+  return {
+    active: shares.filter((s) => s.some((p) => p.status !== 'posted')),
+    posted: shares.filter((s) => s.every((p) => p.status === 'posted')),
+  };
+}
+
+/** A share offers one "Schedule again" for all its channels once every member is posted. */
+export function canScheduleAgainTogether(share: Pick<GuidePost, 'status'>[]): boolean {
+  return share.length > 1 && share.every((p) => p.status === 'posted');
+}
+
+/** "Bluesky and Mastodon", from a share's posts. */
+export function shareChannelLabels(share: Pick<GuidePost, 'channel'>[], channels: Pick<GuidePostChannel, 'name' | 'label'>[]): string {
+  const labels = share.map((p) => channels.find((c) => c.name === p.channel)?.label ?? p.channel);
+  if (labels.length <= 1) return labels.join('');
+  return `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
 }

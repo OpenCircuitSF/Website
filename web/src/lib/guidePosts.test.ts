@@ -5,13 +5,21 @@ import { countCharacters } from './outreach';
 import {
   GUIDE_LINK_SAMPLE,
   bodyAfterGuideChange,
+  allCreated,
   campaignTotals,
+  canScheduleAgainTogether,
+  createAcross,
+  createButtonLabel,
+  defaultTickedChannels,
   clicksErrorMessage,
   countWithLink,
   counterText,
   defaultScheduleAt,
   formatSignups,
   groupPosts,
+  groupShares,
+  outcomeSummary,
+  shareChannelLabels,
   isValidCampaign,
   linkErrorMessage,
   overLimit,
@@ -19,7 +27,7 @@ import {
   signupsErrorMessage,
   sortShares,
 } from './guidePosts';
-import type { GuidePostChannel, GuidePostRow, GuideShare } from './types';
+import type { GuidePostChannel, GuidePostCreated, GuidePostRow, GuideShare } from './types';
 
 const bluesky: GuidePostChannel = { name: 'bluesky', label: 'Bluesky', char_limit: 300, configured: true };
 const mastodon: GuidePostChannel = { name: 'mastodon', label: 'Mastodon', char_limit: 500, configured: true };
@@ -212,5 +220,109 @@ describe('guidePosts', () => {
     expect(formatSignups(null)).toBe('—');
     expect(formatSignups({ requested: 1, confirmed: 1 })).toBe('1 signup, 1 confirmed');
     expect(formatSignups({ requested: 0, confirmed: 0 })).toBe('0 signups, 0 confirmed');
+  });
+});
+
+describe('#0665 one draft, several channels', () => {
+  it('ticks every connected channel by default', () => {
+    expect(defaultTickedChannels([bluesky, mastodon])).toEqual(['bluesky', 'mastodon']);
+    expect(defaultTickedChannels([{ ...bluesky, configured: false }, mastodon])).toEqual(['mastodon']);
+  });
+
+  it('labels the create button by count and schedule', () => {
+    expect(createButtonLabel(1, '')).toBe('Create draft');
+    expect(createButtonLabel(2, '  ')).toBe('Create drafts');
+    expect(createButtonLabel(2, '2026-11-15T09:00')).toBe('Create and schedule');
+  });
+
+  const created = (id: number, channel: string, short: string | null, linkError: string | null = null): GuidePostCreated => ({
+    post: post({ id, channel, short_url: short }),
+    link_error: linkError,
+  });
+
+  it('creates on every channel with the same request and schedules each', async () => {
+    const calls: string[] = [];
+    const scheduled: number[] = [];
+    const outcomes = await createAcross(
+      [bluesky, mastodon],
+      async (ch) => {
+        calls.push(ch);
+        return ch === 'bluesky' ? created(10, ch, 'https://go.opencircuitsf.com/u/a') : created(11, ch, 'https://go.opencircuitsf.com/u/b');
+      },
+      async (id) => {
+        scheduled.push(id);
+      },
+    );
+    expect(calls).toEqual(['bluesky', 'mastodon']);
+    expect(scheduled).toEqual([10, 11]);
+    expect(allCreated(outcomes)).toBe(true);
+    const msg = outcomeSummary(outcomes, '2026-11-15T17:00:00Z');
+    expect(msg).toBe(
+      'Bluesky draft created with https://go.opencircuitsf.com/u/a, and scheduled for Nov 15, 2026, 9:00 AM PT. ' +
+        'Mastodon draft created with https://go.opencircuitsf.com/u/b, and scheduled for Nov 15, 2026, 9:00 AM PT.',
+    );
+  });
+
+  it('keeps the other channel when one fails, and does not schedule the failed one', async () => {
+    const scheduled: number[] = [];
+    const outcomes = await createAcross(
+      [bluesky, mastodon],
+      async (ch) => {
+        if (ch === 'bluesky') throw new Error('Bluesky rejected the request');
+        return created(11, ch, 'https://go.opencircuitsf.com/u/b');
+      },
+      async (id) => {
+        scheduled.push(id);
+      },
+    );
+    expect(scheduled).toEqual([11]);
+    expect(allCreated(outcomes)).toBe(false);
+    expect(outcomes[0]).toMatchObject({ channel: 'bluesky', post: null, error: 'Bluesky rejected the request.' });
+    expect(outcomeSummary(outcomes, '2026-11-15T17:00:00Z')).toBe(
+      'Bluesky: the draft was not created. Bluesky rejected the request. ' +
+        'Mastodon draft created with https://go.opencircuitsf.com/u/b, and scheduled for Nov 15, 2026, 9:00 AM PT.',
+    );
+  });
+
+  it('reports a short-link failure and a schedule failure per channel', async () => {
+    const outcomes = await createAcross(
+      [bluesky, mastodon],
+      async (ch) => (ch === 'bluesky' ? created(10, ch, null, 'not_configured') : created(11, ch, 'https://go.opencircuitsf.com/u/b')),
+      async (id) => {
+        if (id === 11) throw new Error('scheduled time is in the past');
+      },
+    );
+    const msg = outcomeSummary(outcomes, '2026-11-15T17:00:00Z');
+    expect(msg).toContain('Bluesky draft created, but its short link could not be made');
+    expect(msg).toContain('Mastodon draft created with https://go.opencircuitsf.com/u/b. It was not scheduled: scheduled time is in the past.');
+    expect(outcomes[1]).toMatchObject({ scheduled: false, scheduleError: 'scheduled time is in the past.' });
+  });
+
+  it('groups posts made together into one share', () => {
+    const a = post({ id: 1, channel: 'bluesky', created_at: '2026-11-10T10:00:00Z' });
+    const b = post({ id: 2, channel: 'mastodon', created_at: '2026-11-10T10:00:03Z' });
+    const later = post({ id: 3, channel: 'mastodon', created_at: '2026-11-11T10:00:00Z' });
+    const otherBody = post({ id: 4, channel: 'mastodon', body: 'different {link}', created_at: '2026-11-10T10:00:01Z' });
+    const { active, posted } = groupShares([a, b, later, otherBody], null);
+    expect(posted).toEqual([]);
+    expect(active.map((s) => s.map((p) => p.id))).toEqual([[3], [1, 2], [4]]);
+  });
+
+  it('keeps a share active until every member is posted', () => {
+    const a = post({ id: 1, channel: 'bluesky', status: 'posted', posted_at: '2026-11-10T17:00:00Z' });
+    const b = post({ id: 2, channel: 'mastodon', status: 'failed' });
+    const r = groupShares([a, b], null);
+    expect(r.active.map((s) => s.map((p) => p.id))).toEqual([[2, 1]]);
+    expect(r.posted).toEqual([]);
+    expect(canScheduleAgainTogether(r.active[0])).toBe(false);
+    const both = groupShares([a, { ...b, status: 'posted', posted_at: '2026-11-10T17:00:00Z' }], null);
+    expect(both.posted).toHaveLength(1);
+    expect(canScheduleAgainTogether(both.posted[0])).toBe(true);
+    expect(canScheduleAgainTogether([a])).toBe(false);
+  });
+
+  it('names a share\'s channels', () => {
+    expect(shareChannelLabels([post({ channel: 'bluesky' }), post({ channel: 'mastodon' })], [bluesky, mastodon])).toBe('Bluesky and Mastodon');
+    expect(shareChannelLabels([post({ channel: 'bluesky' })], [bluesky])).toBe('Bluesky');
   });
 });

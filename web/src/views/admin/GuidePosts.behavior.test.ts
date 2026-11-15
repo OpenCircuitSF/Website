@@ -12,6 +12,7 @@ const getGuidePostsOverview = vi.fn<() => Promise<GuidePostsOverview>>();
 const createGuidePost = vi.fn<(req: unknown) => Promise<GuidePostCreated>>();
 const sendGuidePost = vi.fn<(id: number) => Promise<unknown>>();
 const copyGuidePost = vi.fn<(id: number, c: string) => Promise<GuidePostCreated>>();
+const scheduleGuidePost = vi.fn<(id: number, at: string) => Promise<unknown>>();
 vi.mock('../../lib/api', () => ({
   listGuidePosts: () => listGuidePosts(),
   getGuidePostsOverview: () => getGuidePostsOverview(),
@@ -19,7 +20,7 @@ vi.mock('../../lib/api', () => ({
   sendGuidePost: (id: number) => sendGuidePost(id),
   copyGuidePost: (id: number, c: string) => copyGuidePost(id, c),
   updateGuidePost: vi.fn(),
-  scheduleGuidePost: vi.fn(),
+  scheduleGuidePost: (id: number, at: string) => scheduleGuidePost(id, at),
   unscheduleGuidePost: vi.fn(),
   deleteGuidePost: vi.fn(),
 }));
@@ -28,7 +29,7 @@ const { default: GuidePosts } = await import('./GuidePosts.svelte');
 
 afterEach(() => {
   cleanup();
-  for (const m of [listGuidePosts, getGuidePostsOverview, createGuidePost, sendGuidePost, copyGuidePost]) m.mockReset();
+  for (const m of [listGuidePosts, getGuidePostsOverview, createGuidePost, sendGuidePost, copyGuidePost, scheduleGuidePost]) m.mockReset();
 });
 
 const BODY = 'Make an LED blink. {link}';
@@ -141,31 +142,157 @@ describe('GuidePosts', () => {
     expect((screen.getByLabelText('Campaign') as HTMLInputElement).value).toBe('guides-2026-11');
     expect((screen.getByLabelText('Guide') as HTMLSelectElement).value).toBe('blink-led');
     expect((screen.getByLabelText('Bluesky') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText('Mastodon') as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText('Schedule for (Pacific, optional)') as HTMLInputElement).value).toMatch(/T09:00$/);
   });
 
   it('shows a live Bluesky count including the short link', async () => {
     setup('view=posts&guide=blink-led');
     await screen.findByLabelText('Text');
-    const counter = screen.getByTestId('guide-post-counter');
+    const counter = screen.getByTestId('guide-post-counter-bluesky');
     const n = 'Make an LED blink. '.length + 'https://go.opencircuitsf.com/u/XXXXXXXXXXXX'.length;
-    expect(counter.textContent?.trim()).toBe(`≈ ${n} / 300 characters, including the short link`);
+    expect(counter.textContent?.trim()).toBe(`Bluesky: ≈ ${n} / 300 characters, including the short link`);
+    // Mastodon counts every link as 23 characters, as the server does.
+    const m = 'Make an LED blink. '.length + 23;
+    expect(screen.getByTestId('guide-post-counter-mastodon').textContent?.trim()).toBe(`Mastodon: ≈ ${m} / 500 characters, including the short link`);
+  });
+
+  it("drops a channel's counter when it is unticked", async () => {
+    setup('view=posts&guide=blink-led');
+    await screen.findByLabelText('Text');
+    await fireEvent.click(screen.getByLabelText('Mastodon'));
+    expect(screen.queryByTestId('guide-post-counter-mastodon')).toBeNull();
+    expect(screen.getByTestId('guide-post-counter-bluesky')).toBeTruthy();
   });
 
   it('blocks create over the character limit', async () => {
     setup('view=posts&guide=blink-led');
     const text = await screen.findByLabelText('Text');
     await fireEvent.input(text, { target: { value: 'x'.repeat(280) + ' {link}' } });
-    expect(screen.getByTestId('guide-post-counter').textContent).toContain('Too long for Bluesky.');
-    expect((screen.getByRole('button', { name: 'Create draft' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId('guide-post-counter-bluesky').textContent).toContain('Too long for Bluesky.');
+    expect(screen.getByTestId('guide-post-counter-mastodon').textContent).not.toContain('Too long');
+    expect((screen.getByRole('button', { name: 'Create and schedule' }) as HTMLButtonElement).disabled).toBe(true);
+    // Untick the channel that is over, and Create is allowed again.
+    await fireEvent.click(screen.getByLabelText('Bluesky'));
+    expect((screen.getByRole('button', { name: 'Create and schedule' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('creates a draft and warns when the short link failed', async () => {
+  it('creates a draft on both channels with the same text and reports each', async () => {
     setup('view=posts&guide=blink-led');
-    createGuidePost.mockResolvedValue({ post: post({ id: 2, short_url: null }), link_error: 'not_configured' });
+    createGuidePost.mockImplementation(async (req) => {
+      const ch = (req as { channel: string }).channel;
+      return ch === 'bluesky'
+        ? { post: post({ id: 2, channel: 'bluesky', short_url: 'https://go.opencircuitsf.com/u/a' }), link_error: null }
+        : { post: post({ id: 3, channel: 'mastodon', short_url: 'https://go.opencircuitsf.com/u/b' }), link_error: null };
+    });
     await screen.findByLabelText('Text');
-    await fireEvent.click(screen.getByRole('button', { name: 'Create draft' }));
-    await waitFor(() => expect(createGuidePost).toHaveBeenCalledWith({ slug: 'blink-led', channel: 'bluesky', campaign: 'guides-2026-11', body: BODY }));
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('its short link could not be made'));
+    await fireEvent.click(screen.getByRole('button', { name: 'Drafts only' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Create drafts' }));
+    await waitFor(() => expect(createGuidePost).toHaveBeenCalledTimes(2));
+    expect(createGuidePost).toHaveBeenNthCalledWith(1, { slug: 'blink-led', channel: 'bluesky', campaign: 'guides-2026-11', body: BODY });
+    expect(createGuidePost).toHaveBeenNthCalledWith(2, { slug: 'blink-led', channel: 'mastodon', campaign: 'guides-2026-11', body: BODY });
+    expect(scheduleGuidePost).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toContain(
+        'Bluesky draft created with https://go.opencircuitsf.com/u/a. Mastodon draft created with https://go.opencircuitsf.com/u/b.',
+      ),
+    );
+  });
+
+  it('keeps the other draft when one channel fails, and warns on a failed short link', async () => {
+    setup('view=posts&guide=blink-led');
+    createGuidePost.mockImplementation(async (req) => {
+      if ((req as { channel: string }).channel === 'mastodon') throw new Error('the server could not save the draft');
+      return { post: post({ id: 2, short_url: null }), link_error: 'not_configured' };
+    });
+    await screen.findByLabelText('Text');
+    await fireEvent.click(screen.getByRole('button', { name: 'Drafts only' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Create drafts' }));
+    await waitFor(() => expect(createGuidePost).toHaveBeenCalledTimes(2));
+    const status = await waitFor(() => {
+      const t = screen.getByRole('status').textContent ?? '';
+      expect(t).toContain('Bluesky draft created, but its short link could not be made');
+      return t;
+    });
+    expect(status).toContain('Mastodon: the draft was not created. the server could not save the draft.');
+    // The form stays open with only the failed channel ticked, ready to retry.
+    expect((screen.getByLabelText('Bluesky') as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByLabelText('Mastodon') as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByRole('button', { name: 'Create draft' })).toBeTruthy();
+  });
+
+  it('schedules both new drafts for the chosen time and reports a schedule failure per channel', async () => {
+    setup('view=posts&guide=blink-led');
+    createGuidePost.mockImplementation(async (req) => {
+      const ch = (req as { channel: string }).channel;
+      return { post: post({ id: ch === 'bluesky' ? 2 : 3, channel: ch }), link_error: null };
+    });
+    scheduleGuidePost.mockImplementation(async (id) => {
+      if (id === 3) throw new Error('Mastodon is not connected');
+      return post({ id, status: 'scheduled' });
+    });
+    await screen.findByLabelText('Text');
+    const when = screen.getByLabelText('Schedule for (Pacific, optional)') as HTMLInputElement;
+    await fireEvent.input(when, { target: { value: '2026-11-20T09:00' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Create and schedule' }));
+    await waitFor(() => expect(scheduleGuidePost).toHaveBeenCalledTimes(2));
+    expect(scheduleGuidePost).toHaveBeenNthCalledWith(1, 2, '2026-11-20T17:00:00Z');
+    expect(scheduleGuidePost).toHaveBeenNthCalledWith(2, 3, '2026-11-20T17:00:00Z');
+    await waitFor(() => {
+      const t = screen.getByRole('status').textContent ?? '';
+      expect(t).toContain('Bluesky draft created with https://go.opencircuitsf.com/u/k1, and scheduled for Nov 20, 2026, 9:00 AM PT.');
+      expect(t).toContain('Mastodon draft created with https://go.opencircuitsf.com/u/k1. It was not scheduled: Mastodon is not connected.');
+    });
+  });
+
+  it('shows an unconnected channel unticked and disabled in the composer', async () => {
+    const l = list();
+    l.channels[1].configured = false;
+    setup('view=posts&guide=blink-led', l);
+    await screen.findByLabelText('Text');
+    const m = screen.getByLabelText('Mastodon') as HTMLInputElement;
+    expect(m.checked).toBe(false);
+    expect(m.disabled).toBe(true);
+    expect(screen.getByText(/Mastodon is not connected/)).toBeTruthy();
+    expect(screen.queryByTestId('guide-post-counter-mastodon')).toBeNull();
+  });
+
+  it('shows posts made together as one share, each card keeping its actions', async () => {
+    const pair = [
+      post({ id: 1, channel: 'bluesky', created_at: '2026-11-10T10:00:00Z' }),
+      post({ id: 2, channel: 'mastodon', created_at: '2026-11-10T10:00:02Z' }),
+    ];
+    setup('view=posts', list({ posts: pair }));
+    const share = await waitFor(() => {
+      const s = document.querySelector('[data-share="1,2"]');
+      expect(s).not.toBeNull();
+      return s as HTMLElement;
+    });
+    expect(within(share).getByText('Shared together on Bluesky and Mastodon')).toBeTruthy();
+    expect(within(share).getAllByRole('button', { name: 'Post now…' })).toHaveLength(2);
+  });
+
+  it('schedules a posted pair again on both channels with one campaign prompt', async () => {
+    const pair = [
+      post({ id: 1, channel: 'bluesky', status: 'posted', posted_at: '2026-11-03T00:00:00Z' }),
+      post({ id: 2, channel: 'mastodon', status: 'posted', posted_at: '2026-11-03T00:00:00Z' }),
+    ];
+    setup('view=posts', list({ posts: pair, suggested_campaign: 'guides-2026-12' }));
+    copyGuidePost.mockImplementation(async (id, c) => ({ post: post({ id: id + 10, campaign_slug: c, short_url: `https://go.opencircuitsf.com/u/n${id}` }), link_error: null }));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Schedule again on Bluesky and Mastodon…' }));
+    const dialog = await screen.findByRole('dialog');
+    const input = within(dialog).getByLabelText('Campaign') as HTMLInputElement;
+    expect(input.value).toBe('guides-2026-12');
+    await fireEvent.input(input, { target: { value: 'guides-winter' } });
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Create drafts' }));
+    await waitFor(() => expect(copyGuidePost).toHaveBeenCalledTimes(2));
+    expect(copyGuidePost).toHaveBeenNthCalledWith(1, 1, 'guides-winter');
+    expect(copyGuidePost).toHaveBeenNthCalledWith(2, 2, 'guides-winter');
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toContain(
+        'Bluesky draft created with https://go.opencircuitsf.com/u/n1. Mastodon draft created with https://go.opencircuitsf.com/u/n2.',
+      ),
+    );
   });
 
   it('shows an unconnected channel as unavailable, not an error', async () => {
