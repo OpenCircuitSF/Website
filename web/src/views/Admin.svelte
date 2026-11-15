@@ -150,6 +150,7 @@
   import EventTypes from './admin/EventTypes.svelte';
   import Venues from './admin/Venues.svelte';
   import Outreach from './admin/Outreach.svelte';
+  import GuidePosts from './admin/GuidePosts.svelte';
   import Dashboard from './admin/Dashboard.svelte';
   import Pending from './admin/Pending.svelte';
   import Deliverability from './admin/Deliverability.svelte';
@@ -2557,6 +2558,9 @@
 
     {#if adminRoute.section === 'outreach'}
       <Outreach query={adminRoute.query} />
+    {/if}
+    {#if adminRoute.section === 'guide-posts'}
+      <GuidePosts query={adminRoute.query} />
     {/if}
 
     {#if adminRoute.section === 'not-found'}

@@ -4,6 +4,9 @@
 // unknown routes, and the non-'#/' hashes that are not admin routes at all.
 import { describe, it, expect } from 'vitest';
 import {
+  adminGuidePostsHash,
+  guidePostsGuideFromQuery,
+  guidePostsViewFromQuery,
   parseAdminHash,
   adminSectionHash,
   adminSettingsHash,
@@ -273,5 +276,35 @@ describe('outreach section links (#0646)', () => {
     expect(outreachSectionFromQuery(new URLSearchParams('section=Reminder'))).toBeNull();
     expect(outreachSectionFromQuery(new URLSearchParams('section=a%3Cb'))).toBeNull();
     expect(outreachSectionFromQuery(new URLSearchParams(''))).toBeNull();
+  });
+});
+
+describe('guide outreach section', () => {
+  it('parses #/guide-posts and lists it right after Outreach', () => {
+    expect(parseAdminHash('#/guide-posts')?.section).toBe('guide-posts');
+    const events = ADMIN_NAV_GROUPS.find((g) => g.label === 'Events');
+    expect(events?.sections.indexOf('guide-posts')).toBe((events?.sections.indexOf('outreach') ?? -9) + 1);
+  });
+
+  it('labels it Guide outreach', () => {
+    expect(ADMIN_SECTION_LABELS['guide-posts']).toBe('Guide outreach');
+  });
+
+  it('reads the view and guide from the hash query', () => {
+    expect(guidePostsViewFromQuery(new URLSearchParams('view=posts'))).toBe('posts');
+    expect(guidePostsViewFromQuery(new URLSearchParams('view=results'))).toBe('results');
+    expect(guidePostsViewFromQuery(new URLSearchParams('view=nope'))).toBe('overview');
+    expect(guidePostsViewFromQuery(new URLSearchParams(''))).toBe('overview');
+    expect(guidePostsGuideFromQuery(new URLSearchParams('guide=blink-led'))).toBe('blink-led');
+    expect(guidePostsGuideFromQuery(new URLSearchParams('guide=Bad%20Slug'))).toBeNull();
+    expect(guidePostsGuideFromQuery(new URLSearchParams('guide=..%2Fx'))).toBeNull();
+    expect(guidePostsGuideFromQuery(new URLSearchParams(''))).toBeNull();
+  });
+
+  it('builds guide outreach hashes', () => {
+    expect(adminGuidePostsHash()).toBe('#/guide-posts');
+    expect(adminGuidePostsHash('posts')).toBe('#/guide-posts?view=posts');
+    expect(adminGuidePostsHash('posts', 'blink-led')).toBe('#/guide-posts?view=posts&guide=blink-led');
+    expect(adminGuidePostsHash('results')).toBe('#/guide-posts?view=results');
   });
 });

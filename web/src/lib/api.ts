@@ -36,6 +36,10 @@ import type {
   OutreachTimeline,
   OutreachLuma,
   WorkshopOutreach,
+  GuidePost,
+  GuidePostCreated,
+  GuidePostsList,
+  GuidePostsOverview,
   Subscriber,
   SubscribersPage,
   Suppression,
@@ -1621,4 +1625,51 @@ export function updateServerSettings(values: Record<string, string>): Promise<Se
 /** POST /admin/outreach-connections/{group}/test — checks the saved values with a harmless read. */
 export function testOutreachConnection(group: ConnectionGroup['name']): Promise<ConnectionTestResult> {
   return apiPost<ConnectionTestResult>(`/admin/outreach-connections/${group}/test`);
+}
+
+// ── Guide outreach (#0660) ──────────────────────────────────────────────────
+
+/** GET /admin/guide-posts: topics, posts, channels and the defaults. */
+export function listGuidePosts(): Promise<GuidePostsList> {
+  return apiGet<GuidePostsList>('/admin/guide-posts');
+}
+
+/** GET /admin/guide-posts-overview: one row per guide, when it was last shared. */
+export function getGuidePostsOverview(): Promise<GuidePostsOverview> {
+  return apiGet<GuidePostsOverview>('/admin/guide-posts-overview');
+}
+
+/** POST /admin/guide-posts: a new draft; its short link is minted here. */
+export function createGuidePost(req: { slug: string; channel: string; campaign: string; body: string }): Promise<GuidePostCreated> {
+  return apiPost<GuidePostCreated>('/admin/guide-posts', req);
+}
+
+/** PATCH /admin/guide-posts/{id}: edit the text. */
+export function updateGuidePost(id: number, body: string): Promise<GuidePost> {
+  return apiPatch<GuidePost>(`/admin/guide-posts/${id}`, { body });
+}
+
+/** POST /admin/guide-posts/{id}/schedule. */
+export function scheduleGuidePost(id: number, scheduledAt: string): Promise<GuidePost> {
+  return apiPost<GuidePost>(`/admin/guide-posts/${id}/schedule`, { scheduled_at: scheduledAt });
+}
+
+/** POST /admin/guide-posts/{id}/unschedule. */
+export function unscheduleGuidePost(id: number): Promise<GuidePost> {
+  return apiPost<GuidePost>(`/admin/guide-posts/${id}/unschedule`);
+}
+
+/** POST /admin/guide-posts/{id}/send: post now, or retry a failed post. */
+export function sendGuidePost(id: number): Promise<GuidePost> {
+  return apiPost<GuidePost>(`/admin/guide-posts/${id}/send`);
+}
+
+/** POST /admin/guide-posts/{id}/again: a new draft with the same text under a campaign. */
+export function copyGuidePost(id: number, campaign: string): Promise<GuidePostCreated> {
+  return apiPost<GuidePostCreated>(`/admin/guide-posts/${id}/again`, { campaign });
+}
+
+/** DELETE /admin/guide-posts/{id}. */
+export function deleteGuidePost(id: number): Promise<void> {
+  return apiDelete<void>(`/admin/guide-posts/${id}`);
 }

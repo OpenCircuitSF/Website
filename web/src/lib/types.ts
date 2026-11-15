@@ -1312,3 +1312,93 @@ export interface UpcomingEventsResponse {
   reused: number;
   fallback: number;
 }
+
+// ── Guide outreach (#0660), matching internal/handlers/admin_guide_posts.go ──
+
+/** One topic guide as the guide-posts API sends it. */
+export interface GuideTopic {
+  slug: string;
+  title: string;
+  hook: string;
+  post: string;
+  url: string;
+  default_body: string;
+}
+
+/** A social channel a guide post can go to. */
+export interface GuidePostChannel {
+  name: string;
+  label: string;
+  char_limit: number;
+  configured: boolean;
+}
+
+/** A signup tally: requested, and how many confirmed. */
+export interface GuideSignupCounts {
+  requested: number;
+  confirmed: number;
+}
+
+export type GuidePostStatus = 'draft' | 'scheduled' | 'queued' | 'posted' | 'failed';
+
+/** One guide post (internal/guideposts.Post). */
+export interface GuidePost {
+  id: number;
+  guide_slug: string;
+  channel: string;
+  body: string;
+  destination_url: string;
+  campaign_slug: string;
+  short_link_key: string | null;
+  short_url: string | null;
+  status: GuidePostStatus;
+  scheduled_at: string | null;
+  posted_at: string | null;
+  remote_id: string | null;
+  remote_url: string | null;
+  last_error: string | null;
+  attempt_generation: number;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export type GuidePostRow = GuidePost & { clicks: number | null; signups: GuideSignupCounts | null };
+
+/** GET /admin/guide-posts. */
+export interface GuidePostsList {
+  topics: GuideTopic[];
+  posts: GuidePostRow[];
+  channels: GuidePostChannel[];
+  post_hour: number;
+  suggested_campaign: string;
+  clicks_error: string | null;
+  signups_error: string | null;
+}
+
+/** One row of the recently-shared overview (internal/guideposts.GuideShare + signups). */
+export interface GuideShare {
+  slug: string;
+  title: string;
+  url: string;
+  last_posted_at: string | null;
+  last_campaign: string;
+  channels: string[];
+  campaigns: string[];
+  posted_count: number;
+  next_scheduled_at: string | null;
+  clicks: number | null;
+  signups: GuideSignupCounts | null;
+}
+
+/** GET /admin/guide-posts-overview. */
+export interface GuidePostsOverview {
+  guides: GuideShare[];
+  clicks_error: string | null;
+  signups_error: string | null;
+}
+
+/** POST /admin/guide-posts and …/again. */
+export interface GuidePostCreated {
+  post: GuidePost;
+  link_error: string | null;
+}

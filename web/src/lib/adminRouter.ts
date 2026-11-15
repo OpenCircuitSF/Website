@@ -42,6 +42,7 @@ export type AdminSection =
   | 'campaigns'
   | 'workshops'
   | 'outreach'
+  | 'guide-posts'
   | 'event-types'
   | 'venues'
   | 'crt'
@@ -58,7 +59,7 @@ export interface AdminNavGroup {
   sections: readonly Exclude<AdminSection, 'not-found'>[];
 }
 export const ADMIN_NAV_GROUPS: readonly AdminNavGroup[] = [
-  { label: 'Events', landing: 'workshops', sections: ['workshops', 'outreach', 'event-types', 'venues'] },
+  { label: 'Events', landing: 'workshops', sections: ['workshops', 'outreach', 'guide-posts', 'event-types', 'venues'] },
   { label: 'Newsletter', landing: 'campaigns', sections: ['campaigns', 'subscribers', 'pending', 'deliverability', 'suppressions', 'interests'] },
   { label: 'System', landing: 'settings', sections: ['settings', 'crt', 'users', 'audit'] },
 ];
@@ -91,6 +92,7 @@ export const ADMIN_SECTION_LABELS: Readonly<Record<AdminSection, string>> = {
   campaigns: 'Campaigns',
   workshops: 'Events',
   outreach: 'Outreach',
+  'guide-posts': 'Guide outreach',
   'event-types': 'Event types',
   venues: 'Venues',
   crt: 'Home screen',
@@ -302,6 +304,31 @@ export function adminOutreachFlyersHash(flyerId?: number, workshopId?: number): 
 /** The admin-only print page for a flyer. */
 export function adminOutreachPrintHash(flyerId: number, layout: FlyerPrintLayout): string {
   return `#/outreach?view=print&flyer=${flyerId}&layout=${layout}`;
+}
+
+/** The Guide outreach tab's sub-views (#0660): the recently-shared table,
+ * the posts list with its composer, and clicks and signups. */
+export type GuidePostsView = 'overview' | 'posts' | 'results';
+
+/** The sub-view named by `?view=`; anything unknown is the overview. */
+export function guidePostsViewFromQuery(query: URLSearchParams): GuidePostsView {
+  const v = query.get('view');
+  return v === 'posts' || v === 'results' ? v : 'overview';
+}
+
+const GUIDE_SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/** The `guide` query param when it is a well-formed slug, else null. */
+export function guidePostsGuideFromQuery(query: URLSearchParams): string | null {
+  const g = query.get('guide');
+  return g !== null && GUIDE_SLUG_RE.test(g) ? g : null;
+}
+
+/** The hash for a Guide outreach sub-view, optionally filtered to one guide. */
+export function adminGuidePostsHash(view: GuidePostsView = 'overview', guide?: string): string {
+  if (view === 'overview') return '#/guide-posts';
+  if (view === 'results') return '#/guide-posts?view=results';
+  return guide ? `#/guide-posts?view=posts&guide=${encodeURIComponent(guide)}` : '#/guide-posts?view=posts';
 }
 
 /**

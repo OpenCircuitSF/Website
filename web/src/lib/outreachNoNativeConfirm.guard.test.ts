@@ -1,10 +1,11 @@
 // #0581: the outreach pages confirm in-app (OutreachConfirmDialog /
 // OutreachPostDialog), never with window.confirm,
 // which is unstyled, unlabelled for assistive tech and untestable in jsdom.
-// Scans the raw source of every web/src/views/admin/Outreach*.svelte.
+// Scans the raw source of every web/src/views/admin/Outreach*.svelte and,
+// since #0660, the guide outreach pages (GuidePost*.svelte).
 import { describe, expect, it } from 'vitest';
 
-const sources = import.meta.glob('../views/admin/Outreach*.svelte', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+const sources = import.meta.glob(['../views/admin/Outreach*.svelte', '../views/admin/GuidePost*.svelte'], { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
 
 // A call to confirm with a string, template or identifier argument (or none),
 // not preceded by an identifier character or a dot and not a declaration
@@ -17,7 +18,7 @@ describe('no native confirm in the outreach pages (#0581)', () => {
     expect(Object.keys(sources).length).toBeGreaterThanOrEqual(10);
   });
 
-  it('no Outreach*.svelte calls window.confirm or confirm with a message', () => {
+  it('no Outreach or guide page calls window.confirm or confirm with a message', () => {
     const offenders = Object.entries(sources)
       .filter(([, src]) => nativeConfirm.test(src) || windowConfirm.test(src))
       .map(([path]) => path);
