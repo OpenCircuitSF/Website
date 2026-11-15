@@ -74,6 +74,11 @@ describe('continuity', () => {
   it('reads a resistor without beeping', () => {
     const r = measure(setup(B, 'cont', 'v'), cont('resistor'));
     expect([r.display, r.unit, r.beep]).toEqual(['220.0', 'Ω', false]);
+    // Meter A's beep range tops out at 199.9 Ω: over range, but not open.
+    const a = measure(setup(A, 'cont', 'vma'), cont('resistor'));
+    expect([a.display, a.beep]).toEqual(['1', false]);
+    expect(a.message).not.toContain('open');
+    expect(a.message).toContain('a path');
   });
 
   it('is off until the dial is turned', () => {

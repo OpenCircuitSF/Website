@@ -158,7 +158,7 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
       {
         title: 'The A jacks are only for current',
-        body: 'Jacks marked A, mA or 10A measure current. Inside, they are almost a plain wire to COM. Touch a battery with red in one of them and you short it through the meter, which blows the fuse. Some cheap 10A jacks have no fuse at all.',
+        body: 'Jacks marked A, mA µA or 10A, with no V, measure current. Inside, they are almost a plain wire to COM. Touch a battery with red in one of them and you short it through the meter, which blows the fuse. Some cheap 10A jacks have no fuse at all.',
       },
     ],
     takeaway: 'Black in COM, red in V. Move red to an A jack only to measure current, then move it straight back.',
@@ -173,7 +173,7 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
       {
         title: 'No beep means open',
-        body: 'A broken wire, a cracked solder joint or an open switch shows OL, or a lone 1 on a budget meter. Nothing is getting through. A resistor reads its value but stays quiet: it is a path, just not a connection.',
+        body: 'A broken wire, a cracked solder joint or an open switch shows OL, or a lone 1 on a budget meter. Nothing is getting through. A resistor stays quiet too: it is a path, just not a connection. Some meters show its value here; a budget meter may show over range.',
       },
       {
         title: 'Only on unpowered circuits',

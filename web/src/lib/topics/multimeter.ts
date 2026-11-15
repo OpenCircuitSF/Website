@@ -426,8 +426,15 @@ export function measure(s: Setup, target: Target | null): Reading {
       const shown = formatValue(m, p, target.ohms);
       if (target.ohms < m.beepBelow)
         return reading(shown, 'ok', 'Beep!', `It beeps: there is a complete path through the ${target.name}, under about ${m.beepBelow} Ω.`, { beep: true });
-      if (shown.overRange)
+      if (shown.overRange && !Number.isFinite(target.ohms))
         return reading(shown, 'info', 'No beep', `${m.overRange === '1' ? 'A lone 1' : 'OL'} and no beep: there is no path through the ${target.name}. It is open.`);
+      if (shown.overRange)
+        return reading(
+          shown,
+          'info',
+          'No beep',
+          `${m.overRange === '1' ? 'A lone 1' : 'OL'} and no beep: the ${target.name} has more resistance than this setting can show. It is a path, but not a connection. To read its value, use a resistance (Ω) setting.`,
+        );
       return reading(shown, 'info', 'No beep', `${shown.display} ${shown.unit} is a path, but too much resistance to count as a connection, so no beep.`);
     }
     if (p.fn === 'ohm') {
