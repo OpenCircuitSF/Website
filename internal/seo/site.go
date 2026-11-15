@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/guides"
 )
 
 // Site wires the meta-tag injector (#0019), sitemap.xml, robots.txt (#0020),
@@ -215,6 +217,23 @@ func (s *Site) ArchiveCardHandler() http.HandlerFunc {
 			return
 		}
 		s.serveCard(w, r, "archive:"+e.Slug, e.Subject, archiveCardMeta(e))
+	}
+}
+
+// GuideCardHandler serves GET /guides/{slug}/og.png (#0656): the Open
+// Graph card for every guide in the embedded catalog (internal/guides),
+// rendered by the same card builder as the event and archive cards. The
+// workshop guide's card lives here too, not at /workshops/{slug}/og.png,
+// which still renders the production event of the same slug. A slug
+// outside the catalog is a 404.
+func (s *Site) GuideCardHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		g, ok := guides.Lookup(r.PathValue("slug"))
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		s.serveCard(w, r, "guide:"+g.Slug, g.Title, guideCardMeta(g))
 	}
 }
 

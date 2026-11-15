@@ -8,8 +8,34 @@ import (
 
 func legacyRedirectMux() *http.ServeMux {
 	mux := http.NewServeMux()
-	MountLegacyWorkshopRedirects(mux)
+	MountLegacyWorkshopRedirects(mux, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("guide"))
+	}))
 	return mux
+}
+
+// A student workshop guide's slug (#0656) is served by the SPA handler
+// passed in, not redirected.
+func TestLegacyWorkshopGuideSlugServesGuide(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		for _, path := range []string{"/workshops/programming-leds", "/workshops/programming-leds/", "/workshops/programming-leds?utm_source=x"} {
+			rec := httptest.NewRecorder()
+			legacyRedirectMux().ServeHTTP(rec, httptest.NewRequest(method, path, nil))
+			if rec.Code != http.StatusOK {
+				t.Errorf("%s %s status = %d, want 200", method, path, rec.Code)
+			}
+			if loc := rec.Header().Get("Location"); loc != "" {
+				t.Errorf("%s %s Location = %q, want none", method, path, loc)
+			}
+			if method == http.MethodGet && rec.Body.String() != "guide" {
+				t.Errorf("%s %s body = %q, want the guide handler's", method, path, rec.Body.String())
+			}
+		}
+	}
+}
+
+func TestLegacyWorkshopGuideNeighbourSlugStillRedirects(t *testing.T) {
+	assertLegacyRedirect(t, http.MethodGet, "/workshops/programming-leds-3", "/events/programming-leds-3")
 }
 
 func assertLegacyRedirect(t *testing.T, method, path, wantLocation string) {

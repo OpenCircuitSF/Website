@@ -17,6 +17,8 @@ import (
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/guides"
 )
 
 // This file builds #0273's per-workshop Open Graph card: a 1200x630 PNG with
@@ -544,4 +546,13 @@ func (c *cardCache) invalidate() {
 func cardETag(body []byte) string {
 	sum := sha256.Sum256(body)
 	return `"` + hex.EncodeToString(sum[:]) + `"`
+}
+
+// guideCardMeta is a guide card's meta line (#0656): "Guide · N min" for a
+// topic, "Workshop guide" for a workshop guide.
+func guideCardMeta(g guides.Guide) string {
+	if g.Kind == guides.Workshop {
+		return "Workshop guide"
+	}
+	return fmt.Sprintf("Guide · %d min", g.Minutes)
 }

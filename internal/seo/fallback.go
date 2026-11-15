@@ -31,6 +31,8 @@ import (
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/guides"
 )
 
 // pageKind is which shape of fallback content a route gets. Zero value
@@ -47,6 +49,8 @@ const (
 	pageArchiveIndex
 	pageWorkshop
 	pageArchiveEntry
+	pageGuidesIndex
+	pageGuide
 )
 
 // pageContent is what renderPage needs to build one route's fallback body.
@@ -57,6 +61,7 @@ type pageContent struct {
 	path     string // set for pageStatic, keys staticPageCopy/staticPages
 	workshop Workshop
 	archive  ArchiveEntry
+	guide    string // set for pageGuide: the guide's slug (internal/guides)
 }
 
 // copyBlock is one paragraph or subheading of static page copy.
@@ -121,6 +126,15 @@ var staticPageCopy = map[string]staticCopy{
 			{Text: workshopsPastEmpty},
 		},
 	},
+	"/guides": {
+		Source: "web/src/views/GuidesIndex.svelte",
+		H1:     guidesH1,
+		Blocks: []copyBlock{
+			{Text: guidesLede},
+			{Heading: true, Text: guidesWorkshopH2},
+			{Text: guidesWorkshopLede},
+		},
+	},
 	"/archive": {
 		Source: "web/src/views/ArchiveIndex.svelte",
 		H1:     archiveH1,
@@ -154,6 +168,13 @@ const (
 	archiveLede  = `Past emails from Open Circuit SF.`
 	archiveEmpty = `Nothing archived yet — subscribe and we'll email you the moment there's something to read.`
 
+	// #0656: web/src/views/GuidesIndex.svelte's own copy.
+	guidesH1           = "Guides"
+	guidesLede         = `Short, hands-on explainers. Each one is a single idea with something to press, drag or break. A few minutes each, no experience needed.`
+	guidesWorkshopH2   = "Workshop guides"
+	guidesWorkshopLede = "Step-by-step companions to our in-person workshops."
+	guidesSeeAll       = "See all guides"
+
 	homeNextUpH2    = "Next up"
 	homeNextUpEmpty = `Nothing scheduled yet — check back soon, or subscribe below.`
 	homeSeeAll      = "See all events"
@@ -185,6 +206,7 @@ type navLink struct {
 var fallbackNav = []navLink{
 	{"/", "Home"},
 	{"/events", "Events"},
+	{"/guides", "Guides"},
 	{"/about", "About"},
 	{"/subscribe", "Subscribe"},
 	{"/archive", "Archive"},
@@ -198,6 +220,13 @@ type workshopListItem struct {
 	Title   string
 	Meta    string // date label + location label, "Canceled · " prefixed when canceled
 	Summary string
+}
+
+// guideListItem is one guide link on the /guides fallback page (#0656).
+type guideListItem struct {
+	Href  string
+	Title string
+	Hook  string
 }
 
 // archiveListItem is one row of the /archive index.
@@ -275,6 +304,15 @@ type pageTemplateData struct {
 	// it as a plain anchor only when non-empty.
 	SignupHref string
 
+	// pageGuidesIndex and pageGuide (#0656)
+	GuidesLede         string
+	GuideItems         []guideListItem
+	GuidesHeading      string
+	GuidesWorkshopLede string
+	WorkshopGuideItems []guideListItem
+	GuideHook          string
+	SeeAllGuidesLabel  string
+
 	// pageArchiveEntry
 	DateAttr string // ArchiveEntry.ArchivedAt, raw RFC 3339, for <time datetime="...">
 
@@ -308,6 +346,8 @@ const pageTemplateSource = `
 <h2>{{.PastHeading}}</h2>{{if .PastItems}}<ul>{{range .PastItems}}<li><a href="/events/{{.Slug}}">{{.Title}}</a><br>{{.Meta}}{{if .Summary}}<p>{{.Summary}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.PastEmpty}}</p>{{end}}
 {{else if eq .Kind "archiveIndex"}}<p>{{.ArchiveLede}}</p>{{if .ArchiveItems}}<ul>{{range .ArchiveItems}}<li><a href="/archive/{{.Slug}}">{{.Subject}}</a> <time datetime="{{.DateAttr}}">{{.DateLabel}}</time>{{if .Preheader}}<p>{{.Preheader}}</p>{{end}}</li>{{end}}</ul>{{else}}<p>{{.ArchiveEmpty}}</p>{{end}}
 {{else if eq .Kind "workshop"}}{{if .TypeName}}<p>{{.TypeName}}</p>{{end}}{{if .Canceled}}<p>This event has been canceled.</p>{{end}}<dl><dt>When</dt><dd><time datetime="{{.StartsAt}}">{{.DateLabel}}</time></dd><dt>Where</dt><dd>{{if .LocationLines}}{{range .LocationLines}}{{.}}<br>{{end}}{{else}}Location TBA{{end}}</dd></dl>{{if .SignupHref}}<p><a href="{{.SignupHref}}" target="_blank" rel="noopener noreferrer">Register for this event</a></p>{{end}}{{if .BodyHTML}}<div class="workshop-body">{{.BodyHTML}}</div>{{end}}<p><a href="/events">See all events</a></p>
+{{else if eq .Kind "guidesIndex"}}<p>{{.GuidesLede}}</p><ul>{{range .GuideItems}}<li><a href="{{.Href}}">{{.Title}}</a><p>{{.Hook}}</p></li>{{end}}</ul><section><h2>{{.GuidesHeading}}</h2><p class="text-muted">{{.GuidesWorkshopLede}}</p><ul>{{range .WorkshopGuideItems}}<li><a href="{{.Href}}">{{.Title}}</a><p>{{.Hook}}</p></li>{{end}}</ul></section>
+{{else if eq .Kind "guide"}}<p>{{.GuideHook}}</p><p><a href="/guides">{{.SeeAllGuidesLabel}}</a></p>
 {{else if eq .Kind "archiveEntry"}}<p><time datetime="{{.DateAttr}}">{{.DateLabel}}</time></p>{{if .BodyHTML}}<div class="archive-body">{{.BodyHTML}}</div>{{end}}<p><a href="/archive">See the archive</a></p>
 {{end}}</main>{{end}}`
 
@@ -402,9 +442,32 @@ func (r *Renderer) renderPage(p pageContent) (pageHTML string, cacheable bool) {
 			DateAttr: e.ArchivedAt, DateLabel: archiveDateLabel(e.ArchivedAt),
 			BodyHTML: bodyHTML,
 		}), cacheable
+	case pageGuidesIndex:
+		return r.execTemplate(pageTemplateData{
+			Kind: "guidesIndex", H1: guidesH1, GuidesLede: guidesLede,
+			GuideItems:    guideListItems(guides.Topics()),
+			GuidesHeading: guidesWorkshopH2, GuidesWorkshopLede: guidesWorkshopLede,
+			WorkshopGuideItems: guideListItems(guides.WorkshopGuides()),
+		}), true
+	case pageGuide:
+		g, ok := guides.Lookup(p.guide)
+		if !ok {
+			return "", true
+		}
+		return r.execTemplate(pageTemplateData{
+			Kind: "guide", H1: g.Title, GuideHook: g.Hook, SeeAllGuidesLabel: guidesSeeAll,
+		}), true
 	default:
 		return "", true
 	}
+}
+
+func guideListItems(gs []guides.Guide) []guideListItem {
+	out := make([]guideListItem, 0, len(gs))
+	for _, g := range gs {
+		out = append(out, guideListItem{Href: g.Path(), Title: g.Title, Hook: g.Hook})
+	}
+	return out
 }
 
 // execTemplate renders data against pageTemplate's "body" template, always

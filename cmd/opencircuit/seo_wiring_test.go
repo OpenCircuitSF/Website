@@ -829,3 +829,42 @@ func TestMountAndServe_OldWorkshopURLsRedirectAndKeepUnfurl(t *testing.T) {
 	get("/workshops/"+plain.Slug+"/og.png", http.StatusOK)
 	get("/events/"+plain.Slug+"/og.png", http.StatusOK)
 }
+
+// TestMountAndServe_GuideRoutes (#0656): the guide pages are served by the
+// real route table with their own server-rendered meta, their OG cards
+// resolve, unknown guide slugs 404, and every other old /workshops slug
+// still redirects.
+func TestMountAndServe_GuideRoutes(t *testing.T) {
+	baseURL, _, _, _, _, get := seoWiringServer(t)
+
+	body := get("/workshops/programming-leds", http.StatusOK)
+	for _, needle := range []string{
+		`rel="canonical" href="` + baseURL + `/workshops/programming-leds"`,
+		`property="og:image" content="` + baseURL + `/guides/programming-leds/og.png"`,
+	} {
+		if !strings.Contains(body, needle) {
+			t.Errorf("/workshops/programming-leds missing %q", needle)
+		}
+	}
+	get("/guides", http.StatusOK)
+	body = get("/guides/baud-rate", http.StatusOK)
+	for _, needle := range []string{
+		`rel="canonical" href="` + baseURL + `/guides/baud-rate"`,
+		`property="og:title" content="Baud rate: why your serial monitor shows garbage"`,
+	} {
+		if !strings.Contains(body, needle) {
+			t.Errorf("/guides/baud-rate missing %q", needle)
+		}
+	}
+	get("/guides/nope", http.StatusNotFound)
+	get("/guides/baud-rate/og.png", http.StatusOK)
+	get("/guides/programming-leds/og.png", http.StatusOK)
+	get("/guides/nope/og.png", http.StatusNotFound)
+	get("/workshops/solder-101", http.StatusMovedPermanently)
+	sitemap := get("/sitemap.xml", http.StatusOK)
+	for _, p := range []string{"/guides/baud-rate", "/workshops/programming-leds"} {
+		if !strings.Contains(sitemap, "<loc>"+baseURL+p+"</loc>") {
+			t.Errorf("sitemap missing %s", p)
+		}
+	}
+}

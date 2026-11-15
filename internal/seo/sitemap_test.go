@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/guides"
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 )
 
@@ -299,7 +300,13 @@ func TestSitemapListsEventsNotWorkshops(t *testing.T) {
 			t.Errorf("sitemap missing %q:\n%s", want, body)
 		}
 	}
-	if strings.Contains(string(body), "/workshops") {
+	// The only /workshops URLs allowed are student workshop guides (#0656),
+	// which are real pages there, not legacy redirects.
+	stripped := string(body)
+	for _, g := range guides.WorkshopGuides() {
+		stripped = strings.ReplaceAll(stripped, testBaseURL+g.Path()+"<", "")
+	}
+	if strings.Contains(stripped, "/workshops") {
 		t.Errorf("sitemap still lists an old path:\n%s", body)
 	}
 }

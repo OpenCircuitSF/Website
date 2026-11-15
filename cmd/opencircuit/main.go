@@ -2023,25 +2023,7 @@ func mountAndServe(
 	// withheld campaign from it the same way.
 	mux.Handle("GET /archive/feed.xml", site.FeedHandler())
 
-	// Per-workshop Open Graph card (#0273) -- an explicit, more specific
-	// pattern than the "GET /" SPA catch-all below, so Go 1.22's ServeMux
-	// resolves it first without any change to
-	// internal/handlers/routes.go's workshopDetailPattern (which does not
-	// match a path with a second segment). See Site.WorkshopCardHandler's
-	// doc comment (internal/seo/site.go) for the 404-vs-fallback rules.
-	mux.Handle("GET /events/{slug}/og.png", site.WorkshopCardHandler())
-	// #0614: posts already published carry the old card URL, so it keeps
-	// serving through the same handler rather than redirecting. The other old
-	// /workshops paths are permanent redirects, so old links keep working.
-	mux.Handle("GET /workshops/{slug}/og.png", site.WorkshopCardHandler())
-	handlers.MountLegacyWorkshopRedirects(mux)
-
-	// Per-newsletter Open Graph card (#0532) -- the archive twin of the
-	// route above, sharing its rendering, cache, and invalidation. The
-	// same second-segment reasoning applies to archiveDetailPattern.
-	mux.Handle("GET /archive/{slug}/og.png", site.ArchiveCardHandler())
-
-	// Svelte SPA — the catch-all served LAST. Under the Go 1.22 mux this
+	// Svelte SPA — built here, registered LAST below as the catch-all. Under the Go 1.22 mux this
 	// "GET /" pattern is the least specific, so every explicit route above wins
 	// over it. It serves hashed assets from the embedded web/dist directly and
 	// falls back to index.html for any other path, so SPA deep links survive a
@@ -2064,7 +2046,37 @@ func mountAndServe(
 	if publicWorkshopsH != nil {
 		spaResolvers = append(spaResolvers, publicWorkshopsH)
 	}
-	mux.Handle("GET /", site.Middleware(handlers.NewSPAHandler(web.DistFS(), spaResolvers...)))
+	spa := site.Middleware(handlers.NewSPAHandler(web.DistFS(), spaResolvers...))
+
+	// Per-workshop Open Graph card (#0273) -- an explicit, more specific
+	// pattern than the "GET /" SPA catch-all below, so Go 1.22's ServeMux
+	// resolves it first without any change to
+	// internal/handlers/routes.go's workshopDetailPattern (which does not
+	// match a path with a second segment). See Site.WorkshopCardHandler's
+	// doc comment (internal/seo/site.go) for the 404-vs-fallback rules.
+	mux.Handle("GET /events/{slug}/og.png", site.WorkshopCardHandler())
+	// #0614: posts already published carry the old card URL, so it keeps
+	// serving through the same handler rather than redirecting. The other old
+	// /workshops paths are permanent redirects, so old links keep working.
+	mux.Handle("GET /workshops/{slug}/og.png", site.WorkshopCardHandler())
+	// #0656: a student workshop guide slug at /workshops/{slug} is served by
+	// the SPA handler instead of redirecting (see MountLegacyWorkshopRedirects).
+	handlers.MountLegacyWorkshopRedirects(mux, spa)
+
+	// Per-guide Open Graph card (#0656, Decision 3 in issues/0656.md): every
+	// guide's card lives under /guides/{slug}/og.png, including the workshop
+	// guide's, because /workshops/{slug}/og.png above still renders the
+	// production event of the same slug for posts that already carry it.
+	mux.Handle("GET /guides/{slug}/og.png", site.GuideCardHandler())
+
+	// Per-newsletter Open Graph card (#0532) -- the archive twin of the
+	// route above, sharing its rendering, cache, and invalidation. The
+	// same second-segment reasoning applies to archiveDetailPattern.
+	mux.Handle("GET /archive/{slug}/og.png", site.ArchiveCardHandler())
+
+	// The SPA handler is built above (spa) so the student workshop guide
+	// shares its meta injection and 200/404 logic.
+	mux.Handle("GET /", spa)
 
 	addr := fmt.Sprintf("127.0.0.1:%d", cfg.Port)
 

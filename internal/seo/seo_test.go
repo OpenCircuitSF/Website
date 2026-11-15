@@ -52,7 +52,7 @@ func newTestRenderer(source WorkshopSource) *Renderer {
 // close that gap; the name now says what the test actually checks.
 func TestRender_StaticRoutesGetDistinctNonEmptyTitles(t *testing.T) {
 	r := newTestRenderer(nil)
-	paths := []string{"/", "/about", "/privacy", "/events", "/subscribe", "/archive"}
+	paths := []string{"/", "/about", "/privacy", "/events", "/subscribe", "/archive", "/guides"}
 	titles := make(map[string]bool)
 	for _, p := range paths {
 		body := string(r.Render(p))

@@ -157,7 +157,7 @@ func TestWorkshopDetailSlug(t *testing.T) {
 
 // #0614: the old paths answer with a redirect, so neither is an SPA route.
 func TestIsKnownRouteDropsOldWorkshopPaths(t *testing.T) {
-	for _, path := range []string{"/workshops", "/workshops/solder-101"} {
+	for _, path := range []string{"/workshops", "/workshops/solder-101", "/workshops/programming-leds-3"} {
 		if isKnownRoute(path) {
 			t.Errorf("isKnownRoute(%q) = true, want false", path)
 		}
@@ -165,6 +165,20 @@ func TestIsKnownRouteDropsOldWorkshopPaths(t *testing.T) {
 	for _, path := range []string{"/events", "/events/solder-101"} {
 		if !isKnownRoute(path) {
 			t.Errorf("isKnownRoute(%q) = false, want true", path)
+		}
+	}
+}
+
+// Guide routes (#0656) are known only for slugs in the embedded catalog.
+func TestIsKnownRoute_Guides(t *testing.T) {
+	for _, path := range []string{"/guides", "/guides/", "/guides/baud-rate", "/guides/baud-rate/", "/workshops/programming-leds"} {
+		if !isKnownRoute(path) {
+			t.Errorf("isKnownRoute(%q) = false, want true", path)
+		}
+	}
+	for _, path := range []string{"/guides/nope", "/guides/baud-rate/x", "/workshops/programming-leds-3", "/workshops/solder-101", "/guides/programming-leds", "/workshops/baud-rate"} {
+		if isKnownRoute(path) {
+			t.Errorf("isKnownRoute(%q) = true, want false", path)
 		}
 	}
 }

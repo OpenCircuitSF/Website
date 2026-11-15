@@ -20,7 +20,7 @@ import (
 // publicFallbackRoutes is every route this issue's plan gives real fallback
 // content: the six static/index routes, plus a published workshop and a
 // published archive entry set up per-test below.
-var publicStaticRoutes = []string{"/", "/about", "/privacy", "/subscribe", "/events", "/archive"}
+var publicStaticRoutes = []string{"/", "/about", "/privacy", "/subscribe", "/events", "/archive", "/guides"}
 
 // TestRender_PublicRoutesServeExactlyOneH1 is acceptance criterion 1: every
 // public route serves exactly one <h1>, and a static route's <h1> text

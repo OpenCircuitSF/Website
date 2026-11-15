@@ -45,6 +45,8 @@ import (
 	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/guides"
 )
 
 // Placeholder tokens substituted into the built index.html. Must match the
@@ -246,7 +248,7 @@ func NewRenderer(template []byte, baseURL string, source WorkshopSource, archive
 // indexable page.
 func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 	image := baseURL + "/og-default.png"
-	return map[string]RouteMeta{
+	m := map[string]RouteMeta{
 		"/": {
 			Title:         "Open Circuit SF — Hands-on electronics workshops in San Francisco",
 			Description:   "A hands-on electronics workshop and community space in San Francisco. Solder, build, and learn at in-person workshops.",
@@ -332,7 +334,39 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			TwitterCard:   "summary_large_image",
 			page:          pageContent{kind: pageArchiveIndex},
 		},
+		// #0656: the guide index. Each guide's own entry is added below.
+		"/guides": {
+			Title:         "Guides — Open Circuit SF",
+			Description:   "Short, hands-on electronics explainers from Open Circuit SF: one idea each, with something to press, drag or break.",
+			OGTitle:       "Guides — Open Circuit SF",
+			OGDescription: "Short, hands-on electronics explainers: one idea each, with something to press, drag or break.",
+			OGImage:       image,
+			OGURL:         baseURL + "/guides",
+			Canonical:     baseURL + "/guides",
+			OGType:        "website",
+			TwitterCard:   "summary_large_image",
+			page:          pageContent{kind: pageGuidesIndex},
+		},
 	}
+	// #0656: every guide in the embedded catalog gets its own title,
+	// description (its plain-text meta description, normally the hook),
+	// canonical and per-guide OG card at /guides/{slug}/og.png -- social
+	// crawlers do not run JS, so this is the only preview they see.
+	for _, g := range guides.All() {
+		m[g.Path()] = RouteMeta{
+			Title:         g.Title + " — Open Circuit SF",
+			Description:   g.Description,
+			OGTitle:       g.Title,
+			OGDescription: g.Description,
+			OGImage:       baseURL + "/guides/" + g.Slug + "/og.png",
+			OGURL:         baseURL + g.Path(),
+			Canonical:     baseURL + g.Path(),
+			OGType:        "article",
+			TwitterCard:   "summary_large_image",
+			page:          pageContent{kind: pageGuide, guide: g.Slug},
+		}
+	}
+	return m
 }
 
 // defaultFallbackMeta is used for a path that IS in handlers.IsKnownRoute

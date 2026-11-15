@@ -109,6 +109,7 @@ Built to `web/dist/` and embedded into the Go binary at compile time via
 | `internal/venues` | The admin-managed venues a workshop listing can point at | 6 |
 | `internal/apitokens` | Admin-created, scoped, read-only bearer tokens for `/api/v1/` | 11 |
 | `internal/defaults` | Locks and writes `settings` rows that name another table's row, such as the default event type; the owning store enforces the rules through it | 6 |
+| `internal/guides` | The guide catalog (`web/src/content/guides/guides.json`, embedded): workshop and topic guide slugs, titles and hooks for routes, meta, cards and the sitemap | 6 |
 | `internal/seo` | Server-injected meta tags per route, sitemap, structured data | 2/7 |
 
 ---

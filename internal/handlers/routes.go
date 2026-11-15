@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/guides"
 )
 
 // knownStaticRoutes mirrors web/src/lib/router.ts's STATIC_ROUTES: every path
@@ -39,6 +41,7 @@ var knownStaticRoutes = map[string]bool{
 	"/recover/verify":   true,
 	"/account":          true,
 	"/admin":            true,
+	"/guides":           true,
 }
 
 // workshopDetailPattern is one of the two dynamic paths the router supports
@@ -48,6 +51,15 @@ var workshopDetailPattern = regexp.MustCompile(`^/events/[^/]+$`)
 // archiveDetailPattern is the other dynamic path (/archive/:slug, #0123),
 // mirroring router.ts's ARCHIVE_DETAIL regex.
 var archiveDetailPattern = regexp.MustCompile(`^/archive/[^/]+$`)
+
+// topicGuidePattern and workshopGuidePattern capture the slug of a guide
+// page (#0656). A match is a known route only when the slug is in the
+// embedded guide catalog (internal/guides), mirroring router.ts's
+// TOPIC_GUIDE_SLUGS and WORKSHOP_GUIDE_SLUGS, so an unknown slug stays a 404.
+var (
+	topicGuidePattern    = regexp.MustCompile(`^/guides/([^/]+)$`)
+	workshopGuidePattern = regexp.MustCompile(`^/workshops/([^/]+)$`)
+)
 
 // isKnownRoute reports whether path matches an entry in the SPA's route
 // table -- either a static path or the single dynamic pattern
@@ -59,6 +71,12 @@ func isKnownRoute(path string) bool {
 		path = path[:len(path)-1]
 	}
 	if knownStaticRoutes[path] {
+		return true
+	}
+	if m := topicGuidePattern.FindStringSubmatch(path); m != nil && guides.IsTopic(m[1]) {
+		return true
+	}
+	if m := workshopGuidePattern.FindStringSubmatch(path); m != nil && guides.IsWorkshopGuide(m[1]) {
 		return true
 	}
 	return workshopDetailPattern.MatchString(path) || archiveDetailPattern.MatchString(path)

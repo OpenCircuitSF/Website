@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/guides"
 )
 
 // marketingRoutes is the sitemap's curated static-route portion (#0020's
@@ -27,7 +29,8 @@ import (
 // the newest published workshop's UpdatedAt, "/archive" from the newest
 // published archive entry's UpdatedAt, and "/" from whichever of those two
 // sources changed most recently (Home renders from both). The purely static
-// copy pages -- "/about", "/privacy", "/subscribe" -- deliberately OMIT
+// copy pages -- "/about", "/privacy", "/subscribe", and "/guides" with every
+// guide page (#0656) -- deliberately OMIT
 // <lastmod> (the sitemap protocol allows this): nothing about their content
 // changes on a deploy, so no truthful date exists to state, and Google
 // discounts lastmod for a site where it is not consistently accurate --
@@ -36,7 +39,7 @@ import (
 // rows, its derived entries are omitted too. No entry's date is ever taken
 // from the clock: #0533 removed the construction-time stamp that made every
 // deploy claim every static page changed.
-var marketingRoutes = []string{"/", "/about", "/privacy", "/events", "/subscribe", "/archive"}
+var marketingRoutes = []string{"/", "/about", "/privacy", "/events", "/subscribe", "/archive", "/guides"}
 
 // urlset / sitemapURL model the sitemaps.org XML schema (only the two
 // elements #0020 requires: loc and lastmod).
@@ -95,7 +98,7 @@ func NewSitemap(baseURL string, source WorkshopSource, archive ArchiveSource) *S
 // marketingRoutes' doc comment): both source lists are fetched first, the
 // newest published UpdatedAt of each becomes "/events" and "/archive"'s
 // lastmod, and the later of the two becomes "/"'s. The three purely static
-// copy pages carry no lastmod at all. A source error aborts the whole
+// copy pages, "/guides", and every guide page (#0656) carry no lastmod. A source error aborts the whole
 // build, as before -- a half-populated sitemap must never be served.
 func (s *Sitemap) Build() ([]byte, error) {
 	set := urlset{Xmlns: "http://www.sitemaps.org/schemas/sitemap/0.9"}
@@ -144,12 +147,19 @@ func (s *Sitemap) Build() ([]byte, error) {
 		"/events":    workshopsMax,
 		"/subscribe": "",
 		"/archive":   archiveMax,
+		"/guides":    "",
 	}
 	for _, path := range marketingRoutes {
 		set.URLs = append(set.URLs, sitemapURL{
 			Loc:     s.baseURL + path,
 			LastMod: staticLastMod[path],
 		})
+	}
+
+	// #0656: every guide in the embedded catalog. Static content compiled
+	// into the binary, so no lastmod, like the copy pages above.
+	for _, g := range guides.All() {
+		set.URLs = append(set.URLs, sitemapURL{Loc: s.baseURL + g.Path()})
 	}
 
 	for _, w := range publishedWorkshops {
