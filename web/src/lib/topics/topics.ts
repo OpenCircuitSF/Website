@@ -11,6 +11,10 @@ import CableDemo from './CableDemo.svelte';
 import DelayDemo from './DelayDemo.svelte';
 import PinoutExplorer from './PinoutExplorer.svelte';
 import PowerDemo from './PowerDemo.svelte';
+import ProbesDemo from './ProbesDemo.svelte';
+import ContinuityDemo from './ContinuityDemo.svelte';
+import VoltageDemo from './VoltageDemo.svelte';
+import CurrentDemo from './CurrentDemo.svelte';
 
 /** The page body of one topic guide; its metadata comes from the catalog. */
 export interface TopicBody {
@@ -139,6 +143,82 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
     ],
     takeaway: 'Most pins are free to use. Treat 2, 8 and 9 with care, and never put 5V on a GPIO.',
+  },
+  'multimeter-probes': {
+    demo: ProbesDemo,
+    tryIt: 'Pick a meter, then click the jack where the black probe goes, then the red one. Try the wrong jacks too.',
+    ideas: [
+      {
+        title: 'Black always goes in COM',
+        body: 'COM means common. It is the reference every reading is measured from. On every meter, for every measurement, black goes in COM. It is usually in the middle, often with a black ring.',
+      },
+      {
+        title: 'Red goes in V almost every time',
+        body: 'The jack marked V (with Ω, and sometimes mA) is for volts, resistance and continuity. That covers nearly everything you will measure. On a 3-jack meter it is labeled VΩmA. On a 4-jack meter it is VΩ.',
+      },
+      {
+        title: 'The A jacks are only for current',
+        body: 'Jacks marked A, mA or 10A measure current. Inside, they are almost a plain wire to COM. Touch a battery with red in one of them and you short it through the meter, which blows the fuse. Some cheap 10A jacks have no fuse at all.',
+      },
+    ],
+    takeaway: 'Black in COM, red in V. Move red to an A jack only to measure current, then move it straight back.',
+  },
+  'multimeter-continuity': {
+    demo: ContinuityDemo,
+    tryIt: 'Turn the dial to the beep symbol (a diode with sound waves). Then touch the probes to each thing and listen, or here, look.',
+    ideas: [
+      {
+        title: 'A beep means connected',
+        body: 'On continuity the meter pushes a tiny current out of red and checks whether it comes back through black. If the path between them is under about 30 to 50 Ω, it beeps. You can keep your eyes on the probes instead of the display.',
+      },
+      {
+        title: 'No beep means open',
+        body: 'A broken wire, a cracked solder joint or an open switch shows OL, or a lone 1 on a budget meter. Nothing is getting through. A resistor reads its value but stays quiet: it is a path, just not a connection.',
+      },
+      {
+        title: 'Only on unpowered circuits',
+        body: 'The meter supplies its own small voltage to test with. Unplug the board or take the battery out first, or the reading means nothing. Use it to find a bad jumper wire, check a switch, or confirm a solder joint before you power up.',
+      },
+    ],
+    takeaway: 'Power off, dial to the beep, touch both ends. Beep is connected; silence is open.',
+  },
+  'multimeter-voltage': {
+    demo: VoltageDemo,
+    tryIt: 'Turn the dial to DC volts (V with a straight line), pick something to measure, then swap the probes. On the 3-jack meter, try a range that is too low.',
+    ideas: [
+      {
+        title: 'DC volts, probes across',
+        body: 'Voltage is measured across two points, with the circuit running. Black on ground or the minus end, red on the point you want. Batteries, USB and your board are all DC: the V with a straight line, not the V with a wave (~), which is for wall power.',
+      },
+      {
+        title: 'A minus sign is harmless',
+        body: 'Swap the probes and the meter shows the same number with a minus in front. It just means red is on the lower voltage. Nothing is damaged. On the SuperMini, black on G and red on 5V should read about 5 V; red on 3.3 should read about 3.3 V.',
+      },
+      {
+        title: 'Manual range: start high',
+        body: 'An auto-ranging meter picks the range for you. On a manual meter, the number on the dial is the most that range can show. Not sure what to expect? Start high and turn down. For a 9 V battery, 20 is right. Too low and the display shows a lone 1 at the left: over range.',
+      },
+    ],
+    takeaway: 'Dial to V with a straight line, black on ground, red on the point. A minus sign just means the probes are swapped.',
+  },
+  'multimeter-current': {
+    demo: CurrentDemo,
+    tryIt: 'Measure the LED’s current: move red to the right jack, set the dial, and put the meter in series. Then try the probes across the battery.',
+    ideas: [
+      {
+        title: 'The meter goes in the circuit',
+        body: 'Current is what flows through a wire, so the meter has to be in its path. Break the circuit open, then touch one probe to each side of the gap. All the current now flows through the meter. This is called measuring in series.',
+      },
+      {
+        title: 'Never across a battery',
+        body: 'An A jack is almost a plain wire to COM. Put those probes across a battery and you short the battery through the meter. Several amps flow and the fuse blows. A 10A jack with no fuse can get hot or be damaged. After measuring current, move red back to V.',
+      },
+      {
+        title: 'mA for small, 10A for big',
+        body: 'An LED draws 10 to 20 mA, so use the mA jack and a mA setting. Use the 10A or A jack only for big loads, like an LED strip on full white, which can draw an amp or more (see How many LEDs can USB power?). Many 10A jacks are rated for short measurements only, often 10 to 30 seconds.',
+      },
+    ],
+    takeaway: 'Current: red to mA, break the circuit, meter in series. Never across a battery. Then move red back to V.',
   },
 };
 

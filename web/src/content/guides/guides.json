@@ -78,6 +78,50 @@
         "reference"
       ],
       "post": "An interactive pinout for the tiny ESP32-C3 SuperMini: tap any pin to see what it does, including the three that can stop your board from booting."
+    },
+    {
+      "slug": "multimeter-probes",
+      "title": "Multimeter probes: which jack is which",
+      "hook": "Black goes in COM. Red goes in V almost every time. The jacks marked A are the ones that blow fuses.",
+      "minutes": 3,
+      "tags": [
+        "multimeter",
+        "tools"
+      ],
+      "post": "Black probe, red probe, three or four jacks with tiny labels. Click to plug them in and find out which jack is which, and which one blows fuses."
+    },
+    {
+      "slug": "multimeter-continuity",
+      "title": "Continuity: is this wire actually connected?",
+      "hook": "Touch the probes to both ends of a wire. A beep means it’s connected. Silence means it isn’t.",
+      "minutes": 2,
+      "tags": [
+        "multimeter",
+        "debugging"
+      ],
+      "post": "Is this wire actually connected? The multimeter’s beep setting answers in a second. Try it on a good wire, a broken one and a switch."
+    },
+    {
+      "slug": "multimeter-voltage",
+      "title": "Measuring voltage with a multimeter",
+      "hook": "Check a battery, then the 5V and 3.3 pins on your board. And find out what the minus sign means.",
+      "minutes": 3,
+      "tags": [
+        "multimeter",
+        "power"
+      ],
+      "post": "Measure a battery and your ESP32 board’s 5V and 3.3V pins with a multimeter, and learn what a minus sign or a lone 1 on the display means."
+    },
+    {
+      "slug": "multimeter-current",
+      "title": "Measuring current without blowing the fuse",
+      "hook": "To measure current the meter goes in the circuit, not across it. Put it across a battery and the fuse blows.",
+      "minutes": 4,
+      "tags": [
+        "multimeter",
+        "power"
+      ],
+      "post": "Measuring current is the one multimeter job that blows fuses. See why the meter goes in the circuit, not across it, and measure an LED’s 18 mA."
     }
   ]
 }
