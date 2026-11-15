@@ -12,6 +12,15 @@ export interface GuideMeta {
   /** Plain-text meta description when the hook is not suitable for one. */
   description?: string;
   tags: string[];
+  /** Which guide set it belongs to (GUIDE_SETS), for /guides' grouping. */
+  set: string;
+}
+
+/** A set of related guides, shown as one group on /guides. */
+export interface GuideSet {
+  id: string;
+  title: string;
+  blurb: string;
 }
 
 export interface TopicMeta extends GuideMeta {
@@ -22,6 +31,7 @@ export interface TopicMeta extends GuideMeta {
 
 export type GuideKind = 'workshop' | 'topic';
 
+export const GUIDE_SETS: readonly GuideSet[] = catalog.sets;
 export const WORKSHOP_GUIDES: readonly GuideMeta[] = catalog.workshopGuides;
 export const TOPIC_GUIDES: readonly TopicMeta[] = catalog.topics;
 

@@ -1,4 +1,21 @@
 {
+  "sets": [
+    {
+      "id": "leds",
+      "title": "LEDs",
+      "blurb": "Light up addressable LED strips with an ESP32, and fix the things that go wrong on the way."
+    },
+    {
+      "id": "multimeter",
+      "title": "Multimeter",
+      "blurb": "Plug in the probes, then check continuity, volts and amps without blowing a fuse."
+    },
+    {
+      "id": "soldering",
+      "title": "Soldering",
+      "blurb": "The right solder, the right temperature, and joints that hold."
+    }
+  ],
   "workshopGuides": [
     {
       "slug": "programming-leds",
@@ -8,7 +25,8 @@
         "workshop",
         "60 min",
         "beginner"
-      ]
+      ],
+      "set": "leds"
     }
   ],
   "topics": [
@@ -21,7 +39,8 @@
         "LEDs",
         "serial"
       ],
-      "post": "No LED on an addressable strip has an address. Watch how one wire tells a whole strip what to do, and the ways it fails silently."
+      "post": "No LED on an addressable strip has an address. Watch how one wire tells a whole strip what to do, and the ways it fails silently.",
+      "set": "leds"
     },
     {
       "slug": "delay-vs-millis",
@@ -32,7 +51,8 @@
         "code",
         "timing"
       ],
-      "post": "Press the button. The board using delay() misses most presses. The one using millis() never does. A 3-minute interactive explainer."
+      "post": "Press the button. The board using delay() misses most presses. The one using millis() never does. A 3-minute interactive explainer.",
+      "set": "leds"
     },
     {
       "slug": "baud-rate",
@@ -44,7 +64,8 @@
         "debugging"
       ],
       "description": "Garbage characters in your serial monitor are good news: the wiring works, only the speed is wrong.",
-      "post": "Garbage characters in your serial monitor? Your wiring is probably fine. See exactly why a baud-rate mismatch scrambles text, with a live decoder."
+      "post": "Garbage characters in your serial monitor? Your wiring is probably fine. See exactly why a baud-rate mismatch scrambles text, with a live decoder.",
+      "set": "leds"
     },
     {
       "slug": "charge-only-cables",
@@ -55,7 +76,8 @@
         "USB",
         "debugging"
       ],
-      "post": "Board lights up but your computer can’t see it? Charge-only USB cables look identical to data cables. See what’s missing inside."
+      "post": "Board lights up but your computer can’t see it? Charge-only USB cables look identical to data cables. See what’s missing inside.",
+      "set": "leds"
     },
     {
       "slug": "led-power-budget",
@@ -66,7 +88,8 @@
         "LEDs",
         "power"
       ],
-      "post": "Why does my LED strip keep rebooting the board on white? An interactive look at how much current LEDs draw, and how much USB can give."
+      "post": "Why does my LED strip keep rebooting the board on white? An interactive look at how much current LEDs draw, and how much USB can give.",
+      "set": "leds"
     },
     {
       "slug": "esp32-c3-supermini-pinout",
@@ -77,7 +100,8 @@
         "ESP32",
         "reference"
       ],
-      "post": "An interactive pinout for the tiny ESP32-C3 SuperMini: tap any pin to see what it does, including the three that can stop your board from booting."
+      "post": "An interactive pinout for the tiny ESP32-C3 SuperMini: tap any pin to see what it does, including the three that can stop your board from booting.",
+      "set": "leds"
     },
     {
       "slug": "multimeter-probes",
@@ -88,7 +112,8 @@
         "multimeter",
         "tools"
       ],
-      "post": "Black probe, red probe, three or four jacks with tiny labels. Click to plug them in and find out which jack is which, and which one blows fuses."
+      "post": "Black probe, red probe, three or four jacks with tiny labels. Click to plug them in and find out which jack is which, and which one blows fuses.",
+      "set": "multimeter"
     },
     {
       "slug": "multimeter-continuity",
@@ -99,7 +124,8 @@
         "multimeter",
         "debugging"
       ],
-      "post": "Is this wire actually connected? The multimeter’s beep setting answers in a second. Try it on a good wire, a broken one and a switch."
+      "post": "Is this wire actually connected? The multimeter’s beep setting answers in a second. Try it on a good wire, a broken one and a switch.",
+      "set": "multimeter"
     },
     {
       "slug": "multimeter-voltage",
@@ -110,7 +136,8 @@
         "multimeter",
         "power"
       ],
-      "post": "Measure a battery and your ESP32 board’s 5V and 3.3V pins with a multimeter, and learn what a minus sign or a lone 1 on the display means."
+      "post": "Measure a battery and your ESP32 board’s 5V and 3.3V pins with a multimeter, and learn what a minus sign or a lone 1 on the display means.",
+      "set": "multimeter"
     },
     {
       "slug": "multimeter-current",
@@ -121,7 +148,8 @@
         "multimeter",
         "power"
       ],
-      "post": "Measuring current is the one multimeter job that blows fuses. See why the meter goes in the circuit, not across it, and measure an LED’s 18 mA."
+      "post": "Measuring current is the one multimeter job that blows fuses. See why the meter goes in the circuit, not across it, and measure an LED’s 18 mA.",
+      "set": "multimeter"
     },
     {
       "slug": "soldering-solder-wire",
@@ -132,7 +160,8 @@
         "soldering",
         "tools"
       ],
-      "post": "Leaded or lead-free? 0.8 mm or 1.6 mm? And why plumbing solder ruins circuit boards. A quick, interactive guide to picking solder wire for electronics."
+      "post": "Leaded or lead-free? 0.8 mm or 1.6 mm? And why plumbing solder ruins circuit boards. A quick, interactive guide to picking solder wire for electronics.",
+      "set": "soldering"
     },
     {
       "slug": "soldering-iron-temperature",
@@ -143,7 +172,8 @@
         "soldering",
         "heat"
       ],
-      "post": "Too cold gives a dull, grainy joint. Too hot burns the flux and lifts pads. Turn the dial and find the window for leaded and lead-free solder, and see why tip size matters."
+      "post": "Too cold gives a dull, grainy joint. Too hot burns the flux and lifts pads. Turn the dial and find the window for leaded and lead-free solder, and see why tip size matters.",
+      "set": "soldering"
     },
     {
       "slug": "soldering-tinning",
@@ -154,7 +184,8 @@
         "soldering",
         "wires"
       ],
-      "post": "The trick that makes soldering wires easy: tin the wire, tin the pad, then join them. Try it both ways and compare."
+      "post": "The trick that makes soldering wires easy: tin the wire, tin the pad, then join them. Try it both ways and compare.",
+      "set": "soldering"
     },
     {
       "slug": "soldering-good-joint",
@@ -165,7 +196,8 @@
         "soldering",
         "debugging"
       ],
-      "post": "Cold, dry, bridged, blobbed or cooked? A quick quiz: spot the bad solder joint, then learn what caused it and how to fix it."
+      "post": "Cold, dry, bridged, blobbed or cooked? A quick quiz: spot the bad solder joint, then learn what caused it and how to fix it.",
+      "set": "soldering"
     },
     {
       "slug": "soldering-tip-care",
@@ -176,7 +208,8 @@
         "soldering",
         "tools"
       ],
-      "post": "A black soldering tip won’t take solder, however hot you run it. See what oxidizes a tip, and the two habits that keep it shiny for years."
+      "post": "A black soldering tip won’t take solder, however hot you run it. See what oxidizes a tip, and the two habits that keep it shiny for years.",
+      "set": "soldering"
     },
     {
       "slug": "soldering-header-pins",
@@ -187,7 +220,8 @@
         "soldering",
         "ESP32"
       ],
-      "post": "Straight header pins on the first try: use a breadboard as a jig and tack two opposite corners first. A step-by-step guide for the ESP32-C3 SuperMini."
+      "post": "Straight header pins on the first try: use a breadboard as a jig and tack two opposite corners first. A step-by-step guide for the ESP32-C3 SuperMini.",
+      "set": "soldering"
     }
   ]
 }

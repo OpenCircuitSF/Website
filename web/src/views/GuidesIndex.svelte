@@ -1,10 +1,20 @@
 <script lang="ts">
-  // /guides -- every short topic guide, plus the full workshop guides.
+  // /guides -- every short topic guide, grouped into its set (LEDs,
+  // Multimeter, Soldering), plus the full workshop guides. The filter at the
+  // top narrows the page to one set via ?set=<id> (lib/guideSets.ts).
+  import { currentRoute } from '../lib/router';
   import TerminalPanel from '../lib/TerminalPanel.svelte';
   import Prompt from '../lib/Prompt.svelte';
   import MiniStrip from '../lib/topics/MiniStrip.svelte';
   import { TOPICS } from '../lib/topics/topics';
-  import { WORKSHOP_GUIDES } from '../lib/guides';
+  import { GUIDE_SETS, WORKSHOP_GUIDES } from '../lib/guides';
+  import { ALL, countsBySet, groupBySet, hrefForSet, setFromQuery } from '../lib/guideSets';
+
+  const filter = $derived(setFromQuery($currentRoute.query?.get('set')));
+  const groups = $derived(groupBySet(TOPICS, filter));
+  const counts = countsBySet(TOPICS);
+  const workshops = $derived(WORKSHOP_GUIDES.filter((g) => filter === ALL || g.set === filter));
+  const choices = [{ id: ALL, title: 'All' }, ...GUIDE_SETS];
 </script>
 
 <main id="main-content" class="app-shell guides">
@@ -17,26 +27,41 @@
     </p>
   </TerminalPanel>
 
-  <ul class="cards">
-    {#each TOPICS as t, i (t.slug)}
-      <li>
-        <a class="card" href="/guides/{t.slug}">
-          <MiniStrip seed={i} />
-          <span class="tags">
-            {#each t.tags as tag (tag)}<span>{tag}</span>{/each}
-            <span>{t.minutes} min</span>
-          </span>
-          <strong>{t.title}</strong>
-          <span class="hook">{t.hook}</span>
-        </a>
-      </li>
+  <nav class="filter" aria-label="Filter guides">
+    {#each choices as c (c.id)}
+      <a href={hrefForSet(c.id)} aria-current={filter === c.id ? 'page' : undefined} class:on={filter === c.id}>
+        {c.title} <span class="count">{counts[c.id]}</span>
+      </a>
     {/each}
-  </ul>
+  </nav>
 
+  {#each groups as g (g.set.id)}
+    <section class="set" aria-labelledby="set-{g.set.id}">
+      <h2 id="set-{g.set.id}">{g.set.title}</h2>
+      <p class="text-muted">{g.set.blurb}</p>
+      <ul class="cards">
+        {#each g.guides as t (t.slug)}
+          <li>
+            <a class="card" href="/guides/{t.slug}">
+              <MiniStrip seed={TOPICS.indexOf(t)} />
+              <span class="tags">
+                {#each t.tags as tag (tag)}<span>{tag}</span>{/each}
+                <span>{t.minutes} min</span>
+              </span>
+              <strong>{t.title}</strong>
+              <span class="hook">{t.hook}</span>
+            </a>
+          </li>
+        {/each}
+      </ul>
+    </section>
+  {/each}
+
+  {#if workshops.length > 0}
   <section class="workshops">
     <h2>Workshop guides</h2>
     <p class="text-muted">Step-by-step companions to our in-person workshops.</p>
-    {#each WORKSHOP_GUIDES as g (g.slug)}
+    {#each workshops as g (g.slug)}
       <a class="card wide" href="/workshops/{g.slug}">
         <MiniStrip seed={7} count={10} />
         <span class="tags">{#each g.tags as tag (tag)}<span>{tag}</span>{/each}</span>
@@ -45,6 +70,7 @@
       </a>
     {/each}
   </section>
+  {/if}
 </main>
 
 <style>
@@ -61,6 +87,48 @@
     font-size: var(--fs-lg);
     color: var(--text-muted);
     max-width: var(--measure);
+  }
+  .filter {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+  .filter a {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 6px 14px;
+    border-radius: 999px;
+    border: var(--border-w) solid var(--border-strong);
+    background: var(--bg-panel);
+    color: var(--text);
+    text-decoration: none;
+    font-size: var(--fs-base);
+  }
+  .filter a:hover {
+    border-color: var(--accent);
+  }
+  .filter a.on {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-text);
+  }
+  .filter a:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .count {
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    opacity: 0.75;
+  }
+  .set h2,
+  .workshops h2 {
+    margin: 0 0 var(--space-1);
+    font-size: var(--fs-xl);
+  }
+  .set > p {
+    margin: 0 0 var(--space-3);
   }
   .cards {
     list-style: none;
@@ -112,10 +180,6 @@
   .hook {
     font-size: var(--fs-base);
     color: var(--text-muted);
-  }
-  .workshops h2 {
-    margin: 0 0 var(--space-1);
-    font-size: var(--fs-xl);
   }
   .workshops p {
     margin: 0 0 var(--space-3);
