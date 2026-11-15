@@ -408,6 +408,18 @@ const (
 	// field keys only, never values.
 	ActionOutreachConnectionsUpdated = "outreach_connections.updated"
 
+	// Guide posts (#0659): topic-guide social posts. Target is
+	// TargetGuidePost, target id the guide_posts id. Metadata never carries
+	// the post body. ActionGuidePostLinkCreated is written only when a call
+	// actually stored the short link.
+	ActionGuidePostCreated     = "guide_post.created"
+	ActionGuidePostUpdated     = "guide_post.updated"
+	ActionGuidePostLinkCreated = "guide_post.link_created"
+	ActionGuidePostScheduled   = "guide_post.scheduled"
+	ActionGuidePostUnscheduled = "guide_post.unscheduled"
+	ActionGuidePostQueued      = "guide_post.queued"
+	ActionGuidePostDeleted     = "guide_post.deleted"
+
 	// ActionServerSettingsUpdated records a save of the server settings in
 	// admin Settings (#0566). Its metadata names field keys only, never
 	// values.
@@ -614,6 +626,9 @@ const (
 	// outreach.* and outreach_post.* actions above (#0544).
 	TargetOutreach     = "outreach"
 	TargetOutreachPost = "outreach_post"
+	// TargetGuidePost is the target type for the guide_post.* actions
+	// (#0659).
+	TargetGuidePost = "guide_post"
 
 	// TargetOutreachLocation is the target type for the outreach_location.*
 	// actions above (#0548).

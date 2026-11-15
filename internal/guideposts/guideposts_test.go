@@ -3,6 +3,7 @@ package guideposts
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/guides"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outreach"
@@ -85,6 +86,51 @@ func TestNormalizeCampaignSlug(t *testing.T) {
 	for _, bad := range []string{"Guides", "a_b", "a--b", "-a", "a b", "a/b"} {
 		if _, err := NormalizeCampaignSlug(bad); err != ErrBadCampaignSlug {
 			t.Errorf("%q accepted", bad)
+		}
+	}
+}
+
+func TestSuggestedCampaign_UsesPacificMonth(t *testing.T) {
+	if got := SuggestedCampaign(time.Date(2026, 12, 1, 3, 0, 0, 0, time.UTC)); got != "guides-2026-11" {
+		t.Errorf("SuggestedCampaign = %q, want guides-2026-11", got)
+	}
+}
+
+func TestClickWindow_StartsOnSinceDayEndsTomorrow(t *testing.T) {
+	from, to := ClickWindow(time.Date(2026, 11, 3, 17, 30, 0, 0, time.UTC), time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC))
+	if !from.Equal(time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC)) || !to.Equal(time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("window = %v .. %v", from, to)
+	}
+}
+
+func TestClickWindow_ClampsTo366Days(t *testing.T) {
+	from, to := ClickWindow(time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 11, 14, 9, 0, 0, 0, time.UTC))
+	if to.Sub(from) != 366*24*time.Hour {
+		t.Errorf("span = %v", to.Sub(from))
+	}
+}
+
+func TestPostRef_MatchesDestinationUTMContent(t *testing.T) {
+	u := DestinationURL("https://s.test", "baud-rate", mustChannel(t, "bluesky"), 42)
+	if PostRef(42) != "gp42" || !strings.Contains(u, "utm_content="+PostRef(42)) {
+		t.Errorf("PostRef %q not in %q", PostRef(42), u)
+	}
+}
+
+func TestContainsURL_RequiresBoundary(t *testing.T) {
+	const u = "https://go.test/u/abc"
+	cases := map[string]bool{
+		"x " + u:         true,
+		u + " more":      true,
+		"see " + u + ".": true,
+		u + "d":          false,
+		u + "_":          false,
+		"none":           false,
+		u + "d and " + u: true,
+	}
+	for text, want := range cases {
+		if got := containsURL(text, u); got != want {
+			t.Errorf("containsURL(%q) = %v, want %v", text, got, want)
 		}
 	}
 }

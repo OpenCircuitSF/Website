@@ -375,7 +375,7 @@ func servePostgres(cfg *config.Config) error {
 	})
 	// Guide posts (#0658): a second social publisher over the same accounts,
 	// started and stopped by the Outreach publisher as its Companion. Its
-	// Linker is built where the admin handler takes it (#0659).
+	// Linker is built below, for the admin handler (#0659).
 	guideStore := guideposts.NewStore(pool, outbox.NewStore(pool))
 	guidePublisher := guideposts.NewPublisher(guideposts.PublisherDeps{
 		Store:    guideStore,
@@ -398,9 +398,15 @@ func servePostgres(cfg *config.Config) error {
 		Log:         slog.Default(),
 	})
 	adminOutreachH := handlers.NewAdminOutreachHandler(outreachStore, outreachStore, outreachStore, workshopsStore, conns.ShortLinker(), auditLogger, cfg.BaseURL, outreachPublisher)
+	// #0659: the guide-post admin API, mounted exactly when Outreach is.
+	adminGuidePostsH := handlers.NewAdminGuidePostsHandler(guideStore, guideposts.NewLinker(guideStore, conns.ShortLinker()), conns.ShortLinker(), auditLogger, cfg.BaseURL, guidePublisher)
+	adminGuidePostsH.SetPostHour(serverSettings.OutreachPostHour)
+	adminGuidePostsH.SetSignups(subscribersStore)
+	adminOutreachH.SetGuidePosts(adminGuidePostsH)
 	conns.OnChange(func(c outreachconn.Changed) {
 		if c.ShortLinks {
 			adminOutreachH.ResetShortLinks()
+			adminGuidePostsH.ResetShortLinks()
 		}
 	})
 	adminOutreachH.SetPostHour(serverSettings.OutreachPostHour)
@@ -1688,6 +1694,20 @@ func adminRoutes(
 				adminRoute{http.MethodPost, "/admin/outreach-connections/shortlinks/test", http.HandlerFunc(c.TestShortLinks)},
 				adminRoute{http.MethodPost, "/admin/outreach-connections/bluesky/test", http.HandlerFunc(c.TestBluesky)},
 				adminRoute{http.MethodPost, "/admin/outreach-connections/mastodon/test", http.HandlerFunc(c.TestMastodon)},
+			)
+		}
+		if g := adminOutreachH.GuidePosts(); g != nil {
+			routes = append(routes,
+				// #0659: guide posts (topic-guide social posts), hyphenated like Outreach's.
+				adminRoute{http.MethodGet, "/admin/guide-posts", http.HandlerFunc(g.List)},
+				adminRoute{http.MethodPost, "/admin/guide-posts", http.HandlerFunc(g.Create)},
+				adminRoute{http.MethodPatch, "/admin/guide-posts/{id}", http.HandlerFunc(g.Patch)},
+				adminRoute{http.MethodDelete, "/admin/guide-posts/{id}", http.HandlerFunc(g.Delete)},
+				adminRoute{http.MethodPost, "/admin/guide-posts/{id}/schedule", http.HandlerFunc(g.Schedule)},
+				adminRoute{http.MethodPost, "/admin/guide-posts/{id}/unschedule", http.HandlerFunc(g.Unschedule)},
+				adminRoute{http.MethodPost, "/admin/guide-posts/{id}/send", http.HandlerFunc(g.Send)},
+				adminRoute{http.MethodPost, "/admin/guide-posts/{id}/again", http.HandlerFunc(g.Again)},
+				adminRoute{http.MethodGet, "/admin/guide-posts-overview", http.HandlerFunc(g.Overview)},
 			)
 		}
 	}

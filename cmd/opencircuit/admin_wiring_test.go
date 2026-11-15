@@ -22,6 +22,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/db"
 	"github.com/brennanMKE/OpenCircuitSF/internal/events"
 	"github.com/brennanMKE/OpenCircuitSF/internal/eventtypes"
+	"github.com/brennanMKE/OpenCircuitSF/internal/guideposts"
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
@@ -238,6 +239,10 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// {id} placeholder is left unresolved for the /admin/outreach* paths (a
 	// 400 from the real handler still proves RequireAdmin let it through).
 	adminOutreachH := handlers.NewAdminOutreachHandler(outreach.NewStore(pool), outreach.NewStore(pool), outreach.NewStore(pool), workshopsStore, (*shortlinks.Client)(nil), auditLogger, cfg.BaseURL, (*outreach.Publisher)(nil))
+	// #0659: the guide-post routes, mounted through adminOutreachH, so the
+	// route loop proves all nine are admin-only.
+	guideStore := guideposts.NewStore(pool, outbox.NewStore(pool))
+	adminOutreachH.SetGuidePosts(handlers.NewAdminGuidePostsHandler(guideStore, guideposts.NewLinker(guideStore, nil), (*shortlinks.Client)(nil), auditLogger, cfg.BaseURL, (*guideposts.Publisher)(nil)))
 	// #0643: mounted through adminCampaignsH, so its guard is proven here too.
 	adminCampaignsH.SetUpcomingEvents(handlers.NewAdminNewsletterEventsHandler(campaignsStore, workshopsStore, outreach.NewStore(pool), outreach.NewStore(pool), (*shortlinks.Client)(nil), auditLogger, cfg.BaseURL))
 	broker := events.NewBroker()

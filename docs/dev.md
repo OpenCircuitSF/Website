@@ -166,6 +166,16 @@ the app port; the mock port needs no tunnel because the app, not the browser,
 talks to it. Public pages and the admin both work at that URL; the admin SPA
 is `http://localhost:18080/admin#/outreach`.
 
+### Guide posts against a real ShortLinks account
+
+After `scripts/db-reset.sh`, `guide_posts` ids start again at 1. The dev
+`BASE_URL` does not change, so a new draft's destination
+(`…/guides/{slug}?…utm_content=gp{id}…`) repeats an earlier dev destination,
+and ShortLinks' de-duplication hands back the earlier dev short link with its
+old clicks. This is harmless, since dev destinations never match production's
+`BASE_URL`: use the mock ShortLinks described above, or expect reused links
+and inherited click counts.
+
 ## Environment variables
 
 All variables have sensible defaults — no `.env` file is needed. Override any

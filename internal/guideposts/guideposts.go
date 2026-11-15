@@ -40,7 +40,64 @@ var (
 	ErrNoLink          = errors.New("guideposts: post has no short link yet")
 	ErrForeignLink     = errors.New("guideposts: ShortLinks returned a link for another destination")
 	ErrBadCampaignSlug = errors.New("guideposts: campaign slug may use only lowercase letters, digits and single hyphens")
+	ErrLinkRemoved     = errors.New("guideposts: the post must keep its short link")
 )
+
+// BodyError is a post body that fails validation (too long, empty); the
+// admin API answers it with 422 and its message.
+type BodyError struct{ Err error }
+
+func (e *BodyError) Error() string { return e.Err.Error() }
+func (e *BodyError) Unwrap() error { return e.Err }
+
+// maxClickDays bounds a campaign's stats window.
+const maxClickDays = 366
+
+// SuggestedCampaign is the campaign slug the admin form prefills: guides-
+// plus the Pacific year and month of now.
+func SuggestedCampaign(now time.Time) string {
+	return "guides-" + outreach.PacificDate(now)[:7]
+}
+
+// ClickWindow is the stats window for a campaign whose first post was made at
+// since: UTC midnight of since through UTC midnight after now, at most
+// maxClickDays long.
+func ClickWindow(since, now time.Time) (from, to time.Time) {
+	s, n := since.UTC(), now.UTC()
+	from = time.Date(s.Year(), s.Month(), s.Day(), 0, 0, 0, 0, time.UTC)
+	to = time.Date(n.Year(), n.Month(), n.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, 1)
+	if to.Sub(from) > maxClickDays*24*time.Hour {
+		from = to.AddDate(0, 0, -maxClickDays)
+	}
+	return from, to
+}
+
+// PostRef is post id's utm_content value, gp{id}.
+func PostRef(id int64) string { return "gp" + strconv.FormatInt(id, 10) }
+
+// containsURL reports whether text holds u followed by end of text or a byte
+// that cannot continue a short-link key, so a longer key starting with u
+// does not count.
+func containsURL(text, u string) bool {
+	if u == "" {
+		return false
+	}
+	for i := 0; ; {
+		j := strings.Index(text[i:], u)
+		if j < 0 {
+			return false
+		}
+		end := i + j + len(u)
+		if end == len(text) || !keyByte(text[end]) {
+			return true
+		}
+		i += j + 1
+	}
+}
+
+func keyByte(b byte) bool {
+	return b == '_' || b == '-' || (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
 
 // Post is one guide_posts row.
 type Post struct {
@@ -85,7 +142,7 @@ func DestinationURL(base, slug string, ch outreach.Channel, id int64) string {
 		"utm_source":   {ch.UTMSource},
 		"utm_medium":   {"social"},
 		"utm_campaign": {"guides"},
-		"utm_content":  {"gp" + strconv.FormatInt(id, 10)},
+		"utm_content":  {PostRef(id)},
 	}
 	return strings.TrimRight(base, "/") + "/guides/" + slug + "?" + q.Encode()
 }

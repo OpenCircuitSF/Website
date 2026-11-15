@@ -75,11 +75,11 @@ func TestLinker_MintsOneLinkPerPost(t *testing.T) {
 	l := NewLinker(s, fake)
 	a := create(t, s, "baud-rate", "bluesky", "", "")
 	b := create(t, s, "baud-rate", "bluesky", "", "")
-	pa, err := l.Ensure(ctx, a.ID)
+	pa, _, err := l.Ensure(ctx, a.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pb, err := l.Ensure(ctx, b.ID)
+	pb, _, err := l.Ensure(ctx, b.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestLinker_RetryAfterLostWriteReusesSameLink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := NewLinker(s, fake).Ensure(ctx, p.ID)
+	got, _, err := NewLinker(s, fake).Ensure(ctx, p.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestLinker_AlreadyLinkedMakesNoCall(t *testing.T) {
 	s := newTestStore(t)
 	fake := newFakeShortLinks()
 	p := linked(t, s, "bluesky")
-	got, err := NewLinker(s, fake).Ensure(context.Background(), p.ID)
+	got, _, err := NewLinker(s, fake).Ensure(context.Background(), p.ID)
 	if err != nil || *got.ShortURL != *p.ShortURL || fake.calls != 0 {
 		t.Errorf("Ensure = %+v, %v; %d calls", got, err, fake.calls)
 	}
@@ -125,7 +125,7 @@ func TestLinker_FailureKeepsDraftWithoutLink(t *testing.T) {
 	fake := newFakeShortLinks()
 	fake.err = shortlinks.ErrRateLimited
 	p := create(t, s, "baud-rate", "bluesky", "", "")
-	if _, err := NewLinker(s, fake).Ensure(context.Background(), p.ID); !errors.Is(err, shortlinks.ErrRateLimited) {
+	if _, _, err := NewLinker(s, fake).Ensure(context.Background(), p.ID); !errors.Is(err, shortlinks.ErrRateLimited) {
 		t.Errorf("err = %v", err)
 	}
 	got, _ := s.Get(context.Background(), p.ID)
@@ -139,7 +139,7 @@ func TestLinker_UnconfiguredReturnsErrUnavailable(t *testing.T) {
 	fake := newFakeShortLinks()
 	fake.enabled = false
 	p := create(t, s, "baud-rate", "bluesky", "", "")
-	if _, err := NewLinker(s, fake).Ensure(context.Background(), p.ID); !errors.Is(err, shortlinks.ErrUnavailable) {
+	if _, _, err := NewLinker(s, fake).Ensure(context.Background(), p.ID); !errors.Is(err, shortlinks.ErrUnavailable) {
 		t.Errorf("err = %v", err)
 	}
 	if fake.calls != 0 {
@@ -152,7 +152,7 @@ func TestLinker_RefusesForeignDestination(t *testing.T) {
 	fake := newFakeShortLinks()
 	fake.foreign = true
 	p := create(t, s, "baud-rate", "bluesky", "", "")
-	if _, err := NewLinker(s, fake).Ensure(context.Background(), p.ID); !errors.Is(err, ErrForeignLink) {
+	if _, _, err := NewLinker(s, fake).Ensure(context.Background(), p.ID); !errors.Is(err, ErrForeignLink) {
 		t.Errorf("err = %v", err)
 	}
 	got, _ := s.Get(context.Background(), p.ID)
@@ -166,7 +166,7 @@ func TestLinker_StoresReturnedCampaignSlug(t *testing.T) {
 	fake := newFakeShortLinks()
 	fake.suffix = "-2"
 	p := create(t, s, "baud-rate", "bluesky", "", "")
-	got, err := NewLinker(s, fake).Ensure(context.Background(), p.ID)
+	got, _, err := NewLinker(s, fake).Ensure(context.Background(), p.ID)
 	if err != nil || got.CampaignSlug != CampaignSlug+"-2" || fake.campaignOf[*got.ShortLinkKey] != CampaignSlug+"-2" {
 		t.Errorf("post = %+v, %v", got, err)
 	}
@@ -181,11 +181,11 @@ func TestLinker_MintsIntoEachDraftsCampaign(t *testing.T) {
 	l := NewLinker(s, fake)
 	a := create(t, s, "baud-rate", "bluesky", "", "")
 	b := create(t, s, "baud-rate", "bluesky", "", "guides-repost-2027")
-	pa, err := l.Ensure(ctx, a.ID)
+	pa, _, err := l.Ensure(ctx, a.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pb, err := l.Ensure(ctx, b.ID)
+	pb, _, err := l.Ensure(ctx, b.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,5 +194,22 @@ func TestLinker_MintsIntoEachDraftsCampaign(t *testing.T) {
 	}
 	if fake.campaignOf[*pb.ShortLinkKey] != "guides-repost-2027" || pb.CampaignSlug != "guides-repost-2027" {
 		t.Errorf("repost minted into %q / stored %q", fake.campaignOf[*pb.ShortLinkKey], pb.CampaignSlug)
+	}
+}
+
+func TestLinker_EnsureReportsMintedOnlyOnce(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	fake := newFakeShortLinks()
+	l := NewLinker(s, fake)
+	p := create(t, s, "baud-rate", "bluesky", "", "")
+	if _, minted, err := l.Ensure(ctx, p.ID); err != nil || !minted {
+		t.Fatalf("first: minted=%v err=%v", minted, err)
+	}
+	if _, minted, err := l.Ensure(ctx, p.ID); err != nil || minted {
+		t.Fatalf("second: minted=%v err=%v", minted, err)
+	}
+	if fake.creates != 1 {
+		t.Errorf("creates = %d, want 1", fake.creates)
 	}
 }

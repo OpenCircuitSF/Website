@@ -314,3 +314,107 @@ func TestClickKeys_GroupsByCampaign(t *testing.T) {
 		t.Errorf("ClickKeys = %v, want %v and %v", found, want1, want2)
 	}
 }
+
+// posted makes a linked post and marks it posted.
+func posted(t *testing.T, s *Store, channel string) Post {
+	t.Helper()
+	ctx := context.Background()
+	p := linked(t, s, channel)
+	if _, _, err := s.QueueNow(ctx, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.MarkRemotePosted(ctx, p.ID, "r", "u", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.Get(ctx, p.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestUpdateBody_RefusesRemovingShortURL(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	p := linked(t, s, "bluesky")
+	if _, err := s.UpdateBody(ctx, p.ID, "no link here"); !errors.Is(err, ErrLinkRemoved) {
+		t.Fatalf("err = %v, want ErrLinkRemoved", err)
+	}
+	got, _ := s.Get(ctx, p.ID)
+	if got.Body != p.Body {
+		t.Errorf("body changed: %q", got.Body)
+	}
+}
+
+func TestUpdateBody_RefusesLongerKeyLookalike(t *testing.T) {
+	s := newTestStore(t)
+	p := linked(t, s, "bluesky")
+	if _, err := s.UpdateBody(context.Background(), p.ID, "x "+*p.ShortURL+"Z"); !errors.Is(err, ErrLinkRemoved) {
+		t.Errorf("err = %v, want ErrLinkRemoved", err)
+	}
+}
+
+func TestUpdateBody_AcceptsEditKeepingShortURL(t *testing.T) {
+	s := newTestStore(t)
+	p := linked(t, s, "bluesky")
+	got, err := s.UpdateBody(context.Background(), p.ID, "new words "+*p.ShortURL+".")
+	if err != nil || got.Body != "new words "+*p.ShortURL+"." {
+		t.Errorf("got %q, %v", got.Body, err)
+	}
+}
+
+func TestUpdateBody_UnlinkedDraftMayDropToken(t *testing.T) {
+	s := newTestStore(t)
+	p := create(t, s, "baud-rate", "bluesky", "", "")
+	if _, err := s.UpdateBody(context.Background(), p.ID, "no token"); err != nil {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestCreate_OverLimitIsBodyError(t *testing.T) {
+	s := newTestStore(t)
+	body := strings.Repeat("x", 280) + " " + outreach.LinkToken
+	_, err := s.Create(context.Background(), "baud-rate", "bluesky", body, testBase, "")
+	var be *BodyError
+	if !errors.As(err, &be) {
+		t.Errorf("err = %v, want *BodyError", err)
+	}
+}
+
+func TestCopyAsDraft_NewDraftNewCampaignTokenRestored(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	src := posted(t, s, "mastodon")
+	cp, err := s.CopyAsDraft(ctx, src.ID, testBase, "guides-2026-12")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = s.pool.Exec(ctx, `DELETE FROM guide_posts WHERE id = $1`, cp.ID) })
+	want := strings.ReplaceAll(src.Body, *src.ShortURL, outreach.LinkToken)
+	if cp.Status != "draft" || cp.ID == src.ID || cp.DestinationURL == src.DestinationURL ||
+		cp.CampaignSlug != "guides-2026-12" || cp.ShortURL != nil || cp.Body != want || cp.Channel != src.Channel {
+		t.Errorf("copy = %+v", cp)
+	}
+}
+
+func TestCopyAsDraft_RefusesNonPosted(t *testing.T) {
+	s := newTestStore(t)
+	p := linked(t, s, "bluesky")
+	if _, err := s.CopyAsDraft(context.Background(), p.ID, testBase, ""); !errors.Is(err, ErrWrongStatus) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestCopyAsDraft_BlankCampaignIsDefault(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	src := posted(t, s, "bluesky")
+	cp, err := s.CopyAsDraft(ctx, src.ID, testBase, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = s.pool.Exec(ctx, `DELETE FROM guide_posts WHERE id = $1`, cp.ID) })
+	if cp.CampaignSlug != CampaignSlug {
+		t.Errorf("campaign = %q", cp.CampaignSlug)
+	}
+}

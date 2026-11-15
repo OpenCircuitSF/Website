@@ -124,7 +124,9 @@ type AdminOutreachHandler struct {
 	// conns serves the connection-settings routes; nil when the server runs
 	// without a database.
 	conns *AdminOutreachConnectionsHandler
-	now   func() time.Time
+	// guidePosts serves the guide-post routes (#0659); nil when unattached.
+	guidePosts *AdminGuidePostsHandler
+	now        func() time.Time
 }
 
 // NewAdminOutreachHandler constructs the handler. baseURL is the site's own
@@ -176,6 +178,22 @@ func (h *AdminOutreachHandler) Connections() *AdminOutreachConnectionsHandler {
 		return nil
 	}
 	return h.conns
+}
+
+// SetGuidePosts attaches the guide-post handler (#0659), so its routes are
+// mounted exactly when Outreach is.
+func (h *AdminOutreachHandler) SetGuidePosts(g *AdminGuidePostsHandler) {
+	if h != nil {
+		h.guidePosts = g
+	}
+}
+
+// GuidePosts returns the attached guide-post handler, or nil.
+func (h *AdminOutreachHandler) GuidePosts() *AdminGuidePostsHandler {
+	if h == nil {
+		return nil
+	}
+	return h.guidePosts
 }
 
 func (h *AdminOutreachHandler) linksEnabled() bool {

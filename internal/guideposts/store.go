@@ -96,7 +96,7 @@ func (s *Store) Create(ctx context.Context, slug, channel, body, base, campaign 
 		body = DefaultBody(g)
 	}
 	if err := ValidateDraft(ch, body); err != nil {
-		return Post{}, err
+		return Post{}, &BodyError{Err: err}
 	}
 	var id int64
 	if err := s.pool.QueryRow(ctx, `SELECT nextval('guide_posts_id_seq')`).Scan(&id); err != nil {
@@ -122,6 +122,9 @@ func (s *Store) UpdateBody(ctx context.Context, id int64, body string) (Post, er
 	if err := lockedStatus(cur.Status); err != nil {
 		return Post{}, err
 	}
+	if cur.ShortURL != nil && !containsURL(body, *cur.ShortURL) {
+		return Post{}, ErrLinkRemoved
+	}
 	ch, _ := outreach.ChannelByName(cur.Channel)
 	if cur.ShortURL != nil {
 		err = outreach.ValidateForSend(ch, body)
@@ -129,7 +132,7 @@ func (s *Store) UpdateBody(ctx context.Context, id int64, body string) (Post, er
 		err = ValidateDraft(ch, body)
 	}
 	if err != nil {
-		return Post{}, err
+		return Post{}, &BodyError{Err: err}
 	}
 	p, err := scanPost(s.pool.QueryRow(ctx,
 		`UPDATE guide_posts SET body = $2, updated_at = now() WHERE id = $1 AND status IN `+sendableStatuses+` RETURNING `+postColumns, id, body))
@@ -140,6 +143,24 @@ func (s *Store) UpdateBody(ctx context.Context, id int64, body string) (Post, er
 		return Post{}, fmt.Errorf("guideposts: update body: %w", err)
 	}
 	return p, nil
+}
+
+// CopyAsDraft is "schedule again": a new draft from posted post id, with the
+// same text and the old short URL swapped back to the link token, so the copy
+// gets its own link in the same place. campaign follows Create's rule.
+func (s *Store) CopyAsDraft(ctx context.Context, id int64, base, campaign string) (Post, error) {
+	src, err := s.Get(ctx, id)
+	if err != nil {
+		return Post{}, err
+	}
+	if src.Status != "posted" {
+		return Post{}, ErrWrongStatus
+	}
+	body := src.Body
+	if src.ShortURL != nil {
+		body = strings.ReplaceAll(body, *src.ShortURL, outreach.LinkToken)
+	}
+	return s.Create(ctx, src.GuideSlug, src.Channel, body, base, campaign)
 }
 
 func lockedStatus(status string) error {

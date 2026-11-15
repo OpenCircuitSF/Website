@@ -150,7 +150,7 @@ func (f *fakeShortLinker) CreateLink(_ context.Context, req shortlinks.CreateLin
 	// key is given.
 	if f.fixedKey == "" && req.Key == "" {
 		if k, ok := f.byDest[req.DestinationURL]; ok {
-			return &shortlinks.Link{Key: k}, nil
+			return &shortlinks.Link{Key: k, DestinationURL: req.DestinationURL}, nil
 		}
 	}
 	f.links = append(f.links, req)
@@ -158,13 +158,13 @@ func (f *fakeShortLinker) CreateLink(_ context.Context, req shortlinks.CreateLin
 		f.afterCreate()
 	}
 	if f.fixedKey != "" {
-		return &shortlinks.Link{Key: f.fixedKey}, nil
+		return &shortlinks.Link{Key: f.fixedKey, DestinationURL: req.DestinationURL}, nil
 	}
 	if f.byDest == nil {
 		f.byDest = map[string]string{}
 	}
 	f.byDest[req.DestinationURL] = fmt.Sprintf("k%d", len(f.links))
-	return &shortlinks.Link{Key: fmt.Sprintf("k%d", len(f.links))}, nil
+	return &shortlinks.Link{Key: fmt.Sprintf("k%d", len(f.links)), DestinationURL: req.DestinationURL}, nil
 }
 
 func outreachTestPool(t *testing.T) *pgxpool.Pool {
