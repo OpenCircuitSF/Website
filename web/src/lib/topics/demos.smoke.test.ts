@@ -8,6 +8,13 @@ import Playground from '../guide/Playground.svelte';
 import CableDemo from './CableDemo.svelte';
 import BaudDemo from './BaudDemo.svelte';
 import PinoutExplorer from './PinoutExplorer.svelte';
+// Soldering guides (#0667)
+import SolderWireDemo from './SolderWireDemo.svelte';
+import IronTempDemo from './IronTempDemo.svelte';
+import TinningDemo from './TinningDemo.svelte';
+import JointQuiz from './JointQuiz.svelte';
+import TipCareDemo from './TipCareDemo.svelte';
+import HeaderPinsDemo from './HeaderPinsDemo.svelte';
 
 afterEach(cleanup);
 
@@ -46,5 +53,57 @@ describe('guide demos', () => {
     await fireEvent.click(r.getByText('→ Upload'));
     await tick();
     expect(r.container.textContent).toContain('Could not exclusively lock port');
+  });
+
+  // Soldering guides (#0667)
+  it('solder wire: plumbing solder is flagged, 63/37 melts at 183 °C', async () => {
+    const r = render(SolderWireDemo);
+    expect(r.container.textContent).toContain('183 °C');
+    await fireEvent.click(r.getByRole('radio', { name: 'Plumbing solder' }));
+    expect(r.container.textContent).toContain('Never use it on electronics');
+  });
+
+  it('iron temperature: 340 °C makes a good leaded joint, too cool for lead-free', async () => {
+    const r = render(IronTempDemo);
+    await fireEvent.input(r.getByRole('slider'), { target: { value: '340' } });
+    expect(r.getByRole('heading', { name: 'Good joint' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: 'Lead-free SAC305' }));
+    expect(r.getByRole('heading', { name: 'It works, slowly' })).toBeTruthy();
+  });
+
+  it('tinning: both tinned joins in about a second; bare makes a blob', async () => {
+    const r = render(TinningDemo);
+    await fireEvent.click(r.getByText('Join them'));
+    expect(r.getByRole('heading', { name: 'A weak blob' })).toBeTruthy();
+    await fireEvent.click(r.getByText('Start over'));
+    await fireEvent.click(r.getByText('Tin the wire'));
+    await fireEvent.click(r.getByText('Tin the pad'));
+    await fireEvent.click(r.getByText('Join them'));
+    expect(r.getByRole('heading', { name: 'Clean joint in about a second' })).toBeTruthy();
+  });
+
+  it('joint quiz: naming the first joint correctly scores a point', async () => {
+    const r = render(JointQuiz);
+    await fireEvent.click(r.getByRole('button', { name: 'Cold joint' }));
+    expect(r.getByText('Correct!')).toBeTruthy();
+    await fireEvent.click(r.getByText('Next joint →'));
+    expect(r.container.textContent).toContain('Joint 2 of 7 · Score 1');
+  });
+
+  it('tip care: storing a bare tip twice turns it black and it stops taking solder', async () => {
+    const r = render(TipCareDemo);
+    await fireEvent.click(r.getByText('Switch off with a bare tip'));
+    await fireEvent.click(r.getByText('Switch off with a bare tip'));
+    expect(r.getByText('Black, oxidized')).toBeTruthy();
+    expect(r.getByText('Won’t take solder')).toBeTruthy();
+    await fireEvent.click(r.getByText('Use tip tinner paste'));
+    expect(r.getByText('Shiny silver')).toBeTruthy();
+  });
+
+  it('header pins: the third step tacks one corner', async () => {
+    const r = render(HeaderPinsDemo);
+    await fireEvent.click(r.getByText('Next →'));
+    await fireEvent.click(r.getByText('Next →'));
+    expect(r.getByRole('heading', { name: 'Tack one corner' })).toBeTruthy();
   });
 });

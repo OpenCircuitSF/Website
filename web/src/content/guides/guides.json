@@ -78,6 +78,72 @@
         "reference"
       ],
       "post": "An interactive pinout for the tiny ESP32-C3 SuperMini: tap any pin to see what it does, including the three that can stop your board from booting."
+    },
+    {
+      "slug": "soldering-solder-wire",
+      "title": "Which solder wire should you buy?",
+      "hook": "Leaded or lead-free, thick or thin, and the one kind that must never touch a circuit board.",
+      "minutes": 3,
+      "tags": [
+        "soldering",
+        "tools"
+      ],
+      "post": "Leaded or lead-free? 0.8 mm or 1.6 mm? And why plumbing solder ruins circuit boards. A quick, interactive guide to picking solder wire for electronics."
+    },
+    {
+      "slug": "soldering-iron-temperature",
+      "title": "What temperature should your soldering iron be?",
+      "hook": "Too cold makes a dull, weak joint. Too hot burns the flux and lifts the pad. Find the window.",
+      "minutes": 3,
+      "tags": [
+        "soldering",
+        "heat"
+      ],
+      "post": "Too cold gives a dull, grainy joint. Too hot burns the flux and lifts pads. Turn the dial and find the window for leaded and lead-free solder, and see why tip size matters."
+    },
+    {
+      "slug": "soldering-tinning",
+      "title": "Tin first, then join",
+      "hook": "Two surfaces already coated in solder flow together in a second. Bare ones fight you.",
+      "minutes": 2,
+      "tags": [
+        "soldering",
+        "wires"
+      ],
+      "post": "The trick that makes soldering wires easy: tin the wire, tin the pad, then join them. Try it both ways and compare."
+    },
+    {
+      "slug": "soldering-good-joint",
+      "title": "Spot the bad solder joint",
+      "hook": "A good joint looks like a tiny shiny volcano. Can you name what went wrong with the others?",
+      "minutes": 3,
+      "tags": [
+        "soldering",
+        "debugging"
+      ],
+      "post": "Cold, dry, bridged, blobbed or cooked? A quick quiz: spot the bad solder joint, then learn what caused it and how to fix it."
+    },
+    {
+      "slug": "soldering-tip-care",
+      "title": "Why your soldering tip stopped working",
+      "hook": "A black tip won’t take solder, however hot it is. Here’s how it got that way, and how to keep it shiny.",
+      "minutes": 3,
+      "tags": [
+        "soldering",
+        "tools"
+      ],
+      "post": "A black soldering tip won’t take solder, however hot you run it. See what oxidizes a tip, and the two habits that keep it shiny for years."
+    },
+    {
+      "slug": "soldering-header-pins",
+      "title": "Soldering header pins onto the ESP32-C3 SuperMini",
+      "hook": "Use a breadboard as a jig, tack two opposite corners, and the pins come out straight every time.",
+      "minutes": 3,
+      "tags": [
+        "soldering",
+        "ESP32"
+      ],
+      "post": "Straight header pins on the first try: use a breadboard as a jig and tack two opposite corners first. A step-by-step guide for the ESP32-C3 SuperMini."
     }
   ]
 }
