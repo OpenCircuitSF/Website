@@ -7,6 +7,7 @@
   import Prompt from '../lib/Prompt.svelte';
   import TraceDivider from '../lib/TraceDivider.svelte';
   import GuideEnd from '../lib/GuideEnd.svelte';
+  import ShareBar from '../lib/topics/ShareBar.svelte';
   import LedStrip from '../lib/guide/LedStrip.svelte';
   import StepList from '../lib/guide/StepList.svelte';
   import BoardPinout from '../lib/guide/BoardPinout.svelte';
@@ -65,6 +66,7 @@
       <li><span>Board</span>ESP32-C3</li>
       <li><span>LEDs</span>{PHYSICAL_LEDS} × WS2812B</li>
     </ul>
+    <ShareBar path="/workshops/programming-leds" />
 
     <div class="hero-strip">
       <LedStrip leds={heroLeds} brightness={heroCfg.brightness} size="lg" label="Demo strip" />

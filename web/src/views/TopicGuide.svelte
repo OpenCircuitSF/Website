@@ -28,7 +28,7 @@
         <span class="chip">{topic.minutes} min</span>
         {#each topic.tags as t (t)}<span class="chip">{t}</span>{/each}
       </div>
-      <ShareBar text={topic.post} path="/guides/{topic.slug}" />
+      <ShareBar path="/guides/{topic.slug}" />
     </TerminalPanel>
 
     <section class="demo" aria-labelledby="try-it">
@@ -90,7 +90,7 @@
       <p><a href="/guides">All guides →</a></p>
     </section>
 
-    <ShareBar text={topic.post} path="/guides/{topic.slug}" />
+    <ShareBar path="/guides/{topic.slug}" />
   </main>
 {/if}
 

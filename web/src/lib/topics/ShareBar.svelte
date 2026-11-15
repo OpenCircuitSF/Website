@@ -1,45 +1,39 @@
 <script lang="ts">
-  // Share a guide. Bluesky has a compose intent URL; Mastodon has no
-  // universal one (every server is different), so it gets a "copy post"
-  // button. Phones get the native share sheet when it exists.
+  // Share a guide: one button that copies the page link. The guide pages
+  // unfurl into a card on Bluesky, Mastodon and elsewhere, so the link is all
+  // a reader needs to paste wherever they post. If the clipboard is refused,
+  // the link is shown selected so it can be copied by hand.
   interface Props {
-    text: string;
     path: string;
   }
-  let { text, path }: Props = $props();
+  let { path }: Props = $props();
 
   const url = $derived(typeof window === 'undefined' ? path : new URL(path, window.location.origin).href);
-  const full = $derived(`${text} ${url}`);
-  const bsky = $derived(`https://bsky.app/intent/compose?text=${encodeURIComponent(full)}`);
-  const canShare = typeof navigator !== 'undefined' && 'share' in navigator;
 
-  let copied = $state<'post' | 'link' | null>(null);
-  async function copy(what: 'post' | 'link') {
+  let state = $state<'idle' | 'copied' | 'failed'>('idle');
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  async function copy() {
+    clearTimeout(timer);
     try {
-      await navigator.clipboard.writeText(what === 'post' ? full : url);
-      copied = what;
-      setTimeout(() => (copied = null), 1800);
+      await navigator.clipboard.writeText(url);
+      state = 'copied';
+      timer = setTimeout(() => (state = 'idle'), 1800);
     } catch {
-      copied = null;
+      state = 'failed';
     }
   }
-  async function nativeShare() {
-    try {
-      await navigator.share({ text, url });
-    } catch {
-      // Cancelled or unsupported: nothing to do.
-    }
+  function selectAll(e: FocusEvent) {
+    (e.currentTarget as HTMLInputElement).select();
   }
 </script>
 
-<div class="share" role="group" aria-label="Share this guide">
-  <span class="label">Share</span>
-  <a class="btn" href={bsky} target="_blank" rel="noopener noreferrer">Bluesky ↗</a>
-  <button type="button" class="btn" onclick={() => copy('post')}>{copied === 'post' ? 'Copied ✓' : 'Copy post for Mastodon'}</button>
-  <button type="button" class="btn" onclick={() => copy('link')}>{copied === 'link' ? 'Copied ✓' : 'Copy link'}</button>
-  {#if canShare}
-    <button type="button" class="btn" onclick={nativeShare}>Share…</button>
+<div class="share">
+  <button type="button" class="btn" onclick={copy}>{state === 'copied' ? 'Link copied ✓' : 'Share'}</button>
+  {#if state === 'failed'}
+    <!-- svelte-ignore a11y_autofocus -->
+    <input class="manual" readonly value={url} aria-label="Link to this guide" onfocus={selectAll} autofocus />
   {/if}
+  <span class="sr-only" role="status" aria-live="polite">{state === 'copied' ? 'Link copied' : ''}</span>
 </div>
 
 <style>
@@ -49,25 +43,29 @@
     align-items: center;
     gap: var(--space-2);
   }
-  .label {
-    font-family: var(--font-mono);
-    font-size: var(--fs-sm);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-faint);
-  }
   .btn {
     font: inherit;
     font-size: var(--fs-base);
-    padding: 4px 12px;
+    padding: 4px 14px;
     border-radius: 999px;
     border: var(--border-w) solid var(--border-strong);
     background: var(--bg-panel);
     color: var(--text);
-    text-decoration: none;
     cursor: pointer;
   }
   .btn:hover {
     background: var(--bg-subtle);
+  }
+  .manual {
+    font: inherit;
+    font-family: var(--font-mono);
+    font-size: var(--fs-sm);
+    min-width: 0;
+    flex: 1 1 16rem;
+    padding: 4px 8px;
+    border: var(--border-w) solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--bg-panel);
+    color: var(--text);
   }
 </style>
