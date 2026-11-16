@@ -287,6 +287,67 @@
       ],
       "post": "Update an ESP32 without plugging it in. See how over-the-air updates write into a second slot, so a dropped update leaves the old code running.",
       "set": "esp32"
+    },
+    {
+      "slug": "esp32-c3-wifi",
+      "title": "WiFi on the ESP32-C3 in 3 minutes",
+      "hook": "Four lines connect the board to WiFi. Here’s what to do when they don’t.",
+      "minutes": 3,
+      "tags": [
+        "ESP32",
+        "WiFi"
+      ],
+      "post": "Get an ESP32-C3 onto WiFi in four lines, then see why it fails on 5 GHz, café and wrong-password networks, and the SuperMini antenna fix.",
+      "set": "esp32"
+    },
+    {
+      "slug": "ble-vs-wifi",
+      "title": "Bluetooth LE or WiFi: which do you need?",
+      "hook": "WiFi reaches the internet. BLE talks to the phone in your hand. Tick what your project needs.",
+      "minutes": 2,
+      "tags": [
+        "ESP32",
+        "BLE",
+        "WiFi"
+      ],
+      "post": "Bluetooth LE or WiFi for your ESP32-C3 project? Tick what it needs and get an answer with reasons, plus the one Bluetooth thing the C3 can’t do.",
+      "set": "esp32"
+    },
+    {
+      "slug": "ble-basics",
+      "title": "Bluetooth LE basics: a light switch on your phone",
+      "hook": "Advertise, connect, then read and write a value. That’s how a phone switches an LED on.",
+      "minutes": 4,
+      "tags": [
+        "ESP32",
+        "BLE"
+      ],
+      "post": "How does a phone switch an LED on over Bluetooth LE? Scan, connect, read, write and subscribe to an ESP32-C3 in an interactive demo.",
+      "set": "esp32"
+    },
+    {
+      "slug": "wifi-brownout-resets",
+      "title": "Why turning on WiFi resets your board",
+      "hook": "WiFi transmits in bursts of over 300 mA. A thin cable can’t keep up, and the board reboots.",
+      "minutes": 3,
+      "tags": [
+        "ESP32",
+        "power"
+      ],
+      "post": "Board resets as soon as WiFi starts? “Brownout detector was triggered” means the voltage sagged. See why, and the cable, capacitor and power fixes.",
+      "set": "esp32"
+    },
+    {
+      "slug": "esp32-c3-deep-sleep",
+      "title": "Deep sleep: make a battery last months",
+      "hook": "Asleep, the ESP32-C3 chip draws 5 microamps. Awake with WiFi, thousands of times more.",
+      "minutes": 4,
+      "tags": [
+        "ESP32",
+        "power"
+      ],
+      "post": "Make an ESP32-C3 run for months on a battery: deep sleep, timer and button wake, and a calculator showing what WiFi and the power LED cost you.",
+      "set": "esp32"
     }
   ]
 }

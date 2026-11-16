@@ -28,6 +28,12 @@ import UploadDoctor from './UploadDoctor.svelte';
 import SerialOutputDemo from './SerialOutputDemo.svelte';
 import IniBuilderDemo from './IniBuilderDemo.svelte';
 import OtaDemo from './OtaDemo.svelte';
+// ESP32-C3: wireless and sleep (#0672)
+import WifiConnectDemo from './WifiConnectDemo.svelte';
+import BleWifiPicker from './BleWifiPicker.svelte';
+import BleBasicsDemo from './BleBasicsDemo.svelte';
+import BrownoutDemo from './BrownoutDemo.svelte';
+import DeepSleepDemo from './DeepSleepDemo.svelte';
 
 /** The page body of one topic guide; its metadata comes from the catalog. */
 export interface TopicBody {
@@ -443,6 +449,106 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
     ],
     takeaway: 'First upload by cable, same network, a password, and every version keeps calling ArduinoOTA.handle().',
+  },
+  // ESP32-C3: wireless and sleep (#0672)
+  'esp32-c3-wifi': {
+    demo: WifiConnectDemo,
+    tryIt: 'Pick a network and watch the serial monitor. Then tick the antenna problem and find the fix.',
+    ideas: [
+      {
+        title: 'Four steps to connect',
+        body: 'WiFi.mode(WIFI_STA) makes the board a normal WiFi client. WiFi.begin(ssid, password) starts connecting. Wait until WiFi.status() is WL_CONNECTED, but give up after 15 seconds or so, so a bad network can’t hang the board forever. Then WiFi.localIP() tells you its address.',
+      },
+      {
+        title: '2.4 GHz only',
+        body: 'The ESP32-C3 speaks 802.11 b/g/n on 2.4 GHz. It can’t see a 5 GHz-only network at all. Café and hotel networks with a “click to accept” page, and office networks that ask for a username (WPA2-Enterprise), won’t work with WiFi.begin(ssid, password) either. A phone hotspot set to 2.4 GHz is the easy way out.',
+      },
+      {
+        title: 'Stay connected, keep secrets',
+        body: 'WiFi drops sometimes. Call WiFi.setAutoReconnect(true), and in loop() check WiFi.status() instead of waiting, so the rest of your code keeps running. Put your network name and password in a secrets.h file, and list it in .gitignore so it never ends up in code you share.',
+      },
+      {
+        title: 'The SuperMini antenna fix',
+        body: 'Some SuperMini boards have a poorly placed antenna and won’t connect, even right next to the router. A known workaround for those boards is WiFi.setTxPower(WIFI_POWER_8_5dBm) straight after WiFi.begin(). It lowers the transmit power, and for many people it’s the difference between never connecting and connecting first time.',
+      },
+    ],
+    takeaway: 'Connect with a timeout, use a 2.4 GHz network, and keep your password out of shared code.',
+  },
+  'ble-vs-wifi': {
+    demo: BleWifiPicker,
+    tryIt: 'Tick everything your project needs to do and read the recommendation.',
+    ideas: [
+      {
+        title: 'WiFi: your network and the internet',
+        body: 'WiFi joins your home network, so the board can reach the internet, a server or Home Assistant, and move a lot of data. It needs a router and uses more power: the radio draws about 85 mA receiving and short peaks over 300 mA when it transmits.',
+      },
+      {
+        title: 'BLE: a phone nearby, on a battery',
+        body: 'Bluetooth Low Energy talks straight to a phone or another board, with no router. It sends small amounts of data, like a reading or an on/off, and uses far less power, which is why it suits battery projects. Indoors both reach roughly the same: a room or two, often 10 to 30 metres, less through walls.',
+      },
+      {
+        title: 'What the C3 doesn’t have',
+        body: 'The ESP32-C3 has WiFi 4 (2.4 GHz) and Bluetooth 5 LE. It has no Classic Bluetooth, so no Bluetooth audio and no old-style Bluetooth serial (the BluetoothSerial library). For those, use the original ESP32, or send the data over WiFi instead.',
+      },
+    ],
+    takeaway: 'Internet or lots of data: WiFi. A phone nearby, small data, a battery: BLE.',
+  },
+  'ble-basics': {
+    demo: BleBasicsDemo,
+    tryIt: 'Scan, connect, read the LED value, then write 01 to switch it on. Subscribe and press BOOT on the board.',
+    ideas: [
+      {
+        title: 'Advertise, then connect',
+        body: 'The board is the peripheral: it keeps advertising its name, many times a second. The phone is the central: it scans, sees the name, and connects. Free apps like nRF Connect and LightBlue let you poke at any BLE device this way.',
+      },
+      {
+        title: 'Services hold characteristics',
+        body: 'Once connected, the board offers services, and each service holds characteristics: small named values with a UUID, a long ID number. Here one service holds one characteristic, LED. A real project might add one for a button or a temperature.',
+      },
+      {
+        title: 'Read, write, notify',
+        body: 'The phone can read a characteristic, or write to it, and your code reacts: write 01 and the LED turns on. With notify, the board pushes a new value whenever it changes, so the phone doesn’t have to keep asking. On the C3, use the BLE library built into the Arduino core, or NimBLE-Arduino, which is smaller.',
+      },
+    ],
+    takeaway: 'A BLE device is a set of named values. The phone reads them, writes them, or asks to be told when they change.',
+  },
+  'wifi-brownout-resets': {
+    demo: BrownoutDemo,
+    tryIt: 'Start with the thin cable and watch the voltage dip on each WiFi burst. Then try the fixes one at a time.',
+    ideas: [
+      {
+        title: 'WiFi transmits in bursts',
+        body: 'Espressif’s datasheet lists transmit peaks of up to 335 mA for the ESP32-C3, against about 25 mA when the radio is quiet. Each burst is only a millisecond or so long, but a thin or long USB cable, a weak port, or long jumper wires drop the voltage during it.',
+      },
+      {
+        title: 'The brownout detector resets the chip',
+        body: 'If the supply sags too far, the chip resets itself rather than run unreliably. The serial monitor shows “Brownout detector was triggered”, then the board boots, starts WiFi, and does it again. It looks like a crash, but your code is fine.',
+      },
+      {
+        title: 'Fix the power, not the code',
+        body: 'Use a short, thick cable and a good port or charger. Put a 100–470 µF capacitor across 5V and GND near the board, minus leg to GND. Don’t run an LED strip from the board’s 5V pin while using WiFi; give it its own supply (see How many LEDs can USB power?). Lowering the transmit power with WiFi.setTxPower() also helps.',
+      },
+    ],
+    takeaway: 'Resets when WiFi starts are a power problem. Better cable first, then a capacitor.',
+  },
+  'esp32-c3-deep-sleep': {
+    demo: DeepSleepDemo,
+    tryIt: 'Turn WiFi and the board’s parts on and off, and change how long it sleeps. Watch the battery life.',
+    ideas: [
+      {
+        title: 'Microamps asleep, milliamps awake',
+        body: 'In deep sleep the ESP32-C3 chip draws about 5 µA (Espressif’s datasheet). Awake it draws around 25 mA, and far more with WiFi. But the SuperMini board adds its own: the power LED stays lit and the regulator draws current too, which can be hundreds of times the chip’s. Measure the real number with a multimeter (see Measuring current without blowing the fuse).',
+      },
+      {
+        title: 'Waking up',
+        body: 'esp_sleep_enable_timer_wakeup(60 * 1000000ULL) wakes it after a minute (the time is in microseconds). A button can wake it too, but only on GPIO 0 to 5, the C3’s RTC pins. Wire it from GPIO 3 to GND with a 10 kΩ pull-up resistor to 3.3V, then call esp_deep_sleep_enable_gpio_wakeup(1ULL << 3, ESP_GPIO_WAKEUP_GPIO_LOW). Then esp_deep_sleep_start() puts it to sleep.',
+      },
+      {
+        title: 'Waking is a restart',
+        body: 'After deep sleep the board starts setup() from the top, and ordinary variables are gone. Mark the ones you want to keep with RTC_DATA_ATTR, like RTC_DATA_ATTR int bootCount = 0;. While asleep, the USB serial port disappears from your computer, so to upload, hold BOOT and tap RST first (see the guide to the boot and reset buttons).',
+      },
+    ],
+    takeaway: 'Sleep as much as you can, wake briefly, and measure the whole board, not just the chip.',
   },
 };
 
