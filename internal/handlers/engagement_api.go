@@ -2,11 +2,12 @@ package handlers
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/api"
+	"github.com/brennanMKE/OpenCircuitSF/internal/apitokens"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outreach"
 )
 
@@ -15,16 +16,36 @@ type engagementWindowStore interface {
 	EngagementWindow(ctx context.Context, since, until time.Time) (outreach.EngagementWindow, error)
 }
 
-// EngagementAPIHandler serves GET /api/v1/engagement (#0653): Home
-// Assistant's read-only daily check of new Bluesky and Mastodon engagement.
-type EngagementAPIHandler struct {
+// engagementOp runs get_engagement (#0653): Home Assistant's read-only daily
+// check of new Bluesky and Mastodon engagement. now is a field so tests can
+// pin the clock.
+type engagementOp struct {
 	store engagementWindowStore
 	now   func() time.Time
 }
 
-// NewEngagementAPIHandler builds the handler over the outreach store.
-func NewEngagementAPIHandler(store engagementWindowStore) *EngagementAPIHandler {
-	return &EngagementAPIHandler{store: store, now: time.Now}
+// engagementInput is get_engagement's In. Both are strings on purpose, so
+// the parsing below, and its exact messages, are what #0653 shipped.
+type engagementInput struct {
+	Hours *string `json:"hours,omitempty" query:"hours" jsonschema:"window length in hours, 1 to 168 (default 24); not with since"`
+	Since *string `json:"since,omitempty" query:"since" jsonschema:"window start, RFC 3339, within the last 30 days; not with hours"`
+}
+
+// EngagementOperation is GET /api/v1/engagement (#0653, moved onto the
+// registry by #0675). The success body is unchanged from #0653; errors are
+// the v1 envelope. Building it never touches store.
+func EngagementOperation(store engagementWindowStore) api.Operation {
+	return engagementOperation(store, time.Now)
+}
+
+func engagementOperation(store engagementWindowStore, now func() time.Time) api.Operation {
+	h := &engagementOp{store: store, now: now}
+	return api.Define(api.Operation{
+		Name: "get_engagement", Method: http.MethodGet, Path: "/api/v1/engagement",
+		Scope:       apitokens.ScopeEngagementRead,
+		Summary:     "New Bluesky and Mastodon engagement in a window (default the last 24 hours).",
+		Description: "Counts likes, reposts, replies, quotes and mentions since the window start, per channel and per post, with a one-sentence summary. Output times are UTC.",
+	}, h.run)
 }
 
 type engagementCounts struct {
@@ -64,38 +85,35 @@ type engagementResponse struct {
 
 func utcRFC3339(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
-// ServeHTTP reports the window (since, until]. The default is the last 24
+// run reports the window (since, until]. The default is the last 24
 // hours; ?hours=1..168 or ?since=<RFC 3339, within 30 days> override it.
-func (h *EngagementAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
+func (h *engagementOp) run(ctx context.Context, in engagementInput) (engagementResponse, error) {
+	bad := func(field, msg string) (engagementResponse, error) {
+		return engagementResponse{}, api.Validation(map[string]string{field: msg})
+	}
 	until := h.now().UTC().Truncate(time.Second)
 	hours := 24
 	var since time.Time
 	switch {
-	case q.Has("hours") && q.Has("since"):
-		writeError(w, http.StatusBadRequest, "use either hours or since, not both")
-		return
-	case q.Has("hours"):
-		n, err := strconv.Atoi(q.Get("hours"))
+	case in.Hours != nil && in.Since != nil:
+		return bad("hours", "use either hours or since, not both")
+	case in.Hours != nil:
+		n, err := strconv.Atoi(*in.Hours)
 		if err != nil || n < 1 || n > 168 {
-			writeError(w, http.StatusBadRequest, "hours must be a whole number from 1 to 168")
-			return
+			return bad("hours", "hours must be a whole number from 1 to 168")
 		}
 		hours = n
-	case q.Has("since"):
-		s, err := time.Parse(time.RFC3339, q.Get("since"))
+	case in.Since != nil:
+		s, err := time.Parse(time.RFC3339, *in.Since)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "since must be an RFC 3339 time")
-			return
+			return bad("since", "since must be an RFC 3339 time")
 		}
 		s = s.UTC().Truncate(time.Second)
 		if s.After(until) {
-			writeError(w, http.StatusBadRequest, "since must not be in the future")
-			return
+			return bad("since", "since must not be in the future")
 		}
 		if until.Sub(s) > 30*24*time.Hour {
-			writeError(w, http.StatusBadRequest, "since must be within the last 30 days")
-			return
+			return bad("since", "since must be within the last 30 days")
 		}
 		since, hours = s, 0
 	}
@@ -103,11 +121,10 @@ func (h *EngagementAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		since = until.Add(-time.Duration(hours) * time.Hour)
 	}
 
-	win, err := h.store.EngagementWindow(r.Context(), since, until)
+	// A store error goes back as-is: api.AsError logs it and answers 500.
+	win, err := h.store.EngagementWindow(ctx, since, until)
 	if err != nil {
-		slog.Error("engagement api: window", "err", err)
-		writeError(w, http.StatusInternalServerError, "internal error")
-		return
+		return engagementResponse{}, err
 	}
 	per := map[string]*outreach.ChannelEngagement{"bluesky": {}, "mastodon": {}}
 	posts := []engagementPost{}
@@ -141,6 +158,5 @@ func (h *EngagementAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		Bluesky: out(bsky), Mastodon: out(masto), Posts: posts,
 		Summary: outreach.EngagementSummary(*bsky, *masto, outreach.WindowPhrase(hours, since)),
 	}
-	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, resp)
+	return resp, nil
 }

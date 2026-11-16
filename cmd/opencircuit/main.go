@@ -31,6 +31,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/time/rate"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/api"
 	"github.com/brennanMKE/OpenCircuitSF/internal/apitokens"
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
@@ -441,8 +442,13 @@ func servePostgres(cfg *config.Config) error {
 	// routes. Postgres-only, so dev mode attaches nothing and both 404.
 	apiTokensH := handlers.NewAPITokensHandler(apitokens.NewStore(pool), auditLogger)
 	settingsH.SetAPITokens(apiTokensH)
-	// #0653: Home Assistant's daily engagement check, read-only, GET only.
-	apiTokensH.AddV1Route("/api/v1/engagement", apitokens.ScopeEngagementRead, handlers.NewEngagementAPIHandler(outreachStore))
+	// #0675: the /api/v1 operation registry (whoami, the #0652 probe, and
+	// #0653's engagement check). BuildV1Registry is the one list of v1
+	// operations; mountAndServe serves it with api.NewHTTPRouter.
+	apiTokensH.SetV1(handlers.BuildV1Registry(
+		api.Config{Version: version, Idempotency: api.NewIdempotencyStore(pool)},
+		handlers.V1Deps{Engagement: outreachStore},
+	))
 
 	// Admin subscribers screen (#0032, PRD §5.2/§6.2): list/search/detail,
 	// manual suppress, clear-complaint, and manual add. manualAdd (subscribeH)
@@ -1847,16 +1853,13 @@ func mountAndServe(
 		mux.Handle(r.method+" "+r.path, requireAdmin(r.handler))
 	}
 
-	// Token-authenticated /api/v1/ routes (#0652): GET only, token only,
-	// never a session. The method is fixed here so a token route can never
-	// write; #0653 adds its route with AddV1Route. #0674: one limiter shared
-	// by every v1 route gives each token one budget (429 + Retry-After past
-	// it); it sits inside RequireAPIToken, which puts the token in context.
-	if t := settingsH.APITokens(); t != nil {
-		v1Limit := middleware.APITokenRateLimit(middleware.NewAPITokenRateLimiter())
-		for _, r := range t.V1Routes() {
-			mux.Handle("GET "+r.Path, middleware.RequireAPIToken(t.Resolver(), r.Scope)(v1Limit(r.Handler)))
-		}
+	// Token-authenticated /api/v1/ (#0652, #0675): one router built from the
+	// operation registry; no session cookie is ever read there. #0674: one
+	// per-token limiter, apiTokenLimiter, gives each key one budget across
+	// every v1 route (and #0679's /mcp shares it).
+	if t := settingsH.APITokens(); t != nil && t.V1() != nil {
+		apiTokenLimiter := middleware.NewAPITokenRateLimiter()
+		api.Mount(mux, api.NewHTTPRouter(t.V1(), api.RouterDeps{Resolver: t.Resolver(), Limiter: apiTokenLimiter, BaseURL: cfg.BaseURL}))
 	}
 
 	// Current user profile — behind RequireSession; returns the caller's

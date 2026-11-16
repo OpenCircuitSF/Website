@@ -1404,13 +1404,16 @@ func actionShortName(s string) string {
 // about: a floor that reads as headroom while actually measuring nothing
 // about the coverage it claims to protect.
 //
-// 115 is the current floor (raised from 80 by #0549), chosen the same way 150
+// 165 is the current floor, raised from 115 by #0675 when the parsed
+// population reached 232 (scripts/go_file_visit_floor_guard_test.sh's
+// remedy: population over the square root of two, rounded up). 115 (raised
+// from 80 by #0549) was chosen the same way 150
 // was: below the real parsed population (162 at #0549, room for the tree to shrink without a
 // false alarm) while still tripping if the roots were narrowed to any one
 // package — internal/handlers alone has 40 non-test .go files, cmd/ alone
 // has 3 — which is the "a real narrowing would trip it" bar #0275
 // criterion 3 sets.
-const auditEmailMetadataMinPlausibleFileCount = 115
+const auditEmailMetadataMinPlausibleFileCount = 165
 
 // TestAuditEntryEmailMetadataMatchesKnownSites is the guard (#0237): every
 // audit.Entry{} construction in internal/ and cmd/ production Go source

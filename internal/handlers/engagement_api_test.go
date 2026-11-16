@@ -10,9 +10,11 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/api"
 	"github.com/brennanMKE/OpenCircuitSF/internal/apitokens"
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
@@ -35,8 +37,7 @@ var engNow = time.Date(2026, 11, 8, 15, 30, 45, 500_000_000, time.UTC)
 
 func serveEngagement(t *testing.T, f *fakeEngagementStore, query string) (*httptest.ResponseRecorder, map[string]json.RawMessage) {
 	t.Helper()
-	h := NewEngagementAPIHandler(f)
-	h.now = func() time.Time { return engNow }
+	h := api.Serve(engagementOperation(f, func() time.Time { return engNow }))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/engagement"+query, nil))
 	var body map[string]json.RawMessage
@@ -105,26 +106,27 @@ func TestEngagementAPI_BadParams400(t *testing.T) {
 	const hoursMsg = "hours must be a whole number from 1 to 168"
 	future := engNow.Add(time.Minute).Format(time.RFC3339)
 	old := engNow.Add(-30*24*time.Hour - time.Minute).Format(time.RFC3339)
-	for _, tc := range []struct{ query, msg string }{
-		{"?hours=0", hoursMsg},
-		{"?hours=169", hoursMsg},
-		{"?hours=abc", hoursMsg},
-		{"?hours=1.5", hoursMsg},
-		{"?hours=", hoursMsg},
-		{"?since=yesterday", "since must be an RFC 3339 time"},
-		{"?since=2026-11-08", "since must be an RFC 3339 time"},
-		{"?since=" + url.QueryEscape(future), "since must not be in the future"},
-		{"?since=" + url.QueryEscape(old), "since must be within the last 30 days"},
-		{"?hours=24&since=" + url.QueryEscape(old), "use either hours or since, not both"},
+	for _, tc := range []struct{ query, field, msg string }{
+		{"?hours=0", "hours", hoursMsg},
+		{"?hours=169", "hours", hoursMsg},
+		{"?hours=abc", "hours", hoursMsg},
+		{"?hours=1.5", "hours", hoursMsg},
+		{"?hours=", "hours", hoursMsg},
+		{"?since=yesterday", "since", "since must be an RFC 3339 time"},
+		{"?since=2026-11-08", "since", "since must be an RFC 3339 time"},
+		{"?since=" + url.QueryEscape(future), "since", "since must not be in the future"},
+		{"?since=" + url.QueryEscape(old), "since", "since must be within the last 30 days"},
+		{"?hours=24&since=" + url.QueryEscape(old), "hours", "use either hours or since, not both"},
 	} {
 		f := &fakeEngagementStore{}
-		rec, body := serveEngagement(t, f, tc.query)
+		rec, _ := serveEngagement(t, f, tc.query)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: code %d", tc.query, rec.Code)
 			continue
 		}
-		if got := rawString(t, body, "error"); got != tc.msg {
-			t.Errorf("%s: error %q, want %q", tc.query, got, tc.msg)
+		e := decodeAPIError(t, rec.Body.Bytes())
+		if e.Error.Code != api.CodeValidation || e.Error.Fields[tc.field] != tc.msg || len(e.Error.Fields) != 1 {
+			t.Errorf("%s: error %+v, want fields[%s] = %q", tc.query, e.Error, tc.field, tc.msg)
 		}
 		if f.called {
 			t.Errorf("%s: store called", tc.query)
@@ -196,9 +198,63 @@ func TestEngagementAPI_StoreError500(t *testing.T) {
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
-	rec, body := serveEngagement(t, &fakeEngagementStore{err: errors.New("boom")}, "")
-	if rec.Code != http.StatusInternalServerError || rawString(t, body, "error") != "internal error" {
+	rec, _ := serveEngagement(t, &fakeEngagementStore{err: errors.New("boom")}, "")
+	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("code %d body %s", rec.Code, rec.Body)
+	}
+	if e := decodeAPIError(t, rec.Body.Bytes()); e.Error.Code != api.CodeInternal || strings.Contains(rec.Body.String(), "boom") {
+		t.Fatalf("body %s", rec.Body)
+	}
+}
+
+// decodeAPIError decodes a v1 error envelope with no other top-level key.
+func decodeAPIError(t *testing.T, b []byte) api.ErrorBody {
+	t.Helper()
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(b, &top); err != nil || len(top) != 1 {
+		t.Fatalf("not a one-key envelope: %s (%v)", b, err)
+	}
+	var e api.ErrorBody
+	if err := json.Unmarshal(b, &e); err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+// engagementGolden is the #0653 handler's success body for
+// TestEngagementAPI_SuccessBodyUnchanged's fixture, captured from the
+// pre-#0675 ServeHTTP before it moved onto the registry.
+const engagementGolden = `{"since":"2026-11-07T15:30:45Z","until":"2026-11-08T15:30:45Z","data_as_of":"2026-11-08T14:00:00Z","has_engagement":true,"total":7,"bluesky":{"likes":3,"reposts":1,"replies":0,"quotes":0,"mentions":1,"total":5},"mastodon":{"likes":2,"reposts":0,"replies":0,"quotes":0,"mentions":0,"total":2},"posts":[{"event":"Hack Night","event_date":"2026-11-09","wave":"reminder","channel":"bluesky","url":"https://bsky.app/profile/x/post/1","posted_at":"2026-11-07T02:00:00Z","likes":3,"reposts":1,"replies":0,"quotes":0,"total":4},{"event":"Solder Night","event_date":null,"wave":"announce","channel":"mastodon","url":"https://sfba.social/@x/2","posted_at":null,"likes":2,"reposts":0,"replies":0,"quotes":0,"total":2}],"summary":"7 new interactions: Bluesky 5 (3 likes, 1 repost, 1 mention), Mastodon 2 (2 likes)."}` + "\n"
+
+// engagementGoldenEmpty is the same for an empty window with ?hours=3.
+const engagementGoldenEmpty = `{"since":"2026-11-08T12:30:45Z","until":"2026-11-08T15:30:45Z","data_as_of":null,"has_engagement":false,"total":0,"bluesky":{"likes":0,"reposts":0,"replies":0,"quotes":0,"mentions":0,"total":0},"mastodon":{"likes":0,"reposts":0,"replies":0,"quotes":0,"mentions":0,"total":0},"posts":[],"summary":"No new engagement on Bluesky or Mastodon in the last 3 hours."}` + "\n"
+
+// TestEngagementAPI_SuccessBodyUnchanged (#0675): moving get_engagement onto
+// the registry left Home Assistant's success body byte-for-byte as #0653
+// shipped it, headers included.
+func TestEngagementAPI_SuccessBodyUnchanged(t *testing.T) {
+	u1, u2 := "https://bsky.app/profile/x/post/1", "https://sfba.social/@x/2"
+	posted := time.Date(2026, 11, 6, 18, 0, 0, 0, time.FixedZone("x", -8*3600))
+	starts := time.Date(2026, 11, 10, 3, 30, 0, 0, time.UTC)
+	asOf := time.Date(2026, 11, 8, 15, 0, 0, 0, time.FixedZone("y", 3600))
+	f := &fakeEngagementStore{win: outreach.EngagementWindow{
+		Posts: []outreach.PostDelta{
+			{PostID: 1, Channel: "bluesky", Wave: "reminder", URL: &u1, PostedAt: &posted, WorkshopTitle: "Hack Night", StartsAt: &starts, Delta: outreach.Counts{Likes: 3, Reposts: 1}},
+			{PostID: 2, Channel: "mastodon", Wave: "announce", URL: &u2, WorkshopTitle: "Solder Night", Delta: outreach.Counts{Likes: 2}},
+		},
+		Mentions: map[string]int{"bluesky": 1, "mastodon": 0},
+		DataAsOf: &asOf,
+	}}
+	rec, _ := serveEngagement(t, f, "")
+	if rec.Code != http.StatusOK || rec.Body.String() != engagementGolden {
+		t.Fatalf("code %d body\n%s\nwant\n%s", rec.Code, rec.Body, engagementGolden)
+	}
+	if rec.Header().Get("Content-Type") != "application/json" || rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("headers %v", rec.Header())
+	}
+	rec, _ = serveEngagement(t, &fakeEngagementStore{}, "?hours=3")
+	if rec.Code != http.StatusOK || rec.Body.String() != engagementGoldenEmpty {
+		t.Fatalf("empty: code %d body\n%s", rec.Code, rec.Body)
 	}
 }
 
@@ -212,12 +268,9 @@ func TestEngagementAPI_WithTokenThroughMiddleware(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := NewAPITokensHandler(apitokens.NewStore(pool), audit.New(pool))
-	h.AddV1Route("/api/v1/engagement", apitokens.ScopeEngagementRead, NewEngagementAPIHandler(outreach.NewStore(pool)))
-	mux := http.NewServeMux()
-	for _, r := range h.V1Routes() {
-		mux.Handle("GET "+r.Path, middleware.RequireAPIToken(h.Resolver(), r.Scope)(r.Handler))
-	}
-	srv := httptest.NewServer(mux)
+	reg := api.NewRegistry(api.Config{Version: "test"})
+	reg.Add(EngagementOperation(outreach.NewStore(pool)))
+	srv := httptest.NewServer(api.NewHTTPRouter(reg, api.RouterDeps{Resolver: h.Resolver(), Limiter: middleware.NewAPITokenRateLimiter()}))
 	t.Cleanup(srv.Close)
 	get := func(bearer string) (int, []byte) {
 		t.Helper()
@@ -270,12 +323,17 @@ func TestEngagementAPI_WrongScope403(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := &fakeEngagementStore{}
-	h := middleware.RequireAPIToken(stubScopeResolver{[]string{"other:read"}}, apitokens.ScopeEngagementRead)(NewEngagementAPIHandler(f))
+	reg := api.NewRegistry(api.Config{Version: "test"})
+	reg.Add(EngagementOperation(f))
+	h := api.NewHTTPRouter(reg, api.RouterDeps{Resolver: stubScopeResolver{[]string{apitokens.ScopeGuidesRead}}, Limiter: middleware.NewAPITokenRateLimiter()})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/engagement", nil)
 	req.Header.Set("Authorization", "Bearer "+secret)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden || f.called {
 		t.Fatalf("code %d, store called %v", rec.Code, f.called)
+	}
+	if e := decodeAPIError(t, rec.Body.Bytes()); e.Error.Code != api.CodeForbidden {
+		t.Fatalf("body %s", rec.Body)
 	}
 }
