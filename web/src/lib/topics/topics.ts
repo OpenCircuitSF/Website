@@ -40,6 +40,11 @@ import C3PinChooserDemo from './C3PinChooserDemo.svelte';
 import C3AnalogDemo from './C3AnalogDemo.svelte';
 import C3PwmDemo from './C3PwmDemo.svelte';
 import C3PowerDemo from './C3PowerDemo.svelte';
+// Components: resistors and LEDs (#0690)
+import ResistorBandsDemo from './ResistorBandsDemo.svelte';
+import OhmsLawDemo from './OhmsLawDemo.svelte';
+import LedBasicsDemo from './LedBasicsDemo.svelte';
+import LedResistorDemo from './LedResistorDemo.svelte';
 
 /** The page body of one topic guide; its metadata comes from the catalog. */
 export interface TopicBody {
@@ -651,6 +656,83 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
     ],
     takeaway: '5 V goes to the 5V pin, 3.3 V to the 3.3 pin, and only one supply at a time.',
+  },
+  // Components: resistors and LEDs (#0690)
+  'resistor-color-codes': {
+    demo: ResistorBandsDemo,
+    tryIt: 'Tap a band to change its color, or type a value like 4.7k. Then switch to 5 bands to see a precision part.',
+    ideas: [
+      {
+        title: 'Digits, then a multiplier',
+        body: 'On a 4-band resistor the first two bands are digits and the third says how many zeros to add. Red, red, brown is 2, 2 and one zero: 220 Ω. Yellow, violet, red is 4, 7 and two zeros: 4,700 Ω, written 4.7 kΩ or 4k7. Gold or silver in the third place divides by 10 or 100 instead.',
+      },
+      {
+        title: 'The odd band out is tolerance',
+        body: 'The band set apart at one end is the tolerance, so read from the other end. Gold is ±5%: a 220 Ω part can really be anywhere from 209 to 231 Ω. A 5-band resistor has three digit bands, then the multiplier, and usually a brown ±1% tolerance band.',
+      },
+      {
+        title: 'Only some values exist',
+        body: 'Resistors come in the E12 series: 10, 12, 15, 18, 22, 27, 33, 39, 47, 56, 68 and 82, times any power of ten. The E24 series adds twelve values in between. That’s why a kit has 220 Ω and 4.7 kΩ but no 250 Ω or 5 kΩ. If the colors are hard to tell apart, measure it with a multimeter.',
+      },
+    ],
+    takeaway: 'Two digits, then the number of zeros, then the tolerance. When in doubt, measure.',
+  },
+  'ohms-law-resistors': {
+    demo: OhmsLawDemo,
+    tryIt: 'Drag the voltage and the resistance. Then switch to series and to parallel and watch the current and the power in each resistor.',
+    ideas: [
+      {
+        title: 'Current = voltage ÷ resistance',
+        body: 'That is Ohm’s law, V = I × R, turned around. 5 V across 220 Ω pushes 5 ÷ 220 = 0.023 A, which is 23 mA. Double the resistance and the current halves. Most of the math in a beginner project is this one line.',
+      },
+      {
+        title: 'Series adds, parallel splits',
+        body: 'In series the same current flows through both resistors, their resistances add, and the voltage divides between them in proportion. In parallel each resistor gets the full voltage, the currents add, and the total resistance is less than the smaller one. Two equal resistors in parallel make half the value.',
+      },
+      {
+        title: 'Power is heat',
+        body: 'A resistor turns voltage × current into heat. The ordinary through-hole kind is rated 1/4 W, which is 250 mW. 5 V across 220 Ω is about 114 mW, which is fine. 5 V across 47 Ω is over half a watt: hot enough to burn a finger, and then itself.',
+      },
+    ],
+    takeaway: 'Current = voltage ÷ resistance, and power = voltage × current. Check the power before you pick a small resistor.',
+  },
+  'led-basics': {
+    demo: LedBasicsDemo,
+    tryIt: 'Flip the LED around, take the resistor out, and try each color on the 3.3 V pin.',
+    ideas: [
+      {
+        title: 'Long leg to plus',
+        body: 'An LED only conducts one way. The longer leg is the anode and goes toward plus, here the GPIO pin. The shorter leg is the cathode and goes toward ground, and the rim of the LED has a flat edge on that side. Put in backwards on 3.3 V, it just stays dark and comes to no harm.',
+      },
+      {
+        title: 'Each color needs its own voltage',
+        body: 'An LED needs a certain voltage across it before it lights, called its forward voltage. Red, yellow and ordinary green LEDs need about 2 V. Blue, white and bright “true green” ones need about 3 V or more, which leaves very little to spare on a 3.3 V pin.',
+      },
+      {
+        title: 'The resistor sets the current',
+        body: 'Once it is past its forward voltage, an LED lets almost any current through, so nothing in the LED limits it. A resistor in series does: the voltage left over, divided by the resistance, is the current. A plain 5 mm LED takes 20 mA at most, and on an ESP32 pin 5 to 10 mA is plenty bright. The resistor can go on either leg.',
+      },
+    ],
+    takeaway: 'Long leg to plus, flat edge to ground, and always a resistor in series.',
+  },
+  'led-resistor-calculator': {
+    demo: LedResistorDemo,
+    tryIt: 'Pick where the power comes from, the LED color and the current you want. The resistor and its color bands update as you go.',
+    ideas: [
+      {
+        title: 'Subtract, then divide',
+        body: 'Take the LED’s forward voltage away from the supply: that is what the resistor has to drop. Divide by the current you want. A red LED on a 3.3 V pin at 10 mA: (3.3 − 2.0) ÷ 0.010 = 130 Ω.',
+      },
+      {
+        title: 'Round up, never down',
+        body: 'There is no 130 Ω in a kit. Take the next E12 value up, 150 Ω, and the current comes out a little lower, 8.7 mA, which you won’t notice. Rounding down pushes the current past what you asked for.',
+      },
+      {
+        title: 'Go easy on the pin',
+        body: 'An ESP32-C3 pin is happy supplying about 20 mA and can give about 40 mA at most, with its voltage sagging as you draw more. Keep an LED on a pin to 5–10 mA. For anything brighter, or for several LEDs, power them from 5 V and switch them with a transistor.',
+      },
+    ],
+    takeaway: 'Subtract, divide, round up to the next standard value. For a red LED on an ESP32 pin, 150 to 330 Ω is about right.',
   },
 };
 
