@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -335,16 +336,19 @@ func (h *AdminGuidePostsHandler) createGuidePostsV1(ctx context.Context, opName 
 	switch {
 	case len(in.Channels) == 0:
 		bad["channels"] = "must list bluesky, mastodon or both"
-	case len(in.Channels) > len(guidePostChannelNames):
-		bad["channels"] = "lists more than bluesky and mastodon"
 	default:
+		// Each bad entry is reported under its own key, channels.<index>
+		// (0-based, request order), so several are all named (#0686). A
+		// list longer than the channel set necessarily repeats or misnames
+		// one, which this loop reports, so it needs no length check.
 		seen := map[string]bool{}
-		for _, c := range in.Channels {
+		for i, c := range in.Channels {
+			key := "channels." + strconv.Itoa(i)
 			switch {
 			case !slices.Contains(guidePostChannelNames, c):
-				bad["channels"] = fmt.Sprintf("%q is not a channel; use bluesky or mastodon", c)
+				bad[key] = fmt.Sprintf("%q is not a channel; use bluesky or mastodon", c)
 			case seen[c]:
-				bad["channels"] = c + " is listed twice"
+				bad[key] = c + " is listed twice"
 			default:
 				seen[c] = true
 				channels = append(channels, c)

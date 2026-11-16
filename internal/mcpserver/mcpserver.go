@@ -46,7 +46,10 @@ type Deps struct {
 	// Limiter is the per-token limiter. Pass the same instance the /api/v1/
 	// router uses, so a key has one budget across REST and MCP.
 	Limiter *middleware.RateLimiter
-	Logger  *slog.Logger // nil = slog.Default()
+	// AuthFailLimiter is the per-IP failed-authentication limiter (#0683).
+	// Pass the same instance as /api/v1/. nil = no limit.
+	AuthFailLimiter *middleware.RateLimiter
+	Logger          *slog.Logger // nil = slog.Default()
 }
 
 // handler holds the registry's exposed operations and one cached
@@ -61,7 +64,8 @@ type handler struct {
 }
 
 // NewHandler freezes d.Registry and returns the /mcp handler. The chain,
-// outermost first: middleware.RequireAPIToken (the v1 401 with
+// outermost first: the per-IP failed-authentication limit (#0683),
+// middleware.RequireAPIToken (the v1 401 with
 // WWW-Authenticate), the per-token rate limit, the SDK's RequireBearerToken
 // (whose verifier reads the token RequireAPIToken resolved, never resolving
 // it twice), and the SDK's stateless, JSON-only Streamable HTTP handler.
@@ -122,7 +126,7 @@ func newHandler(d Deps) (*handler, http.Handler) {
 		Logger:                       d.Logger,
 	})
 	bearer := auth.RequireBearerToken(verifyFromContext, &auth.RequireBearerTokenOptions{AllowMissingExpiration: true})
-	return h, middleware.RequireAPIToken(d.Resolver, "")(middleware.APITokenRateLimit(d.Limiter)(bearer(stream)))
+	return h, middleware.APIAuthFailureLimit(d.AuthFailLimiter)(middleware.RequireAPIToken(d.Resolver, "")(middleware.APITokenRateLimit(d.Limiter)(bearer(stream))))
 }
 
 // Mount registers h for Path on mux, one pattern per method the Streamable

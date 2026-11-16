@@ -46,6 +46,9 @@ var (
 	ErrBadCampaignSlug = errors.New("guideposts: campaign slug may use only lowercase letters, digits and single hyphens")
 	ErrLinkRemoved     = errors.New("guideposts: the post must keep its short link")
 	ErrLinkFixed       = errors.New("guideposts: the campaign is fixed once the post has its short link")
+	// ErrNotDraft is DeleteDraft's answer for a post that exists but is not
+	// a draft (#0686).
+	ErrNotDraft = errors.New("guideposts: post is not a draft")
 )
 
 // BodyError is a post body that fails validation (too long, empty); the

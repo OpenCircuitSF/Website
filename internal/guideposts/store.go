@@ -338,6 +338,24 @@ func (s *Store) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
+// DeleteDraft removes post id only while it is a draft, in one conditional
+// DELETE, so a post scheduled after a caller looked at it cannot be deleted
+// (#0686). It returns the deleted row, ErrNotFound when no post has that id,
+// or ErrNotDraft when the post exists in any other status.
+func (s *Store) DeleteDraft(ctx context.Context, id int64) (Post, error) {
+	p, err := scanPost(s.pool.QueryRow(ctx, `DELETE FROM guide_posts WHERE id = $1 AND status = 'draft' RETURNING `+postColumns, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		if _, gerr := s.Get(ctx, id); gerr != nil {
+			return Post{}, gerr
+		}
+		return Post{}, ErrNotDraft
+	}
+	if err != nil {
+		return Post{}, fmt.Errorf("guideposts: delete draft: %w", err)
+	}
+	return p, nil
+}
+
 // PromoteDue queues scheduled posts whose time has come, one outbound_queue
 // row each, in one transaction. A post whose guide is no longer a topic goes
 // back to draft with HeldUnknownGuideMessage.

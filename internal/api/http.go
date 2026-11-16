@@ -26,7 +26,11 @@ type RouterDeps struct {
 	// Limiter is the per-token limiter (middleware.NewAPITokenRateLimiter).
 	// Share one instance with #0679's /mcp so a key has one budget.
 	Limiter *middleware.RateLimiter
-	BaseURL string // the OpenAPI servers entry
+	// AuthFailLimiter (#0683, middleware.NewAPIAuthFailureLimiter) counts
+	// failed authentication per client IP and refuses an IP that is over it
+	// before the token lookup. Share one instance with /mcp. nil = no limit.
+	AuthFailLimiter *middleware.RateLimiter
+	BaseURL         string // the OpenAPI servers entry
 }
 
 // Methods are the HTTP methods a v1 operation may use, and the ones Mount
@@ -47,7 +51,8 @@ func Mount(mux *http.ServeMux, h http.Handler) {
 // with Mount. It serves
 //
 //   - GET OpenAPIPath, public, the document built from reg;
-//   - each operation at its method and path, behind RequireAPIToken, the
+//   - each operation at its method and path, behind the per-IP
+//     failed-authentication limit (#0683), RequireAPIToken, the
 //     per-token rate limit and the operation's scope check, in that order
 //     (authentication is per route, so the document and the 404 stay public);
 //   - a JSON 405 with Allow for a known path with the wrong method, and a
@@ -71,13 +76,14 @@ func NewHTTPRouter(reg *Registry, deps RouterDeps) http.Handler {
 		w.Header().Set("Cache-Control", "public, max-age=300")
 		_, _ = w.Write(doc)
 	})
+	authFail := middleware.APIAuthFailureLimit(deps.AuthFailLimiter)
 	auth := middleware.RequireAPIToken(deps.Resolver, "")
 	limit := middleware.APITokenRateLimit(deps.Limiter)
 	for _, op := range reg.Operations() {
 		if op.Idempotency && reg.cfg.Idempotency == nil {
 			panic("api: " + op.Name + " takes an Idempotency-Key but the registry has no IdempotencyStore")
 		}
-		inner.Handle(op.Method+" "+op.Path, auth(limit(requireScope(op, serve(op, reg.cfg.Idempotency, reg.cfg.Now)))))
+		inner.Handle(op.Method+" "+op.Path, authFail(auth(limit(requireScope(op, serve(op, reg.cfg.Idempotency, reg.cfg.Now))))))
 	}
 	inner.HandleFunc("/api/v1/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")

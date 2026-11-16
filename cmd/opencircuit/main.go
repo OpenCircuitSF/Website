@@ -448,11 +448,15 @@ func servePostgres(cfg *config.Config) error {
 	settingsH.SetAPITokens(apiTokensH)
 	// #0684: expired Idempotency-Keys are swept once at startup as well as
 	// by every idempotent request, so the table does not wait on traffic.
-	if n, err := api.SweepIdempotencyKeys(ctx, pool, time.Now()); err != nil {
+	// #0686: bounded, so a slow database cannot hold up startup.
+	const startupSweepTimeout = 10 * time.Second
+	sweepCtx, cancelSweep := context.WithTimeout(ctx, startupSweepTimeout)
+	if n, err := api.SweepIdempotencyKeys(sweepCtx, pool, time.Now()); err != nil {
 		slog.Warn("api: startup idempotency sweep failed", "err", err)
 	} else if n > 0 {
 		slog.Info("api: swept expired idempotency keys", "count", n)
 	}
+	cancelSweep()
 	// #0675: the /api/v1 operation registry (whoami, the #0652 probe, and
 	// #0653's engagement check, #0676's guides and guide posts, which
 	// share adminGuidePostsH, and #0677's events and lookups, which share
@@ -1875,11 +1879,13 @@ func mountAndServe(
 	// every v1 route (and #0679's /mcp shares it).
 	if t := settingsH.APITokens(); t != nil && t.V1() != nil {
 		apiTokenLimiter := middleware.NewAPITokenRateLimiter()
-		api.Mount(mux, api.NewHTTPRouter(t.V1(), api.RouterDeps{Resolver: t.Resolver(), Limiter: apiTokenLimiter, BaseURL: cfg.BaseURL}))
+		// #0683: one per-IP failed-authentication limiter, shared by both.
+		authFailLimiter := middleware.NewAPIAuthFailureLimiter()
+		api.Mount(mux, api.NewHTTPRouter(t.V1(), api.RouterDeps{Resolver: t.Resolver(), Limiter: apiTokenLimiter, AuthFailLimiter: authFailLimiter, BaseURL: cfg.BaseURL}))
 		// MCP (#0679): Streamable HTTP, stateless JSON, over the same
 		// registry and the same per-key limiter as /api/v1/. Bearer only;
 		// no session cookie is read.
-		mcpserver.Mount(mux, mcpserver.NewHandler(mcpserver.Deps{Registry: t.V1(), Resolver: t.Resolver(), Limiter: apiTokenLimiter, Logger: slog.Default().With("component", "mcp")}))
+		mcpserver.Mount(mux, mcpserver.NewHandler(mcpserver.Deps{Registry: t.V1(), Resolver: t.Resolver(), Limiter: apiTokenLimiter, AuthFailLimiter: authFailLimiter, Logger: slog.Default().With("component", "mcp")}))
 	}
 
 	// Current user profile — behind RequireSession; returns the caller's

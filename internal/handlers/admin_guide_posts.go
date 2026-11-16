@@ -30,6 +30,7 @@ type guidePostStore interface {
 	Unschedule(ctx context.Context, id int64) (guideposts.Post, error)
 	QueueNow(ctx context.Context, id int64) (guideposts.Post, string, error)
 	Delete(ctx context.Context, id int64) error
+	DeleteDraft(ctx context.Context, id int64) (guideposts.Post, error)
 	CopyAsDraft(ctx context.Context, id int64, base, campaign string) (guideposts.Post, error)
 	ClickKeys(ctx context.Context) ([]guideposts.CampaignKeys, error)
 }
@@ -496,16 +497,27 @@ func (h *AdminGuidePostsHandler) unschedule(ctx context.Context, ip string, acto
 // deletePost removes post id. draftOnly (the v1 API) refuses anything but a
 // draft with errDraftOnly; the admin UI may also delete a scheduled or
 // failed post. The short link, if any, stays in ShortLinks.
+//
+// draftOnly is one conditional DELETE (store.DeleteDraft, #0686), so a post
+// scheduled between a caller's read and this call is refused, not deleted.
 func (h *AdminGuidePostsHandler) deletePost(ctx context.Context, ip string, actorID *int64, id int64, draftOnly bool) error {
-	p, err := h.store.Get(ctx, id)
-	if err != nil {
-		return err
-	}
-	if draftOnly && p.Status != "draft" {
-		return errDraftOnly
-	}
-	if err := h.store.Delete(ctx, id); err != nil {
-		return err
+	var p guideposts.Post
+	if draftOnly {
+		var err error
+		if p, err = h.store.DeleteDraft(ctx, id); err != nil {
+			if errors.Is(err, guideposts.ErrNotDraft) {
+				return errDraftOnly
+			}
+			return err
+		}
+	} else {
+		var err error
+		if p, err = h.store.Get(ctx, id); err != nil {
+			return err
+		}
+		if err := h.store.Delete(ctx, id); err != nil {
+			return err
+		}
 	}
 	h.recordCtx(ctx, ip, id, audit.Entry{ActorID: actorID, Action: audit.ActionGuidePostDeleted, Metadata: map[string]any{"slug": p.GuideSlug, "channel": p.Channel}})
 	return nil

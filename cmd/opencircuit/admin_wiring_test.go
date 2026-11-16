@@ -652,6 +652,73 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	if got := v1(http.MethodGet, v1URL, bearerSecret, ""); got != http.StatusOK {
 		t.Errorf("another token after one was throttled = %d, want 200", got)
 	}
+	// #0683: failed bearer authentication is limited per client IP across
+	// /api/v1/ and /mcp, with one shared bucket. The client is this test's
+	// loopback peer, so X-Forwarded-For names the IP (ClientIP's rule);
+	// distinct documentation addresses keep the loopback bucket the rest of
+	// this test uses untouched.
+	unknownKey, err := apitokens.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromIP := func(method, url, bearer, xff, body string) (int, []byte) {
+		t.Helper()
+		var rd io.Reader
+		if body != "" {
+			rd = strings.NewReader(body)
+		}
+		req, err := http.NewRequest(method, url, rd)
+		if err != nil {
+			t.Fatalf("build request: %v", err)
+		}
+		req.Header.Set("X-Forwarded-For", xff)
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		if body != "" {
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json, text/event-stream")
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, b
+	}
+	for _, c := range []struct{ name, method, url, body, xff string }{
+		{"/api/v1", http.MethodGet, v1URL, "", "192.0.2.83"},
+		{"/mcp", http.MethodPost, mcpURL, mcpInit, "192.0.2.84"},
+	} {
+		fails, limited := 0, false
+		for i := 0; i < 3*middleware.APIAuthFailuresPerMinute && !limited; i++ {
+			switch code, b := fromIP(c.method, c.url, unknownKey, c.xff, c.body); code {
+			case http.StatusUnauthorized:
+				fails++
+			case http.StatusTooManyRequests:
+				if v1ErrCode(b) != "rate_limited" {
+					t.Errorf("%s 429 body %s", c.name, b)
+				}
+				limited = true
+			default:
+				t.Fatalf("%s bad-key request %d = %d %s", c.name, i, code, b)
+			}
+		}
+		if !limited || fails < middleware.APIAuthFailuresPerMinute {
+			t.Errorf("%s: %d 401s before 429 (limited=%v), want >= %d then 429", c.name, fails, limited, middleware.APIAuthFailuresPerMinute)
+		}
+		// Over the limit, a valid key from that IP is refused too, before
+		// any lookup; the same key from another IP is unaffected.
+		if code, _ := fromIP(c.method, c.url, bearerSecret, c.xff, c.body); code != http.StatusTooManyRequests {
+			t.Errorf("%s valid key from the throttled IP = %d, want 429", c.name, code)
+		}
+		if code, _ := fromIP(c.method, c.url, bearerSecret, "192.0.2.85", c.body); code != http.StatusOK {
+			t.Errorf("%s valid key from another IP = %d, want 200", c.name, code)
+		}
+	}
+	// One bucket: the IP throttled on /api/v1 is throttled on /mcp too.
+	if code, _ := fromIP(http.MethodPost, mcpURL, unknownKey, "192.0.2.83", mcpInit); code != http.StatusTooManyRequests {
+		t.Errorf("/mcp from the IP throttled on /api/v1 = %d, want 429", code)
+	}
 	if _, err := apiTokenStore.Revoke(context.Background(), bearerTok.ID, time.Now()); err != nil {
 		t.Fatalf("revoke bearer token: %v", err)
 	}

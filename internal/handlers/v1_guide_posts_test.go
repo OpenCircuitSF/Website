@@ -170,6 +170,30 @@ func TestV1GuidePosts_CreateOverLimitOnOneChannel(t *testing.T) {
 	}
 }
 
+// TestV1GuidePosts_CreateReportsEveryBadChannel (#0686): each bad channels
+// entry gets its own field, keyed by its index, so none hides another.
+func TestV1GuidePosts_CreateReportsEveryBadChannel(t *testing.T) {
+	e := newV1GuidePostsEnv(t, bothConnected())
+	body := fmt.Sprintf(`{"slug":%q,"channels":["myspace","bluesky","friendster","bluesky"]}`, e.slug)
+	d := e.wantFieldError(t, e.call(t, http.MethodPost, "/api/v1/guide-posts", e.write, body), "channels.0")
+	want := map[string]string{
+		"channels.0": `"myspace" is not a channel; use bluesky or mastodon`,
+		"channels.2": `"friendster" is not a channel; use bluesky or mastodon`,
+		"channels.3": "bluesky is listed twice",
+	}
+	for k, msg := range want {
+		if d.Fields[k] != msg {
+			t.Errorf("%s = %q, want %q (fields %+v)", k, d.Fields[k], msg, d.Fields)
+		}
+	}
+	if _, ok := d.Fields["channels.1"]; ok {
+		t.Errorf("the valid entry was flagged: %+v", d.Fields)
+	}
+	if n := e.postCount(t); n != 0 {
+		t.Errorf("%d rows created, want 0", n)
+	}
+}
+
 func TestV1GuidePosts_CreateUnconnectedChannel(t *testing.T) {
 	e := newV1GuidePostsEnv(t, fakePosting{"bluesky": true})
 	body := fmt.Sprintf(`{"slug":%q,"channels":["bluesky","mastodon"]}`, e.slug)
@@ -189,8 +213,8 @@ func TestV1GuidePosts_CreateValidation(t *testing.T) {
 	cases := map[string]struct{ body, field string }{
 		"workshop guide":     {fmt.Sprintf(`{"slug":%q,"channels":["bluesky"]}`, ws), "slug"},
 		"no channels":        {fmt.Sprintf(`{"slug":%q,"channels":[]}`, e.slug), "channels"},
-		"unknown channel":    {fmt.Sprintf(`{"slug":%q,"channels":["myspace"]}`, e.slug), "channels"},
-		"repeated channel":   {fmt.Sprintf(`{"slug":%q,"channels":["bluesky","bluesky"]}`, e.slug), "channels"},
+		"unknown channel":    {fmt.Sprintf(`{"slug":%q,"channels":["myspace"]}`, e.slug), "channels.0"},
+		"repeated channel":   {fmt.Sprintf(`{"slug":%q,"channels":["bluesky","bluesky"]}`, e.slug), "channels.1"},
 		"bad campaign":       {fmt.Sprintf(`{"slug":%q,"channels":["bluesky"],"campaign":"Bad Slug"}`, e.slug), "campaign"},
 		"past scheduled":     {fmt.Sprintf(`{"slug":%q,"channels":["bluesky"],"scheduled_for":%q}`, e.slug, past), "scheduled_for"},
 		"bad scheduled":      {fmt.Sprintf(`{"slug":%q,"channels":["bluesky"],"scheduled_for":"tomorrow"}`, e.slug), "scheduled_for"},
