@@ -20,6 +20,7 @@ describe('GuidesIndex sets', () => {
     show('');
     expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual([
       'LEDs',
+      'ESP32-C3',
       'Multimeter',
       'Soldering',
       'Workshop guides',
@@ -29,6 +30,7 @@ describe('GuidesIndex sets', () => {
     expect(links.map((a) => a.getAttribute('href'))).toEqual([
       '/guides',
       '/guides?set=leds',
+      '/guides?set=esp32',
       '/guides?set=multimeter',
       '/guides?set=soldering',
     ]);

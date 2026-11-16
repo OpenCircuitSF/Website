@@ -6,6 +6,11 @@
       "blurb": "Light up addressable LED strips with an ESP32, and fix the things that go wrong on the way."
     },
     {
+      "id": "esp32",
+      "title": "ESP32-C3",
+      "blurb": "The tiny board we use most: buttons, pins, power, WiFi and Bluetooth, and how to get code onto it."
+    },
+    {
       "id": "multimeter",
       "title": "Multimeter",
       "blurb": "Plug in the probes, then check continuity, volts and amps without blowing a fuse."
@@ -101,7 +106,7 @@
         "reference"
       ],
       "post": "An interactive pinout for the tiny ESP32-C3 SuperMini: tap any pin to see what it does, including the three that can stop your board from booting.",
-      "set": "leds"
+      "set": "esp32"
     },
     {
       "slug": "multimeter-probes",
