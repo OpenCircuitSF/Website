@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -135,6 +136,7 @@ func TestRequireAPIToken_401sAreIdentical(t *testing.T) {
 			t.Fatalf("401s differ: %q %q", bodies, auths)
 		}
 	}
+	assertAPIErrorCode(t, []byte(bodies[0]), "unauthorized")
 }
 
 func TestRequireAPIToken_QueryStringNeverRead(t *testing.T) {
@@ -164,8 +166,24 @@ func TestRequireAPIToken_SessionCookieNeverRead(t *testing.T) {
 
 func TestRequireAPIToken_MissingScope403(t *testing.T) {
 	res, secret := newTokenFixture(t, "other:read")
-	if rec, _ := serveToken(res, apitokens.ScopeEngagementRead, v1Req("Bearer "+secret)); rec.Code != http.StatusForbidden {
+	rec, _ := serveToken(res, apitokens.ScopeEngagementRead, v1Req("Bearer "+secret))
+	if rec.Code != http.StatusForbidden {
 		t.Fatalf("code %d", rec.Code)
+	}
+	assertAPIErrorCode(t, rec.Body.Bytes(), "forbidden")
+}
+
+// assertAPIErrorCode decodes body as the #0675 envelope, with no other
+// top-level key, and checks its code.
+func assertAPIErrorCode(t *testing.T, body []byte, code string) {
+	t.Helper()
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil || len(top) != 1 {
+		t.Fatalf("body %s: not a one-key envelope (%v)", body, err)
+	}
+	var b apiErrorBody
+	if err := json.Unmarshal(body, &b); err != nil || b.Error.Code != code || b.Error.Message == "" {
+		t.Fatalf("body %s: want code %q (%v)", body, code, err)
 	}
 }
 
@@ -179,8 +197,16 @@ func TestRequireAPIToken_EmptyScopeAcceptsAnyValidToken(t *testing.T) {
 func TestRequireAPIToken_ResolverError500(t *testing.T) {
 	res, secret := newTokenFixture(t, apitokens.ScopeEngagementRead)
 	res.err = errors.New("db down")
-	if rec, _ := serveToken(res, "", v1Req("Bearer "+secret)); rec.Code != http.StatusInternalServerError {
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	rec, _ := serveToken(res, "", v1Req("Bearer "+secret))
+	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("code %d", rec.Code)
+	}
+	assertAPIErrorCode(t, rec.Body.Bytes(), "internal")
+	if strings.Contains(rec.Body.String(), "db down") {
+		t.Fatalf("raw error leaked: %s", rec.Body)
 	}
 }
 
@@ -350,13 +376,43 @@ func TestAPITokenRateLimit(t *testing.T) {
 	if err != nil || ra < 1 || ra > 30 {
 		t.Fatalf("Retry-After %q", rec.Header().Get("Retry-After"))
 	}
-	if !strings.Contains(rec.Body.String(), "rate_limit_exceeded") {
-		t.Fatalf("body %s", rec.Body.String())
-	}
+	assertAPIErrorCode(t, rec.Body.Bytes(), "rate_limited")
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, reqFor(2))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("other token throttled: %d", rec.Code)
+	}
+}
+
+// TestAPITokenRateLimitBodyIsEnvelope (#0675): the per-token 429 is the v1
+// envelope, exactly.
+func TestAPITokenRateLimitBodyIsEnvelope(t *testing.T) {
+	rl := NewRateLimiter(rate.Every(time.Hour), 1)
+	h := APITokenRateLimit(rl)(okHandler())
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	r = r.WithContext(WithAPIToken(r.Context(), apitokens.Token{ID: 3}))
+	h.ServeHTTP(httptest.NewRecorder(), r)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+	const want = `{"error":{"code":"rate_limited","message":"too many requests for this API key"}}` + "\n"
+	if rec.Code != http.StatusTooManyRequests || rec.Body.String() != want {
+		t.Fatalf("code %d body %q", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Fatal("no Retry-After")
+	}
+}
+
+// TestIPRateLimitBodyUnchanged (#0675): the IP limiters on signup and login
+// keep their old body; only the per-token limiter moved to the envelope.
+func TestIPRateLimitBodyUnchanged(t *testing.T) {
+	rl := NewRateLimiter(rate.Every(time.Hour), 1)
+	h := rl.Middleware(okHandler())
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/subscribe", nil))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/subscribe", nil))
+	if rec.Code != http.StatusTooManyRequests || rec.Body.String() != `{"error":"rate_limit_exceeded"}` {
+		t.Fatalf("code %d body %q", rec.Code, rec.Body.String())
 	}
 }
 

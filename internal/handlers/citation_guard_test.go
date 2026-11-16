@@ -163,11 +163,13 @@ var scanGoRoots = []string{"..", "../../cmd", "../../web"}
 // `find .. ../../cmd ../../web -name '*.go' -not -name '*_test.go' -not
 // -path '*/node_modules/*' -not -path '*/dist/*'` counts 163 files at #0549,
 // and the single largest package under these roots (internal/handlers, this
-// guard's own directory) has 40 non-test files, cmd/ has 3. 115 sits
+// guard's own directory) has 40 non-test files, cmd/ has 3. 115 sat
 // below the real total (163 at #0549) while still tripping if the roots were
 // narrowed to any one of the three — the "a real narrowing would trip it"
-// bar #0275 criterion 3 sets.
-const citationGuardMinPlausibleFileCount = 115
+// bar #0275 criterion 3 sets. #0675 raised it to 165 when the population
+// reached 233 (scripts/go_file_visit_floor_guard_test.sh's remedy:
+// population divided by the square root of two, rounded up).
+const citationGuardMinPlausibleFileCount = 165
 
 type citationViolation struct {
 	pos   token.Position

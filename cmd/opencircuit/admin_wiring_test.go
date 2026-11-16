@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -14,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/api"
 	"github.com/brennanMKE/OpenCircuitSF/internal/apitokens"
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
@@ -130,8 +134,11 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// #0652: attach the API tokens handler so its three admin routes are
 	// swept below, and /api/v1/token is mounted for the bearer checks.
 	apiTokensH := handlers.NewAPITokensHandler(apitokens.NewStore(pool), auditLogger)
-	// #0653: the engagement route, mounted as main.go mounts it.
-	apiTokensH.AddV1Route("/api/v1/engagement", apitokens.ScopeEngagementRead, handlers.NewEngagementAPIHandler(outreach.NewStore(pool)))
+	// #0653, #0675: the v1 operation registry, built as main.go builds it.
+	apiTokensH.SetV1(handlers.BuildV1Registry(
+		api.Config{Version: "wiring-version", Idempotency: api.NewIdempotencyStore(pool)},
+		handlers.V1Deps{Engagement: outreach.NewStore(pool)},
+	))
 	settingsH.SetAPITokens(apiTokensH)
 	adminUsersH := handlers.NewAdminUsersHandler(store, auditLogger)
 	adminAuditH := handlers.NewAdminAuditHandler(audit.NewReader(pool))
@@ -486,7 +493,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	}
 
 	// #0652: /api/v1/token on the real mux — Bearer only, GET only.
-	v1 := func(method, url, bearer, cookie string) int {
+	v1Body := func(method, url, bearer, cookie string) (int, []byte) {
 		t.Helper()
 		req, err := http.NewRequest(method, url, nil)
 		if err != nil {
@@ -502,10 +509,49 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 		if err != nil {
 			t.Fatalf("v1 request: %v", err)
 		}
-		resp.Body.Close()
-		return resp.StatusCode
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, b
+	}
+	v1 := func(method, url, bearer, cookie string) int {
+		t.Helper()
+		code, _ := v1Body(method, url, bearer, cookie)
+		return code
+	}
+	v1ErrCode := func(b []byte) string {
+		var e api.ErrorBody
+		if err := json.Unmarshal(b, &e); err != nil {
+			return "undecodable: " + string(b)
+		}
+		return e.Error.Code
 	}
 	v1URL := baseURL + "/api/v1/token"
+	// #0675: every v1 error is the envelope, including the token 401.
+	if code, b := v1Body(http.MethodGet, v1URL, "", ""); code != http.StatusUnauthorized || v1ErrCode(b) != api.CodeUnauthorized {
+		t.Errorf("GET /api/v1/token with no token = %d %s, want 401 unauthorized", code, b)
+	}
+	// #0675: whoami, the JSON 404 and the public OpenAPI document.
+	if code, b := v1Body(http.MethodGet, baseURL+"/api/v1/me", bearerSecret, ""); code != http.StatusOK || !strings.Contains(string(b), `"server_version":"wiring-version"`) {
+		t.Errorf("GET /api/v1/me with Bearer = %d %s, want 200 with server_version", code, b)
+	}
+	if code, b := v1Body(http.MethodGet, baseURL+"/api/v1/nope", bearerSecret, ""); code != http.StatusNotFound || v1ErrCode(b) != api.CodeNotFound {
+		t.Errorf("GET /api/v1/nope = %d %s, want 404 not_found", code, b)
+	}
+	if got := v1(http.MethodGet, baseURL+api.OpenAPIPath, "", ""); got != http.StatusOK {
+		t.Errorf("GET %s with no credentials = %d, want 200", api.OpenAPIPath, got)
+	}
+	// #0675: every registered operation refuses no token and a session
+	// cookie alone. Path parameters are filled with 1; the request never
+	// reaches the operation.
+	for _, op := range apiTokensH.V1().Operations() {
+		u := baseURL + regexp.MustCompile(`\{[^}]+\}`).ReplaceAllString(op.Path, "1")
+		if got := v1(op.Method, u, "", ""); got != http.StatusUnauthorized {
+			t.Errorf("%s %s with no token = %d, want 401", op.Method, op.Path, got)
+		}
+		if got := v1(op.Method, u, "", "wiring-admin-token"); got != http.StatusUnauthorized {
+			t.Errorf("%s %s with admin session cookie = %d, want 401", op.Method, op.Path, got)
+		}
+	}
 	if got := v1(http.MethodGet, v1URL, bearerSecret, ""); got != http.StatusOK {
 		t.Errorf("GET /api/v1/token with Bearer = %d, want 200", got)
 	}

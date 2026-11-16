@@ -174,14 +174,18 @@ This keeps the token out of your shell history:
 
 ```sh
 read -rs OCSF_TOKEN   # paste the token, press Return
-curl -s -w '\nHTTP %{http_code}\n' -H "Authorization: Bearer $OCSF_TOKEN" https://www.opencircuitsf.com/api/v1/token
+curl -s -w '\nHTTP %{http_code}\n' -H "Authorization: Bearer $OCSF_TOKEN" https://www.opencircuitsf.com/api/v1/me
 curl -s -w '\nHTTP %{http_code}\n' -H "Authorization: Bearer $OCSF_TOKEN" https://www.opencircuitsf.com/api/v1/engagement
 unset OCSF_TOKEN
 ```
 
-- The probe at `/api/v1/token` accepts any valid token, whatever its scope. It
-  returns `{"name":"Home Assistant","prefix":"ocsf_…","scopes":["engagement:read"]}`
-  (the prefix is the first 12 characters) and `HTTP 200`.
+- The probe at `/api/v1/me` accepts any valid token, whatever its scope. It
+  returns `{"name":"Home Assistant","prefix":"ocsf_…","scopes":["engagement:read"],"expires_at":…,"server_version":"…","api_version":"v1"}`
+  (the prefix is the first 12 characters; `expires_at` is `null` for a token
+  that never expires) and `HTTP 200`. `/api/v1/token`, the older probe URL,
+  still works and returns the same body.
+- `https://www.opencircuitsf.com/api/v1/openapi.json` needs no token. It
+  describes every `/api/v1/` call.
 - The engagement call returns the JSON shown in section 1.
 - `curl -s -o /dev/null -w '%{http_code}\n' https://www.opencircuitsf.com/api/v1/engagement`
   prints `401`, because it sends no header.
@@ -195,19 +199,20 @@ unset OCSF_TOKEN
 
 | What you see | Body | Cause | Do this |
 |---|---|---|---|
-| `401` | `{"error":"unauthenticated"}`, with `WWW-Authenticate: Bearer realm="opencircuitsf"` | Any of these: no `Authorization` header, a missing `Bearer ` prefix, a mistyped or truncated token, an unknown token, a revoked token, an expired token. The response never says which. | Check that `secrets.yaml` has `Bearer ` and the whole 48-character `ocsf_…` value. Run the probe with curl. In Settings → API tokens, check that the row's Status is `Active`. If the token is lost or revoked, create a new one (section 8). |
-| `403` | `{"error":"forbidden"}` | The token is valid but lacks `engagement:read`. | The probe's `scopes` shows what the token has. Create a new one. Tick **Read engagement** when you create it. |
-| `429` | `{"error":"rate_limit_exceeded"}`, with `Retry-After` | The token made more than 120 requests in a minute. The sensor's polling never comes close. | Wait the number of seconds `Retry-After` gives. Check that nothing else is using the same token. |
-| `400` | `{"error":"<message>"}` | Only the optional `hours` and `since` parameters cause this. The messages are listed below. | Remove the parameter, or fix it as the message says. The sensor above sends neither. |
-| `400` with `since must be an RFC 3339 time` for a time that looks right | `{"error":"since must be an RFC 3339 time"}` | The time has an offset like `+00:00` with an unencoded `+`. The `+` is read as a space. | Write the offset as `%2B00:00`, or use a `Z` time (section 1). |
-| `404` | — | The URL is mistyped, or the server predates this feature. | Check `resource:`. Make sure the site has been deployed with `#0653`. |
-| `405` | — | The sensor uses `method: POST`. | Use `GET`. |
-| `500` | `{"error":"internal_error"}` or `{"error":"internal error"}` | A server-side failure in the token lookup or the engagement query. | Retry later. The operator checks `journalctl -u opencircuit`. |
+| `401` | `{"error":{"code":"unauthorized","message":"a valid API key is required"}}`, with `WWW-Authenticate: Bearer realm="opencircuitsf"` | Any of these: no `Authorization` header, a missing `Bearer ` prefix, a mistyped or truncated token, an unknown token, a revoked token, an expired token. The response never says which. | Check that `secrets.yaml` has `Bearer ` and the whole 48-character `ocsf_…` value. Run the probe with curl. In Settings → API tokens, check that the row's Status is `Active`. If the token is lost or revoked, create a new one (section 8). |
+| `403` | `{"error":{"code":"forbidden","message":"this API key lacks the engagement:read scope"}}` | The token is valid but lacks `engagement:read`. | The probe's `scopes` shows what the token has. Create a new one. Tick **Read engagement** when you create it. |
+| `429` | `{"error":{"code":"rate_limited","message":"too many requests for this API key"}}`, with `Retry-After` | The token made more than 120 requests in a minute. The sensor's polling never comes close. | Wait the number of seconds `Retry-After` gives. Check that nothing else is using the same token. |
+| `400` | `{"error":{"code":"validation","message":"the request has invalid fields","fields":{"<hours or since>":"<message>"}}}` | Only the optional `hours` and `since` parameters cause this. The messages are listed below. | Remove the parameter, or fix it as the message says. The sensor above sends neither. |
+| `400` with `since must be an RFC 3339 time` for a time that looks right | `{"error":{"code":"validation",…,"fields":{"since":"since must be an RFC 3339 time"}}}` | The time has an offset like `+00:00` with an unencoded `+`. The `+` is read as a space. | Write the offset as `%2B00:00`, or use a `Z` time (section 1). |
+| `404` | `{"error":{"code":"not_found","message":"no such API endpoint"}}` | The URL is mistyped, or the server predates this feature. | Check `resource:`. Make sure the site has been deployed with `#0653`. |
+| `405` | `{"error":{"code":"method_not_allowed",…}}`, with `Allow: GET` | The sensor uses `method: POST`. | Use `GET`. |
+| `500` | `{"error":{"code":"internal","message":"internal error"}}` | A server-side failure in the token lookup or the engagement query. | Retry later. The operator checks `journalctl -u opencircuit`. |
 | State `unknown` or unavailable | — | A timeout, or a response that is not JSON or has no `total` (any error). | Check Settings → System → Logs for the `rest` warning, then run the curl checks. |
 | Stale `data_as_of` | — | Snapshots are taken hourly for posts under 7 days old, daily from 7 to 30 days, and not at all after 30 days. A `data_as_of` up to about a day old is normal when the newest post is a week or more old. If it is `null` or older than a day, either no post is younger than 30 days (nothing to track, so `total` is 0, which is correct) or the tracker isn't capturing. | Check that the posts are under 30 days old. If they are, an admin checks **Settings → Outreach → Connections** for both channels and looks at the server log. |
 | The notification shows yesterday's numbers | — | The refresh hadn't finished when the condition ran. With a once-a-day `scan_interval` this is unlikely. | Add `- delay: "00:00:05"` after the `update_entity` step. |
 
-The `400` messages, exactly as the server sends them:
+The `400` messages, exactly as the server sends them in `error.fields`
+(`use either…` is under `hours`):
 
 - `use either hours or since, not both`
 - `hours must be a whole number from 1 to 168`

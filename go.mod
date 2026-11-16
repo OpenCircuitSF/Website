@@ -10,6 +10,7 @@ require (
 	github.com/aws/smithy-go v1.27.8
 	github.com/descope/virtualwebauthn v1.0.5
 	github.com/go-webauthn/webauthn v0.17.4
+	github.com/google/jsonschema-go v0.4.3
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/joho/godotenv v1.5.1
 	github.com/rivo/uniseg v0.4.7

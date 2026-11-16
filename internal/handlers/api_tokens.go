@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/api"
 	"github.com/brennanMKE/OpenCircuitSF/internal/apitokens"
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
@@ -23,45 +24,27 @@ type apiTokenStore interface {
 	Resolve(ctx context.Context, secret string, now time.Time) (apitokens.Token, error)
 }
 
-// APIv1Route is one token-authenticated route. mountAndServe registers each as GET only.
-type APIv1Route struct {
-	Path    string // must start with "/api/v1/"
-	Scope   string // "" = any valid token
-	Handler http.Handler
-}
-
-// APITokensHandler serves the admin API token routes and owns the list of
-// token-authenticated /api/v1/ routes (#0652). Nothing here logs a request
-// body or a token secret.
+// APITokensHandler serves the admin API token routes and carries the
+// /api/v1 operation registry (#0652, #0675) to mountAndServe. Nothing here
+// logs a request body or a token secret.
 type APITokensHandler struct {
 	store   apiTokenStore
 	auditor *audit.Logger
 	now     func() time.Time
-	v1      []APIv1Route
+	v1      *api.Registry
 }
 
 // NewAPITokensHandler returns a handler over store. A nil auditor disables
-// audit writes. It registers the built-in GET /api/v1/token probe.
+// audit writes. Attach the v1 registry with SetV1.
 func NewAPITokensHandler(store apiTokenStore, auditor *audit.Logger) *APITokensHandler {
-	h := &APITokensHandler{store: store, auditor: auditor, now: time.Now}
-	h.v1 = append(h.v1, APIv1Route{Path: "/api/v1/token", Scope: "", Handler: http.HandlerFunc(h.Describe)})
-	return h
+	return &APITokensHandler{store: store, auditor: auditor, now: time.Now}
 }
 
-// AddV1Route adds a token-authenticated route. It panics on a path outside
-// /api/v1/ or an unknown scope, since either is a wiring bug.
-func (h *APITokensHandler) AddV1Route(path, scope string, handler http.Handler) {
-	if !strings.HasPrefix(path, "/api/v1/") {
-		panic("handlers: API v1 route outside /api/v1/: " + path)
-	}
-	if scope != "" && !apitokens.IsKnownScope(scope) {
-		panic("handlers: API v1 route with unknown scope: " + scope)
-	}
-	h.v1 = append(h.v1, APIv1Route{Path: path, Scope: scope, Handler: handler})
-}
+// SetV1 attaches the /api/v1 operation registry (BuildV1Registry).
+func (h *APITokensHandler) SetV1(reg *api.Registry) { h.v1 = reg }
 
-// V1Routes returns the token-authenticated routes.
-func (h *APITokensHandler) V1Routes() []APIv1Route { return h.v1 }
+// V1 returns the registry SetV1 attached, or nil.
+func (h *APITokensHandler) V1() *api.Registry { return h.v1 }
 
 // Resolver returns the token resolver RequireAPIToken uses.
 func (h *APITokensHandler) Resolver() middleware.APITokenResolver { return h.store }
@@ -210,15 +193,4 @@ func (h *APITokensHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"token": toAPITokenView(tok)})
-}
-
-// Describe handles GET /api/v1/token: it names the presenting token, so a
-// client (Home Assistant, #0654) can check that its token works.
-func (h *APITokensHandler) Describe(w http.ResponseWriter, r *http.Request) {
-	t, ok := middleware.APITokenFromContext(r.Context())
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "unauthenticated")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"name": t.Name, "prefix": t.Prefix, "scopes": t.Scopes})
 }

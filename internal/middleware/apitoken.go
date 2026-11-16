@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -65,13 +66,25 @@ func NewAPITokenRateLimiter() *RateLimiter {
 // the context, so it must sit inside RequireAPIToken. Over the limit gets 429
 // with Retry-After. A request with no token in context (a wiring bug) shares
 // one bucket rather than going unlimited.
+//
+// It does not use MiddlewareByKey: that body, {"error":"rate_limit_exceeded"},
+// is shared with the IP limiters on signup and login and stays as it is,
+// while every /api/v1 error is the #0675 envelope (writeAPIError).
 func APITokenRateLimit(rl *RateLimiter) func(http.Handler) http.Handler {
-	return rl.MiddlewareByKey(func(r *http.Request) string {
-		if t, ok := APITokenFromContext(r.Context()); ok {
-			return "token:" + strconv.FormatInt(t.ID, 10)
-		}
-		return "token:none"
-	})
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			key := "token:none"
+			if t, ok := APITokenFromContext(r.Context()); ok {
+				key = "token:" + strconv.FormatInt(t.ID, 10)
+			}
+			if wait, ok := rl.allow(key, time.Now()); !ok {
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(wait)))
+				writeAPIError(w, http.StatusTooManyRequests, "rate_limited", "too many requests for this API key")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // apiBearerToken returns the token from an "Authorization: Bearer" header, or
@@ -112,11 +125,11 @@ func RequireAPIToken(resolver APITokenResolver, scope string) func(http.Handler)
 					return
 				}
 				slog.Error("api token lookup failed", "err", err)
-				writeJSONError(w, http.StatusInternalServerError, "internal_error")
+				writeAPIError(w, http.StatusInternalServerError, "internal", "internal error")
 				return
 			}
 			if !apitokens.ScopeSatisfies(t.Scopes, scope) {
-				writeJSONError(w, http.StatusForbidden, "forbidden")
+				writeAPIError(w, http.StatusForbidden, "forbidden", "this API key lacks the "+scope+" scope")
 				return
 			}
 			next.ServeHTTP(w, r.WithContext(WithAPIToken(r.Context(), t)))
@@ -128,5 +141,26 @@ func RequireAPIToken(resolver APITokenResolver, scope string) func(http.Handler)
 // response never says which failure it was.
 func writeAPIUnauthenticated(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", `Bearer realm="opencircuitsf"`)
-	writeUnauthenticated(w)
+	writeAPIError(w, http.StatusUnauthorized, "unauthorized", "a valid API key is required")
+}
+
+// apiErrorBody is the v1 error envelope (#0675). It must stay identical in
+// shape to api.ErrorBody: internal/api's envelope_test.go decodes these
+// bodies into that type. Fields is never set here; only validation errors
+// carry it, and internal/api writes those.
+type apiErrorBody struct {
+	Error struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// writeAPIError writes {"error":{"code":...,"message":...}}. RequireAPIToken
+// guards only /api/v1/ (and, later, /mcp), so no other caller sees it.
+func writeAPIError(w http.ResponseWriter, status int, code, message string) {
+	var b apiErrorBody
+	b.Error.Code, b.Error.Message = code, message
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(b)
 }

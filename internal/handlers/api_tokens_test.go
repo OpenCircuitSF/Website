@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/api"
 	"github.com/brennanMKE/OpenCircuitSF/internal/apitokens"
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
@@ -42,9 +43,8 @@ func newAPITokEnv(t *testing.T) *apiTokEnv {
 	mux.Handle("GET /admin/api-tokens", requireAdmin(http.HandlerFunc(h.List)))
 	mux.Handle("POST /admin/api-tokens", requireAdmin(http.HandlerFunc(h.Create)))
 	mux.Handle("POST /admin/api-tokens/{id}/revoke", requireAdmin(http.HandlerFunc(h.Revoke)))
-	for _, r := range h.V1Routes() {
-		mux.Handle("GET "+r.Path, middleware.RequireAPIToken(h.Resolver(), r.Scope)(r.Handler))
-	}
+	h.SetV1(BuildV1Registry(api.Config{Version: "test"}, V1Deps{}))
+	mux.Handle("/api/v1/", api.NewHTTPRouter(h.V1(), api.RouterDeps{Resolver: h.Resolver(), Limiter: middleware.NewAPITokenRateLimiter()}))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	admin := seedAdmin(t, pool, "admin-apitok@example.com")
@@ -250,20 +250,17 @@ func TestAPITokens_SecretNeverLogged(t *testing.T) {
 	}
 }
 
-func TestAPITokens_AddV1RoutePanicsOutsidePrefix(t *testing.T) {
+// TestSetV1RoundTrips (#0675): the registry SetV1 attaches is the one V1
+// returns, and a fresh handler has none.
+func TestSetV1RoundTrips(t *testing.T) {
 	h := NewAPITokensHandler(nil, nil)
-	for _, c := range []struct{ path, scope string }{
-		{"/admin/x", ""},
-		{"/api/v1/x", "admin:write"},
-	} {
-		func() {
-			defer func() {
-				if recover() == nil {
-					t.Errorf("%s %q: no panic", c.path, c.scope)
-				}
-			}()
-			h.AddV1Route(c.path, c.scope, http.NotFoundHandler())
-		}()
+	if h.V1() != nil {
+		t.Fatal("fresh handler has a registry")
+	}
+	reg := BuildV1Registry(api.Config{Version: "x"}, V1Deps{})
+	h.SetV1(reg)
+	if h.V1() != reg {
+		t.Fatal("V1 did not return the registry SetV1 attached")
 	}
 }
 

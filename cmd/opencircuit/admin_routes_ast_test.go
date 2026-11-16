@@ -5,6 +5,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -98,14 +100,15 @@ func TestAdminRoutesRegisteredOnlyViaTable(t *testing.T) {
 		lit, ok := call.Args[0].(*ast.BasicLit)
 		if !ok || lit.Kind != token.STRING {
 			// Not a literal pattern — the adminRoutes loop's
-			// `r.method+" "+r.path` lands here, as does the /api/v1/
-			// loop's `"GET "+r.Path` (#0652). Those are the only two
-			// non-literal patterns mux.Handle/HandleFunc is called with
-			// in this file (verified by inspection; see the doc
-			// comment above), so they are not further validated here —
+			// `r.method+" "+r.path` lands here. Since #0675 replaced the
+			// /api/v1/ loop with one api.Mount call (which registers its
+			// patterns inside internal/api, and is
+			// TestAPIV1MountedOnlyViaRegistry's subject), that is the only
+			// non-literal pattern mux.Handle/HandleFunc is called with in
+			// this file (verified by inspection), so it is not further
+			// validated here —
 			// TestMountAndServe_AdminRoutesRequireSessionAndAdmin
-			// (admin_wiring_test.go) is what proves their guards. The
-			// /api/v1/ patterns sit outside the /admin scope checked here.
+			// (admin_wiring_test.go) is what proves its guard.
 			return true
 		}
 
@@ -136,4 +139,119 @@ func TestAdminRoutesRegisteredOnlyViaTable(t *testing.T) {
 			strings.Join(violations, "\n"),
 		)
 	}
+}
+
+// TestAPIV1MountedOnlyViaRegistry (#0675) is the /api/v1 twin of the test
+// above. Every v1 route comes from the operation registry
+// (handlers.BuildV1Registry), and api.NewHTTPRouter puts each behind
+// RequireAPIToken, the per-token rate limit and the scope check. A route
+// mounted on mux directly, beside that router, would get none of them. So:
+// no mux.Handle/HandleFunc in main.go may have a literal pattern whose path
+// starts with /api/v1, and api.Mount must be called exactly once, with mux
+// and a call to api.NewHTTPRouter. (api.Mount registers one
+// "<METHOD> /api/v1/" pattern per method, because a bare "/api/v1/"
+// conflicts with the SPA's "GET /" in Go's ServeMux.)
+func TestAPIV1MountedOnlyViaRegistry(t *testing.T) {
+	if v := v1MountViolations(t, "main.go"); len(v) > 0 {
+		t.Fatalf("/api/v1 must be mounted once, as api.Mount(mux, api.NewHTTPRouter(...)):\n%s", strings.Join(v, "\n"))
+	}
+}
+
+// TestAPIV1MountGuardCatchesRogueRoute proves the guard above fails: copies
+// of main.go with a rogue literal v1 route, with the router swapped for
+// another call, and with a second mount each report a violation. The copies
+// live in t.TempDir() and are only parsed, never compiled; main.go itself is
+// never touched.
+func TestAPIV1MountGuardCatchesRogueRoute(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const mount = `api.Mount(mux, api.NewHTTPRouter(`
+	if strings.Count(string(src), mount) != 1 {
+		t.Fatalf("main.go does not hold exactly one %q", mount)
+	}
+	rogue := strings.Replace(string(src), mount,
+		`mux.Handle("GET /api/v1/rogue", http.NotFoundHandler())`+"\n\t\t"+mount, 1)
+	bypassed := strings.Replace(string(src), mount, `api.Mount(mux, handlers.NotARouter(`, 1)
+	twice := strings.Replace(string(src), mount, `api.Mount(mux, api.NewHTTPRouter(t.V1(), api.RouterDeps{}))`+"\n\t\t"+mount, 1)
+	for name, body := range map[string]string{"rogue": rogue, "bypassed": bypassed, "twice": twice} {
+		p := filepath.Join(t.TempDir(), "main.go")
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if v := v1MountViolations(t, p); len(v) == 0 {
+			t.Errorf("%s: the guard reported nothing", name)
+		}
+	}
+}
+
+// v1MountViolations parses path and lists every /api/v1 mux registration
+// that is not the one registry mount.
+func v1MountViolations(t *testing.T, path string) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+	var violations []string
+	mounts := 0
+	ast.Inspect(file, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) < 2 {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		recv, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		pos := fset.Position(call.Pos())
+		switch {
+		case recv.Name == "api" && sel.Sel.Name == "Mount":
+			mounts++
+			if m, ok := call.Args[0].(*ast.Ident); !ok || m.Name != "mux" || !isAPINewHTTPRouterCall(call.Args[1]) {
+				violations = append(violations, fmt.Sprintf("%s: api.Mount must be given mux and api.NewHTTPRouter(...)", pos))
+			}
+		case recv.Name == "mux" && (sel.Sel.Name == "Handle" || sel.Sel.Name == "HandleFunc"):
+			lit, ok := call.Args[0].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			pattern, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				t.Fatalf("%s: unquote %s: %v", fset.Position(lit.Pos()), lit.Value, err)
+			}
+			p := pattern
+			if _, rest, found := strings.Cut(pattern, " "); found {
+				p = rest
+			}
+			if strings.HasPrefix(p, "/api/v1") {
+				violations = append(violations, fmt.Sprintf("%s: mux.%s(%q, ...) bypasses the v1 registry", pos, sel.Sel.Name, pattern))
+			}
+		}
+		return true
+	})
+	if mounts != 1 {
+		violations = append(violations, fmt.Sprintf("%s: api.Mount is called %d times, want 1", path, mounts))
+	}
+	return violations
+}
+
+// isAPINewHTTPRouterCall reports whether e is a call api.NewHTTPRouter(...).
+func isAPINewHTTPRouterCall(e ast.Expr) bool {
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "NewHTTPRouter" {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && pkg.Name == "api"
 }
