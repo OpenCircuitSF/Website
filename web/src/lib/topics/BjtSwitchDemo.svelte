@@ -106,7 +106,7 @@
     {:else if r.state === 'marginal'}
       <p>
         Ic/Ib is {r.gainNeeded.toFixed(0)}. That’s under the minimum gain of {r.hfeMin.toFixed(0)}, so it should switch on, but the
-        datasheet only promises a low Vce at Ic/Ib = {FORCED_GAIN}.
+        datasheet only promises a low Vce at Ic/Ib = {FORCED_GAIN}, so the real Vce may be higher than shown.
         {#if r.suggestedRb}Use {ohms(r.suggestedRb)} or less.{/if}
       </p>
     {:else}

@@ -690,8 +690,8 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
         body: 'A MOSFET is turned on by the voltage between gate (G) and source (S). Once the gate is charged, almost no current flows into it, so one pin can switch amps. The load goes between + and the drain (D), and the source goes to ground.',
       },
       {
-        title: 'Logic level means "on at 3.3 to 5 V"',
-        body: 'Rds(on) is the resistance from drain to source when the MOSFET is on, and datasheets give it at set gate voltages. The IRLZ44N promises 25 mΩ at 5 V and the AO3400A 32 mΩ at 4.5 V. The IRFZ44N is only specified at 10 V. At 3.3 V it may barely conduct at all.',
+        title: 'Logic level means "fully on at 5 V, not 10 V"',
+        body: 'Rds(on) is the resistance from drain to source when the MOSFET is on, and datasheets give it at set gate voltages. The IRLZ44N promises 25 mΩ at 5 V and the AO3400A 32 mΩ at 4.5 V. The IRFZ44N is only specified at 10 V. At 3.3 V it may barely conduct at all. For a 3.3 V pin, look for an Rds(on) given at 2.5 V.',
       },
       {
         title: 'Heat is current squared times Rds(on)',
@@ -737,7 +737,7 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
       {
         title: 'Big loads: a MOSFET',
-        body: 'A transistor needs about a tenth of its load current from the pin. At 200 mA that’s 20 mA, more than an ESP32 pin should give. A MOSFET needs almost no gate current, and with a low Rds(on) it wastes less power than a transistor’s 0.2–1 V drop.',
+        body: 'A transistor needs about a tenth of its load current from the pin. At 200 mA that’s 20 mA, as much as an ESP32 pin should give, and past 200 mA it’s more. A MOSFET needs almost no gate current, and with a low Rds(on) it wastes less power than a transistor’s 0.2–1 V drop.',
       },
       {
         title: 'Check three numbers',
