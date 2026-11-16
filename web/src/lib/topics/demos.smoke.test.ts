@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Smoke test: every guide demo mounts, and the main buttons respond.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { TOPICS } from './topics';
@@ -19,6 +19,12 @@ import TinningDemo from './TinningDemo.svelte';
 import JointQuiz from './JointQuiz.svelte';
 import TipCareDemo from './TipCareDemo.svelte';
 import HeaderPinsDemo from './HeaderPinsDemo.svelte';
+// ESP32-C3: wireless and sleep (#0672)
+import WifiConnectDemo from './WifiConnectDemo.svelte';
+import BleWifiPicker from './BleWifiPicker.svelte';
+import BleBasicsDemo from './BleBasicsDemo.svelte';
+import BrownoutDemo from './BrownoutDemo.svelte';
+import DeepSleepDemo from './DeepSleepDemo.svelte';
 
 afterEach(cleanup);
 
@@ -212,5 +218,61 @@ describe('guide demos', () => {
     await fireEvent.click(again);
     await tick();
     expect(document.activeElement?.textContent).toBe('Good joint');
+  });
+
+  // ESP32-C3: wireless and sleep (#0672)
+  it('wifi: a 5 GHz-only network is not found; the antenna fix connects', async () => {
+    const r = render(WifiConnectDemo);
+    await fireEvent.click(r.getByRole('radio', { name: /5 GHz only/ }));
+    expect(r.getByText('WL_NO_SSID_AVAIL', { selector: '.status code' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: /Home WiFi/ }));
+    await fireEvent.click(r.getByRole('checkbox', { name: /antenna problem/ }));
+    expect(r.getByRole('heading', { name: 'Never connects, even next to the router' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('checkbox', { name: /setTxPower/ }));
+    expect(r.getByRole('heading', { name: 'Connected' })).toBeTruthy();
+  });
+
+  it('ble vs wifi: internet picks WiFi, audio is something the C3 cannot do', async () => {
+    const r = render(BleWifiPicker);
+    await fireEvent.click(r.getByRole('checkbox', { name: /internet/ }));
+    expect(r.getByRole('heading', { name: 'WiFi' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('checkbox', { name: /audio/ }));
+    expect(r.getByRole('heading', { name: 'The C3 can’t do this one' })).toBeTruthy();
+  });
+
+  it('ble basics: scan, connect and write 01 turns the board LED on', async () => {
+    vi.useFakeTimers();
+    try {
+      const r = render(BleBasicsDemo);
+      await fireEvent.click(r.getByRole('button', { name: 'Scan' }));
+      await vi.advanceTimersByTimeAsync(800);
+      await fireEvent.click(r.getByRole('button', { name: 'Connect' }));
+      await fireEvent.click(r.getByRole('button', { name: 'Write 01' }));
+      expect(r.getByRole('img', { name: 'SuperMini, LED on' })).toBeTruthy();
+      await fireEvent.click(r.getByRole('button', { name: 'Subscribe' }));
+      await fireEvent.click(r.getByRole('button', { name: 'Press BOOT on the board' }));
+      expect(r.getByText(/Notify LED → 0x00/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('brownout: a thin cable resets on WiFi bursts; the capacitor steadies it', async () => {
+    const r = render(BrownoutDemo);
+    expect(r.getByRole('heading', { name: 'Brownout: the board resets' })).toBeTruthy();
+    expect(r.getByText('Brownout detector was triggered')).toBeTruthy();
+    await fireEvent.click(r.getByRole('checkbox', { name: /470 µF/ }));
+    expect(r.queryByRole('heading', { name: 'Brownout: the board resets' })).toBeNull();
+  });
+
+  it('deep sleep: turning off WiFi and the board parts lengthens battery life', async () => {
+    const r = render(DeepSleepDemo);
+    const before = r.container.querySelector('.big')?.textContent;
+    await fireEvent.click(r.getByRole('checkbox', { name: /power LED/ }));
+    await fireEvent.click(r.getByRole('checkbox', { name: /WiFi/ }));
+    const after = r.container.querySelector('.big')?.textContent;
+    expect(before).toMatch(/days/);
+    expect(after).toMatch(/days|years/);
+    expect(after).not.toBe(before);
   });
 });
