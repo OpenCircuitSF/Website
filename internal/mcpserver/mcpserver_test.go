@@ -100,7 +100,7 @@ func testOps(rec *recorder) []api.Operation {
 		}),
 		api.Define(api.Operation{
 			Name: "test_create_posts", Method: http.MethodPost, Path: "/api/v1/test-posts", Scope: apitokens.ScopeGuidePostsWrite,
-			Summary: "Create test posts.", PublicEffect: "posts publicly right away", Status: http.StatusCreated,
+			Summary: "Create test posts.", PublicEffect: "posts publicly right away", Status: http.StatusCreated, Idempotency: true,
 		}, func(ctx context.Context, in createPostsIn) (createPostsOut, error) {
 			rec.mu.Lock()
 			defer rec.mu.Unlock()
@@ -221,10 +221,15 @@ func TestListedToolsMatchRegistry(t *testing.T) {
 			t.Errorf("listed tool %q is not an exposed operation", tool.Name)
 			continue
 		}
-		if tool.Description != op.Describe() {
-			t.Errorf("%s: description %q, want %q", tool.Name, tool.Description, op.Describe())
+		wantDesc := op.Describe()
+		if op.Idempotency {
+			wantDesc += mcpserver.IdempotencyKeyNote
 		}
-		for name, pair := range map[string][2]any{"input": {tool.InputSchema, op.InputSchema()}, "output": {tool.OutputSchema, op.OutputSchema()}} {
+		if tool.Description != wantDesc {
+			t.Errorf("%s: description %q, want %q", tool.Name, tool.Description, wantDesc)
+		}
+		in := withoutIdempotencyKey(t, op, schemaOf(t, tool.InputSchema))
+		for name, pair := range map[string][2]any{"input": {in, op.InputSchema()}, "output": {tool.OutputSchema, op.OutputSchema()}} {
 			got, _ := json.Marshal(pair[0])
 			want, _ := json.Marshal(pair[1])
 			if !jsonEqual(t, got, want) {

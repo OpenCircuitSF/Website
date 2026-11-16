@@ -15,10 +15,14 @@ func TestToolMirrorsOperation(t *testing.T) {
 	ops := append(api.CoreOperations("v"), testOps(&recorder{})...)
 	for _, op := range ops {
 		tool := mcpserver.ToolFor(op)
-		if tool.Name != op.Name || tool.Description != op.Describe() {
+		wantDesc := op.Describe()
+		if op.Idempotency {
+			wantDesc += mcpserver.IdempotencyKeyNote
+		}
+		if tool.Name != op.Name || tool.Description != wantDesc {
 			t.Errorf("%s: name/description %q / %q", op.Name, tool.Name, tool.Description)
 		}
-		if !reflect.DeepEqual(tool.InputSchema, op.InputSchema()) {
+		if !reflect.DeepEqual(withoutIdempotencyKey(t, op, tool.InputSchema), op.InputSchema()) {
 			t.Errorf("%s: input schema differs from the registry's", op.Name)
 		}
 		if !reflect.DeepEqual(tool.OutputSchema, op.OutputSchema()) {
@@ -52,7 +56,7 @@ func TestToolMirrorsOperation(t *testing.T) {
 func TestDescriptionsLeadWithWarnings(t *testing.T) {
 	sawDestructive, sawPublic := false, false
 	for _, op := range testOps(&recorder{}) {
-		d := mcpserver.ToolFor(op).Description
+		d := strings.TrimSuffix(mcpserver.ToolFor(op).Description, mcpserver.IdempotencyKeyNote)
 		if op.Destructive {
 			sawDestructive = true
 			if !strings.HasPrefix(d, "DESTRUCTIVE: ") {

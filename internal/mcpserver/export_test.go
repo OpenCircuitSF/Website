@@ -3,19 +3,21 @@ package mcpserver
 import (
 	"net/http"
 	"net/http/httptest"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/api"
 	"github.com/brennanMKE/OpenCircuitSF/internal/apitokens"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 )
 
 // Test hooks for the external mcpserver_test package (which cannot be an
 // internal test: it imports mcptest, which imports this package).
-var (
-	ToolFor    = toolFor
-	HandlerFor = handlerFor
-)
+var ToolFor = toolFor
+
+// HandlerFor is op's tool handler with no idempotency store.
+func HandlerFor(op api.Operation) mcp.ToolHandler { return handlerFor(op, nil, time.Now) }
 
 // ExtraToken and ExtraClientIP are the TokenInfo.Extra keys.
 const (

@@ -146,41 +146,72 @@ func serve(op Operation, idem IdempotencyStore, now func() time.Time) http.Handl
 			writeRaw(w, status, payload)
 			return
 		}
-		if !validIdempotencyKey(key) {
+		if !ValidIdempotencyKey(key) {
 			writeError(w, Validation(map[string]string{"Idempotency-Key": "must be 1 to 255 printable ASCII characters"}))
 			return
 		}
 		sum := sha256.Sum256([]byte(op.Name + "\n" + r.URL.Path + "\n" + r.URL.RawQuery + "\n" + string(body)))
-		stored, err := idem.Begin(r.Context(), tok.ID, key, op.Name, sum[:], now())
-		switch {
-		case errors.Is(err, ErrIdempotencyMismatch):
-			writeError(w, Conflict("Idempotency-Key was used with a different request"))
-			return
-		case errors.Is(err, ErrIdempotencyInFlight):
-			writeError(w, Conflict("a request with this Idempotency-Key is still in progress"))
-			return
-		case err != nil:
-			writeError(w, AsError(op.Name, err))
-			return
-		case stored != nil:
-			w.Header().Set("Idempotent-Replayed", "true")
-			writeRaw(w, stored.Status, stored.Body)
-			return
-		}
-		status, payload, e := run(r.Context(), op, in)
+		status, payload, replayed, e := RunIdempotent(r.Context(), idem, now(), tok.ID, key, op.Name, sum[:], func(ctx context.Context) (int, []byte, *Error) {
+			return run(ctx, op, in)
+		})
 		if e != nil {
-			// Detached: a cancelled request must still release its key.
-			if err := idem.Abandon(context.WithoutCancel(r.Context()), tok.ID, key); err != nil {
-				slog.Error("api: idempotency abandon failed", "op", op.Name, "err", err)
-			}
 			writeError(w, e)
 			return
 		}
-		if err := idem.Complete(context.WithoutCancel(r.Context()), tok.ID, key, status, payload); err != nil {
-			slog.Error("api: idempotency complete failed", "op", op.Name, "err", err)
+		if replayed {
+			w.Header().Set("Idempotent-Replayed", "true")
 		}
 		writeRaw(w, status, payload)
 	})
+}
+
+// RunIdempotent runs fn under an idempotency key, for either adapter: REST's
+// serve and #0685's MCP tools. The key is claimed per API key (tokenID) for
+// this operation and request hash. A key already used with a different
+// request, or still in flight, is a 409 Conflict. A completed key replays
+// its stored status and body (replayed is true) without running fn.
+// Otherwise fn runs: a success is stored, and an error forgets the key so a
+// retry runs again. Abandon and Complete are detached from ctx, so a
+// cancelled request still releases or records its key. Check the key with
+// ValidIdempotencyKey first; each adapter names the field in its own terms.
+func RunIdempotent(ctx context.Context, idem IdempotencyStore, now time.Time, tokenID int64, key, op string, hash []byte,
+	fn func(ctx context.Context) (int, []byte, *Error)) (status int, body []byte, replayed bool, e *Error) {
+	stored, err := idem.Begin(ctx, tokenID, key, op, hash, now)
+	switch {
+	case errors.Is(err, ErrIdempotencyMismatch):
+		return 0, nil, false, Conflict("Idempotency-Key was used with a different request")
+	case errors.Is(err, ErrIdempotencyInFlight):
+		return 0, nil, false, Conflict("a request with this Idempotency-Key is still in progress")
+	case err != nil:
+		return 0, nil, false, AsError(op, err)
+	case stored != nil:
+		return stored.Status, stored.Body, true, nil
+	}
+	status, body, e = fn(ctx)
+	if e != nil {
+		if err := idem.Abandon(context.WithoutCancel(ctx), tokenID, key); err != nil {
+			slog.Error("api: idempotency abandon failed", "op", op, "err", err)
+		}
+		return 0, nil, false, e
+	}
+	if err := idem.Complete(context.WithoutCancel(ctx), tokenID, key, status, body); err != nil {
+		slog.Error("api: idempotency complete failed", "op", op, "err", err)
+	}
+	return status, body, false, nil
+}
+
+// CallContext is the context op runs on: the one cancellation policy both
+// adapters share (#0685). A read (GET) runs on ctx, so a client that gives
+// up cancels it. A write runs on context.WithoutCancel(ctx): once it starts,
+// a create, send or publish finishes even if the client disconnects. It is
+// never left half done, and an idempotent write records its result for the
+// retry to replay. Context values (the token, the client IP) are kept
+// either way.
+func CallContext(ctx context.Context, op Operation) context.Context {
+	if op.Method == http.MethodGet {
+		return ctx
+	}
+	return context.WithoutCancel(ctx)
 }
 
 // readBody reads a POST, PUT or PATCH body, capped at MaxBodyBytes. A
@@ -214,7 +245,7 @@ func readBody(w http.ResponseWriter, r *http.Request) ([]byte, *Error) {
 // Encoder, so HTML-escaped with a trailing newline): the engagement success
 // body stays byte-identical across the move onto the registry.
 func run(ctx context.Context, op Operation, in any) (int, []byte, *Error) {
-	out, err := op.call(ctx, in)
+	out, err := op.call(CallContext(ctx, op), in)
 	if err != nil {
 		return 0, nil, AsError(op.Name, err)
 	}
@@ -242,8 +273,10 @@ func writeError(w http.ResponseWriter, e *Error) {
 	_ = json.NewEncoder(w).Encode(e.Body())
 }
 
-// validIdempotencyKey: 1 to 255 printable ASCII characters.
-func validIdempotencyKey(k string) bool {
+// ValidIdempotencyKey reports whether k is 1 to 255 printable ASCII
+// characters: the rule for the Idempotency-Key header and for MCP's
+// idempotency_key argument.
+func ValidIdempotencyKey(k string) bool {
 	if len(k) < 1 || len(k) > 255 {
 		return false
 	}

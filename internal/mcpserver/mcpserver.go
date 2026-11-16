@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -34,7 +35,9 @@ const (
 // instructions is sent to every client on initialize.
 const instructions = `Open Circuit SF admin tools. Times are RFC 3339 with an offset; the site's time zone is America/Los_Angeles. ` +
 	`The tools listed are exactly the ones this API key's scopes allow. Call whoami to check the connection and see the key's scopes. ` +
-	`A tool whose description starts with PUBLIC acts publicly right away, and one starting with DESTRUCTIVE cannot be undone: confirm with the user before calling either.`
+	`A tool whose description starts with PUBLIC acts publicly right away, and one starting with DESTRUCTIVE cannot be undone: confirm with the user before calling either. ` +
+	`A tool that changes data runs to completion once called, even if you cancel or disconnect; read-only tools stop when cancelled. ` +
+	`Before retrying a create tool after a timeout, pass the same idempotency_key you used the first time (see its description), or check with the matching list tool, so the retry does not create a duplicate.`
 
 // Deps is what NewHandler needs.
 type Deps struct {
@@ -51,6 +54,8 @@ type Deps struct {
 type handler struct {
 	ops     []api.Operation // MCPExcluded == "", in registry order
 	version string
+	idem    api.IdempotencyStore // the registry's; required when an exposed op takes a key
+	now     func() time.Time
 	logger  *slog.Logger
 	servers sync.Map // sorted scopes joined by "," -> *mcp.Server
 }
@@ -60,7 +65,10 @@ type handler struct {
 // WWW-Authenticate), the per-token rate limit, the SDK's RequireBearerToken
 // (whose verifier reads the token RequireAPIToken resolved, never resolving
 // it twice), and the SDK's stateless, JSON-only Streamable HTTP handler.
-// It panics on a nil registry, resolver or limiter.
+// It panics on a nil registry, resolver or limiter, or, mirroring
+// api.NewHTTPRouter, on an exposed operation that takes an idempotency key
+// when the registry has no IdempotencyStore or its input already has a
+// field named IdempotencyKeyArg.
 func NewHandler(d Deps) http.Handler {
 	_, h := newHandler(d)
 	return h
@@ -78,11 +86,20 @@ func newHandler(d Deps) (*handler, http.Handler) {
 	// connecting and disconnecting each time); keep only its warnings.
 	d.Logger = slog.New(warnAndAbove{d.Logger.Handler()})
 	d.Registry.Freeze()
-	h := &handler{version: d.Registry.Version(), logger: d.Logger}
+	h := &handler{version: d.Registry.Version(), logger: d.Logger, idem: d.Registry.IdempotencyStore(), now: d.Registry.Now}
 	for _, op := range d.Registry.Operations() {
-		if op.MCPExcluded == "" {
-			h.ops = append(h.ops, op)
+		if op.MCPExcluded != "" {
+			continue
 		}
+		if op.Idempotency {
+			if h.idem == nil {
+				panic("mcpserver: " + op.Name + " takes an idempotency key but the registry has no IdempotencyStore")
+			}
+			if _, clash := op.InputSchema().Properties[IdempotencyKeyArg]; clash {
+				panic("mcpserver: " + op.Name + " has an input field named " + IdempotencyKeyArg + ", which its tool reserves")
+			}
+		}
+		h.ops = append(h.ops, op)
 	}
 	stream := mcp.NewStreamableHTTPHandler(h.serverFor, &mcp.StreamableHTTPOptions{
 		Stateless:    true,
@@ -94,7 +111,15 @@ func newHandler(d Deps) (*handler, http.Handler) {
 		// TestMCPAcceptsProxiedHost pins this.
 		DisableLocalhostProtection: true,
 		MaxRequestBodyBytes:        MaxBodyBytes,
-		Logger:                     d.Logger,
+		// Cancellation policy (#0685). The SDK option is all or nothing
+		// (and applies only to clients on the 2026-07-28 protocol or later):
+		// it ties every tool call's context to its HTTP request. The policy
+		// per operation is api.CallContext, applied in handlerFor: a read is
+		// cancelled with the request, and a write detaches, so a started
+		// create, send or publish always finishes. TestCancellationPolicy
+		// pins both halves.
+		PropagateRequestCancellation: true,
+		Logger:                       d.Logger,
 	})
 	bearer := auth.RequireBearerToken(verifyFromContext, &auth.RequireBearerTokenOptions{AllowMissingExpiration: true})
 	return h, middleware.RequireAPIToken(d.Resolver, "")(middleware.APITokenRateLimit(d.Limiter)(bearer(stream)))
@@ -164,7 +189,7 @@ func (h *handler) newServer(scopes []string) *mcp.Server {
 		&mcp.ServerOptions{Instructions: instructions, Logger: h.logger})
 	for _, op := range h.ops {
 		if allowed(op, scopes) {
-			s.AddTool(toolFor(op), handlerFor(op))
+			s.AddTool(toolFor(op), handlerFor(op, h.idem, h.now))
 		}
 	}
 	return s

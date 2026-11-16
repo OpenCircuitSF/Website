@@ -120,3 +120,10 @@ func (r *Registry) Operations() []Operation {
 
 // Version is Config.Version.
 func (r *Registry) Version() string { return r.cfg.Version }
+
+// IdempotencyStore is Config.Idempotency (nil when none is configured), for
+// an adapter other than REST's (#0685's MCP tools).
+func (r *Registry) IdempotencyStore() IdempotencyStore { return r.cfg.Idempotency }
+
+// Now is Config.Now's current time.
+func (r *Registry) Now() time.Time { return r.cfg.Now() }
