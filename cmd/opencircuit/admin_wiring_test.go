@@ -578,6 +578,48 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	if got := v1(http.MethodGet, engURL, "", "wiring-admin-token"); got != http.StatusUnauthorized {
 		t.Errorf("GET /api/v1/engagement with admin session cookie = %d, want 401", got)
 	}
+	// #0679: /mcp on the real mux — Bearer only, stateless JSON. Raw HTTP,
+	// so this package needs no MCP client.
+	mcpURL := baseURL + "/mcp"
+	mcpPost := func(method, bearer, cookie, body string) (int, string, []byte) {
+		t.Helper()
+		var rd io.Reader
+		if body != "" {
+			rd = strings.NewReader(body)
+		}
+		req, err := http.NewRequest(method, mcpURL, rd)
+		if err != nil {
+			t.Fatalf("build mcp request: %v", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		if cookie != "" {
+			req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: cookie})
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("mcp request: %v", err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, resp.Header.Get("Content-Type"), b
+	}
+	const mcpInit = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"wiring","version":"0"}}}`
+	if code, _, b := mcpPost(http.MethodPost, "", "", mcpInit); code != http.StatusUnauthorized || v1ErrCode(b) != api.CodeUnauthorized {
+		t.Errorf("POST /mcp with no key = %d %s, want 401 unauthorized", code, b)
+	}
+	if code, _, _ := mcpPost(http.MethodPost, "", "wiring-admin-token", mcpInit); code != http.StatusUnauthorized {
+		t.Errorf("POST /mcp with admin session cookie = %d, want 401", code)
+	}
+	if code, ct, b := mcpPost(http.MethodPost, bearerSecret, "", mcpInit); code != http.StatusOK || !strings.HasPrefix(ct, "application/json") || !strings.Contains(string(b), `"wiring-version"`) {
+		t.Errorf("POST /mcp initialize with Bearer = %d %q %s, want 200 application/json naming wiring-version", code, ct, b)
+	}
+	if code, _, _ := mcpPost(http.MethodGet, bearerSecret, "", ""); code != http.StatusMethodNotAllowed {
+		t.Errorf("GET /mcp with Bearer = %d, want 405 (stateless)", code)
+	}
 	// #0674: the real mux rate-limits /api/v1 per token. A fresh token gets
 	// at least its full minute's budget, then a 429; the bucket refills
 	// during the loop, so the count is a floor, not exact.
