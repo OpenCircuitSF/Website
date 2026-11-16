@@ -136,7 +136,7 @@ wrong with it.
 | 404 | `not_found` | no such object (`event not found`, `guide post not found`) |
 | 405 | `method_not_allowed` | wrong method for the path |
 | 409 | `conflict` | a state conflict (for example, deleting a guide post that isn't a draft), or an `Idempotency-Key` problem |
-| 429 | `rate_limited` | over the per-key budget; wait `Retry-After` seconds |
+| 429 | `rate_limited` | over the per-key budget, or this IP made too many failed authentication attempts; wait `Retry-After` seconds |
 | 503 | `unavailable` | a dependency failed, such as ShortLinks not making a short link |
 | 500 | `internal` | a server bug; the detail goes to the server log, never the response |
 
@@ -187,7 +187,13 @@ Each key gets **120 requests a minute**, with a burst of 120. REST and MCP share
 the budget. Over it, the response is `429 rate_limited` with a `Retry-After`
 header in seconds. Successful responses carry no rate-limit headers.
 
-<!-- verify after #0682 merges: a per-IP limit on failed authentication; describe it here -->
+Failed authentication is limited per client IP as well (`#0683`). Each IP
+may present **10 unknown, revoked or expired keys a minute**, with a burst of
+10, across REST and MCP together. A missing or malformed `Authorization`
+header is refused without a lookup, so it does not count, and neither does a
+request that authenticates. Over the limit, every request from that IP gets
+`429 rate_limited` with `Retry-After`, even one with a good key, until the
+bucket refills at one request every 6 seconds.
 
 ### Writes finish
 
