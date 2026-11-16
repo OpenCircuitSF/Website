@@ -1875,11 +1875,13 @@ func mountAndServe(
 	// every v1 route (and #0679's /mcp shares it).
 	if t := settingsH.APITokens(); t != nil && t.V1() != nil {
 		apiTokenLimiter := middleware.NewAPITokenRateLimiter()
-		api.Mount(mux, api.NewHTTPRouter(t.V1(), api.RouterDeps{Resolver: t.Resolver(), Limiter: apiTokenLimiter, BaseURL: cfg.BaseURL}))
+		// #0683: one per-IP failed-authentication limiter, shared by both.
+		authFailLimiter := middleware.NewAPIAuthFailureLimiter()
+		api.Mount(mux, api.NewHTTPRouter(t.V1(), api.RouterDeps{Resolver: t.Resolver(), Limiter: apiTokenLimiter, AuthFailLimiter: authFailLimiter, BaseURL: cfg.BaseURL}))
 		// MCP (#0679): Streamable HTTP, stateless JSON, over the same
 		// registry and the same per-key limiter as /api/v1/. Bearer only;
 		// no session cookie is read.
-		mcpserver.Mount(mux, mcpserver.NewHandler(mcpserver.Deps{Registry: t.V1(), Resolver: t.Resolver(), Limiter: apiTokenLimiter, Logger: slog.Default().With("component", "mcp")}))
+		mcpserver.Mount(mux, mcpserver.NewHandler(mcpserver.Deps{Registry: t.V1(), Resolver: t.Resolver(), Limiter: apiTokenLimiter, AuthFailLimiter: authFailLimiter, Logger: slog.Default().With("component", "mcp")}))
 	}
 
 	// Current user profile — behind RequireSession; returns the caller's
