@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -487,5 +488,52 @@ func TestServeUnavailableAndClientIP(t *testing.T) {
 	}
 	if gotIP != "203.0.113.9" {
 		t.Fatalf("client IP %q", gotIP)
+	}
+}
+
+// TestRouterIdempotencyQueryIsPartOfRequest (#0675 review): the request hash
+// covers the query string, so a reused key with a different query is a
+// mismatch rather than a replay of the first response.
+func TestRouterIdempotencyQueryIsPartOfRequest(t *testing.T) {
+	e := newEnv(t, nil)
+	e.do(t, "POST", "/api/v1/items", e.writeKey, `{"title":"x"}`, "Idempotency-Key", "k1")
+	r := e.do(t, "POST", "/api/v1/items?dry=1", e.writeKey, `{"title":"x"}`, "Idempotency-Key", "k1")
+	if r.code != 409 || r.hdr.Get("Idempotent-Replayed") != "" || e.creates != 1 {
+		t.Fatalf("query changed: %d replayed %q creates %d", r.code, r.hdr.Get("Idempotent-Replayed"), e.creates)
+	}
+}
+
+// TestAsErrorTypedNilAndBadStatus (#0675 review): a typed-nil *Error or one
+// without an error status is an operation bug; it becomes the 500, never a
+// nil dereference or a WriteHeader panic.
+func TestAsErrorTypedNilAndBadStatus(t *testing.T) {
+	quietLogs(t)
+	var typedNil *Error
+	for name, err := range map[string]error{
+		"typed nil":   typedNil,
+		"zero status": &Error{Code: CodeConflict, Message: "x"},
+		"2xx status":  &Error{Status: 200, Code: CodeConflict},
+	} {
+		if got := AsError("t", err); got == nil || got.Status != 500 || got.Code != CodeInternal {
+			t.Errorf("%s: AsError = %+v, want the 500", name, got)
+		}
+	}
+	if got := AsError("t", Conflict("x")); got.Status != 409 {
+		t.Errorf("a real *Error: %+v", got)
+	}
+}
+
+// TestDecodeCursorRejectsTrailingData (#0675 review): a cursor is exactly
+// one JSON value this API encoded.
+func TestDecodeCursorRejectsTrailingData(t *testing.T) {
+	var v struct {
+		ID int `json:"id"`
+	}
+	if err := DecodeCursor(EncodeCursor(map[string]int{"id": 4}), &v); err != nil || v.ID != 4 {
+		t.Fatalf("round trip: %v %d", err, v.ID)
+	}
+	forged := base64.RawURLEncoding.EncodeToString([]byte(`{"id":4}{"id":9}`))
+	if err := DecodeCursor(forged, &v); err == nil {
+		t.Fatal("trailing data accepted")
 	}
 }

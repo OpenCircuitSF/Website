@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
 )
 
 // List page sizes.
@@ -68,6 +70,9 @@ func DecodeCursor(s string, v any) error {
 	dec := json.NewDecoder(bytes.NewReader(b))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
+		return bad
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return bad
 	}
 	return nil

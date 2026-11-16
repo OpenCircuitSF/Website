@@ -150,7 +150,7 @@ func serve(op Operation, idem IdempotencyStore, now func() time.Time) http.Handl
 			writeError(w, Validation(map[string]string{"Idempotency-Key": "must be 1 to 255 printable ASCII characters"}))
 			return
 		}
-		sum := sha256.Sum256([]byte(op.Name + "\n" + r.URL.Path + "\n" + string(body)))
+		sum := sha256.Sum256([]byte(op.Name + "\n" + r.URL.Path + "\n" + r.URL.RawQuery + "\n" + string(body)))
 		stored, err := idem.Begin(r.Context(), tok.ID, key, op.Name, sum[:], now())
 		switch {
 		case errors.Is(err, ErrIdempotencyMismatch):
