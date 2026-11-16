@@ -146,6 +146,12 @@ var (
 	// (#0617).
 	ErrDefaultVenueUnset = errors.New("workshops: no default venue is set")
 
+	// ErrEndsBeforeStart is returned by Create/Update when both times are set
+	// and EndsAt is not after StartsAt, an equal pair included (#0677). It is
+	// the admin clone dialog's own rule ("The end must be after the start."),
+	// now enforced for every writer.
+	ErrEndsBeforeStart = errors.New("workshops: ends_at is not after starts_at")
+
 	// errSlugAttemptsExhausted is wrapped into the error Create returns if
 	// maxSlugAttempts consecutive candidates all collide — effectively
 	// unreachable in practice (it would require ~1000 existing workshops
@@ -618,6 +624,12 @@ func (s *Store) GetBySlug(ctx context.Context, slug string) (Workshop, error) {
 	return w, nil
 }
 
+// endsNotAfterStart reports whether both times are set and the end is not
+// after the start (ErrEndsBeforeStart's rule). A missing end is fine.
+func endsNotAfterStart(start, end *time.Time) bool {
+	return start != nil && end != nil && !end.After(*start)
+}
+
 // Create inserts a new workshop in status='draft' plus its workshop_interests
 // rows, generating a unique slug from in.Title (see the package doc comment
 // for the collision-suffix algorithm). Returns ErrTitleRequired if Title is
@@ -629,6 +641,9 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Workshop, error) {
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
 		return Workshop{}, ErrTitleRequired
+	}
+	if endsNotAfterStart(in.StartsAt, in.EndsAt) {
+		return Workshop{}, ErrEndsBeforeStart
 	}
 	base := slugify(title)
 
@@ -773,6 +788,9 @@ func (s *Store) Update(ctx context.Context, id int64, in UpdateInput) (Workshop,
 	case StatusDraft, StatusPublished, StatusCanceled:
 	default:
 		return Workshop{}, ErrUnknownStatus
+	}
+	if endsNotAfterStart(in.StartsAt, in.EndsAt) {
+		return Workshop{}, ErrEndsBeforeStart
 	}
 
 	tx, err := s.pool.Begin(ctx)

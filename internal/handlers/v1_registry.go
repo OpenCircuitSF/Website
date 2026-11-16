@@ -14,6 +14,15 @@ type V1Deps struct {
 	// its transport-free methods, so v1 and /admin/guide-posts share one
 	// code path.
 	GuidePosts *AdminGuidePostsHandler
+	// Workshops is the admin workshops handler; the #0677 event operations
+	// run its transport-free createWorkshop and patchWorkshop, so v1 and
+	// /admin/workshops share one code path.
+	Workshops *AdminWorkshopsHandler
+	// Venues, EventTypes and Interests back the #0677 lookups and the
+	// interest names on an event.
+	Venues     venueLister
+	EventTypes eventTypeLister
+	Interests  interestLister
 }
 
 // BuildV1Registry is the one place the v1 operations are listed (#0675).
@@ -25,5 +34,6 @@ func BuildV1Registry(cfg api.Config, d V1Deps) *api.Registry {
 	reg.Add(api.CoreOperations(cfg.Version)...)
 	reg.Add(EngagementOperation(d.Engagement))
 	reg.Add(guideOperations(d.BaseURL, d.GuidePosts)...)
+	reg.Add(eventOperations(d)...)
 	return reg
 }

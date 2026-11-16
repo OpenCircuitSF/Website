@@ -321,8 +321,11 @@ func servePostgres(cfg *config.Config) error {
 	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, site, campaignsStore, auditLogger, cfg.BaseURL)
 	// #0614: type names appear in server-rendered pages, so a type change
 	// invalidates the same *seo.Site a listing change does.
-	adminEventTypesH := handlers.NewAdminEventTypesHandler(eventtypes.NewStore(pool), auditLogger, site)
-	adminVenuesH := handlers.NewAdminVenuesHandler(venues.NewStore(pool), auditLogger, site)
+	// #0677: one instance each, shared with the /api/v1 lookups below.
+	eventTypesStore := eventtypes.NewStore(pool)
+	venuesStore := venues.NewStore(pool)
+	adminEventTypesH := handlers.NewAdminEventTypesHandler(eventTypesStore, auditLogger, site)
+	adminVenuesH := handlers.NewAdminVenuesHandler(venuesStore, auditLogger, site)
 	publicWorkshopsH := handlers.NewPublicWorkshopsHandler(workshopsStore, interestsStore)
 	// #0274: aggregate list counts for the home page's live CRT screen.
 	// subscribersStore now also backs #0393's per-interest active-subscriber
@@ -451,12 +454,16 @@ func servePostgres(cfg *config.Config) error {
 		slog.Info("api: swept expired idempotency keys", "count", n)
 	}
 	// #0675: the /api/v1 operation registry (whoami, the #0652 probe, and
-	// #0653's engagement check, and #0676's guides and guide posts, which
-	// share adminGuidePostsH). BuildV1Registry is the one list of v1
+	// #0653's engagement check, #0676's guides and guide posts, which
+	// share adminGuidePostsH, and #0677's events and lookups, which share
+	// adminWorkshopsH). BuildV1Registry is the one list of v1
 	// operations; mountAndServe serves it with api.NewHTTPRouter.
 	apiTokensH.SetV1(handlers.BuildV1Registry(
 		api.Config{Version: version, Idempotency: api.NewIdempotencyStore(pool)},
-		handlers.V1Deps{Engagement: outreachStore, BaseURL: cfg.BaseURL, GuidePosts: adminGuidePostsH},
+		handlers.V1Deps{
+			Engagement: outreachStore, BaseURL: cfg.BaseURL, GuidePosts: adminGuidePostsH,
+			Workshops: adminWorkshopsH, Venues: venuesStore, EventTypes: eventTypesStore, Interests: interestsStore,
+		},
 	))
 
 	// Admin subscribers screen (#0032, PRD §5.2/§6.2): list/search/detail,

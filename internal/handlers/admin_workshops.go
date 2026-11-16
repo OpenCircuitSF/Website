@@ -43,6 +43,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/api"
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
@@ -312,32 +313,44 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	actorID := actor.ID
+	created, err := h.createWorkshop(r.Context(), clientIP(r), &actorID, req, nil)
+	if err != nil {
+		writeWorkshopError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, toWorkshopView(created))
+}
+
+// createWorkshop is Create without the transport (#0677): validation, the
+// store write, the cache invalidation and the audit row. POST
+// /admin/workshops and the v1 create_event and duplicate_event operations
+// all run it, so they cannot drift. actorID is nil for an API token, and an
+// empty ip falls back to api.ClientIPFromContext. extraMeta is merged into
+// the workshop.created audit metadata. Errors go through workshopErrInfo.
+func (h *AdminWorkshopsHandler) createWorkshop(ctx context.Context, ip string, actorID *int64, req createWorkshopRequest, extraMeta map[string]any) (workshops.Workshop, error) {
 	title := strings.TrimSpace(req.Title)
 	if title == "" {
-		writeError(w, http.StatusBadRequest, "title is required")
-		return
+		return workshops.Workshop{}, &workshopFieldError{http.StatusBadRequest, "title", "title is required"}
 	}
-	startsAt, ok := parseOptionalTime(w, req.StartsAt, "starts_at")
-	if !ok {
-		return
+	startsAt, err := parseOptionalTime(req.StartsAt, "starts_at")
+	if err != nil {
+		return workshops.Workshop{}, err
 	}
-	endsAt, ok := parseOptionalTime(w, req.EndsAt, "ends_at")
-	if !ok {
-		return
+	endsAt, err := parseOptionalTime(req.EndsAt, "ends_at")
+	if err != nil {
+		return workshops.Workshop{}, err
 	}
 	coverImage := normalizeOptionalCampaignField(req.CoverImage)
 	if coverImage != nil && !isSafeCoverImage(*coverImage) {
-		writeError(w, http.StatusBadRequest, coverImageErrorMessage)
-		return
+		return workshops.Workshop{}, &workshopFieldError{http.StatusBadRequest, "cover_image", coverImageErrorMessage}
 	}
 	signupURL := normalizeOptionalCampaignField(req.SignupURL)
 	if signupURL != nil && !IsSafeLinkHref(*signupURL) {
-		writeError(w, http.StatusBadRequest, signupURLErrorMessage)
-		return
+		return workshops.Workshop{}, &workshopFieldError{http.StatusBadRequest, "signup_url", signupURLErrorMessage}
 	}
 	if req.Capacity != nil && !isValidCapacity(*req.Capacity) {
-		writeError(w, http.StatusBadRequest, capacityErrorMessage)
-		return
+		return workshops.Workshop{}, &workshopFieldError{http.StatusBadRequest, "capacity", capacityErrorMessage}
 	}
 
 	var venueID *int64
@@ -346,7 +359,7 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		venueID = &v
 	}
 
-	created, err := h.store.Create(r.Context(), workshops.CreateInput{
+	created, err := h.store.Create(ctx, workshops.CreateInput{
 		Title:        title,
 		Summary:      normalizeOptionalCampaignField(req.Summary),
 		BodyMD:       normalizeOptionalCampaignField(req.BodyMD),
@@ -360,59 +373,98 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		VenueID:      venueID,
 		DefaultVenue: !req.VenueID.Present,
 	})
-	switch {
-	case err == nil:
-	case errors.Is(err, workshops.ErrTitleRequired):
-		writeError(w, http.StatusBadRequest, "title is required")
-		return
-	case errors.Is(err, workshops.ErrInterestNotFound):
-		writeError(w, http.StatusBadRequest, "one or more interest ids do not exist")
-		return
-	case errors.Is(err, workshops.ErrEventTypeNotFound):
-		writeError(w, http.StatusBadRequest, eventTypeNotFoundMessage)
-		return
-	case errors.Is(err, workshops.ErrEventTypeDisabled):
-		writeError(w, http.StatusBadRequest, eventTypeDisabledMessage)
-		return
-	case errors.Is(err, workshops.ErrDefaultEventTypeUnset):
-		writeError(w, http.StatusConflict, "no default event type is set; choose one on the Event types screen, or pick a type for this listing")
-		return
-	case errors.Is(err, workshops.ErrVenueNotFound):
-		writeError(w, http.StatusBadRequest, venueNotFoundMessage)
-		return
-	case errors.Is(err, workshops.ErrVenueDisabled):
-		writeError(w, http.StatusBadRequest, venueDisabledMessage)
-		return
-	case errors.Is(err, workshops.ErrDefaultVenueUnset):
-		writeError(w, http.StatusConflict, "no default venue is set; choose one on the Venues screen, or pick a venue for this listing")
-		return
-	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+	if errors.Is(err, workshops.ErrTitleRequired) {
+		return workshops.Workshop{}, &workshopFieldError{http.StatusBadRequest, "title", "title is required"}
+	}
+	if err != nil {
+		return workshops.Workshop{}, err
 	}
 
 	h.invalidate()
 
-	if h.auditor != nil {
-		actorID := actor.ID
-		targetID := created.ID
-		h.auditor.Record(r.Context(), audit.Entry{
-			ActorID:    &actorID,
-			Action:     audit.ActionWorkshopCreated,
-			TargetType: audit.TargetWorkshop,
-			TargetID:   &targetID,
-			Metadata: map[string]any{
-				"slug":         created.Slug,
-				"title":        created.Title,
-				"interest_ids": created.InterestIDs,
-				"event_type":   created.EventTypeSlug,
-				"venue_id":     created.VenueID,
-			},
-			IP: clientIP(r),
-		})
+	meta := map[string]any{
+		"slug":         created.Slug,
+		"title":        created.Title,
+		"interest_ids": created.InterestIDs,
+		"event_type":   created.EventTypeSlug,
+		"venue_id":     created.VenueID,
 	}
+	for k, v := range extraMeta {
+		meta[k] = v
+	}
+	h.recordWorkshop(ctx, ip, actorID, created.ID, audit.ActionWorkshopCreated, meta)
+	return created, nil
+}
 
-	writeJSON(w, http.StatusCreated, toWorkshopView(created))
+// recordWorkshop writes one workshop audit row, attributed to the API
+// token when the call came through /api/v1 or MCP (a no-op for a session).
+func (h *AdminWorkshopsHandler) recordWorkshop(ctx context.Context, ip string, actorID *int64, id int64, action string, meta map[string]any) {
+	if h.auditor == nil {
+		return
+	}
+	if ip == "" {
+		ip = api.ClientIPFromContext(ctx)
+	}
+	targetID := id
+	h.auditor.Record(ctx, middleware.AttributeAPIToken(ctx, audit.Entry{
+		ActorID:    actorID,
+		Action:     action,
+		TargetType: audit.TargetWorkshop,
+		TargetID:   &targetID,
+		Metadata:   meta,
+		IP:         ip,
+	}))
+}
+
+// workshopFieldError is a validation failure found before the store is
+// called: the status, the JSON field it is about, and the admin's message.
+type workshopFieldError struct {
+	Status  int
+	Field   string
+	Message string
+}
+
+func (e *workshopFieldError) Error() string { return e.Message }
+
+// workshopErrInfo is the one table of workshop errors (#0677): the status,
+// field and message for err. The admin routes write status and message;
+// the v1 operations turn it into the error envelope (workshopAPIError).
+// Anything unrecognised is a 500.
+func workshopErrInfo(err error) (status int, field, msg string) {
+	var fe *workshopFieldError
+	switch {
+	case errors.As(err, &fe):
+		return fe.Status, fe.Field, fe.Message
+	case errors.Is(err, workshops.ErrNotFound):
+		return http.StatusNotFound, "", "event not found"
+	case errors.Is(err, workshops.ErrTitleRequired):
+		return http.StatusBadRequest, "title", "title is required"
+	case errors.Is(err, workshops.ErrUnknownStatus):
+		return http.StatusBadRequest, "status", "status must be one of draft, published, canceled"
+	case errors.Is(err, workshops.ErrEndsBeforeStart):
+		return http.StatusBadRequest, "ends_at", "ends_at must be after starts_at"
+	case errors.Is(err, workshops.ErrInterestNotFound):
+		return http.StatusBadRequest, "interest_ids", "one or more interest ids do not exist"
+	case errors.Is(err, workshops.ErrEventTypeNotFound):
+		return http.StatusBadRequest, "event_type_id", eventTypeNotFoundMessage
+	case errors.Is(err, workshops.ErrEventTypeDisabled):
+		return http.StatusBadRequest, "event_type_id", eventTypeDisabledMessage
+	case errors.Is(err, workshops.ErrDefaultEventTypeUnset):
+		return http.StatusConflict, "event_type_id", "no default event type is set; choose one on the Event types screen, or pick a type for this listing"
+	case errors.Is(err, workshops.ErrVenueNotFound):
+		return http.StatusBadRequest, "venue_id", venueNotFoundMessage
+	case errors.Is(err, workshops.ErrVenueDisabled):
+		return http.StatusBadRequest, "venue_id", venueDisabledMessage
+	case errors.Is(err, workshops.ErrDefaultVenueUnset):
+		return http.StatusConflict, "venue_id", "no default venue is set; choose one on the Venues screen, or pick a venue for this listing"
+	}
+	return http.StatusInternalServerError, "", "internal server error"
+}
+
+// writeWorkshopError writes err as the admin routes always have.
+func writeWorkshopError(w http.ResponseWriter, err error) {
+	status, _, msg := workshopErrInfo(err)
+	writeError(w, status, msg)
 }
 
 // ── PATCH /admin/workshops/{id} ──────────────────────────────────────────────
@@ -466,29 +518,44 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	current, err := h.store.GetByID(r.Context(), id)
-	switch {
-	case err == nil:
-	case errors.Is(err, workshops.ErrNotFound):
-		writeError(w, http.StatusNotFound, "event not found")
-		return
-	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-
 	var req patchWorkshopRequest
 	if err := decodeJSON(w, r, &req); err != nil {
+		// A missing workshop is a 404 even with a bad body, as before #0677.
+		if _, gerr := h.store.GetByID(r.Context(), id); gerr != nil {
+			writeWorkshopError(w, gerr)
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
+	}
+	actorID := actor.ID
+	_, updated, err := h.patchWorkshop(r.Context(), clientIP(r), &actorID, id, req)
+	if err != nil {
+		writeWorkshopError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toWorkshopView(updated))
+}
+
+// patchWorkshop is Patch without the transport (#0677): load, merge the
+// provided fields (a status transition included) onto the current row,
+// validate, write, invalidate and audit. PATCH /admin/workshops/{id} and
+// the v1 update, publish, unpublish and cancel operations all run it. It
+// returns the row before and after. Errors go through workshopErrInfo.
+func (h *AdminWorkshopsHandler) patchWorkshop(ctx context.Context, ip string, actorID *int64, id int64, req patchWorkshopRequest) (before, after workshops.Workshop, err error) {
+	current, err := h.store.GetByID(ctx, id)
+	if err != nil {
+		return workshops.Workshop{}, workshops.Workshop{}, err
+	}
+	fail := func(field, msg string) (workshops.Workshop, workshops.Workshop, error) {
+		return workshops.Workshop{}, workshops.Workshop{}, &workshopFieldError{http.StatusBadRequest, field, msg}
 	}
 
 	title := current.Title
 	if req.Title != nil {
 		trimmed := strings.TrimSpace(*req.Title)
 		if trimmed == "" {
-			writeError(w, http.StatusBadRequest, "title cannot be empty")
-			return
+			return fail("title", "title cannot be empty")
 		}
 		title = trimmed
 	}
@@ -502,17 +569,17 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 	startsAt := current.StartsAt
 	if req.StartsAt != nil {
-		parsed, ok := parseOptionalTime(w, req.StartsAt, "starts_at")
-		if !ok {
-			return
+		parsed, err := parseOptionalTime(req.StartsAt, "starts_at")
+		if err != nil {
+			return workshops.Workshop{}, workshops.Workshop{}, err
 		}
 		startsAt = parsed
 	}
 	endsAt := current.EndsAt
 	if req.EndsAt != nil {
-		parsed, ok := parseOptionalTime(w, req.EndsAt, "ends_at")
-		if !ok {
-			return
+		parsed, err := parseOptionalTime(req.EndsAt, "ends_at")
+		if err != nil {
+			return workshops.Workshop{}, workshops.Workshop{}, err
 		}
 		endsAt = parsed
 	}
@@ -533,8 +600,7 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	default:
 		v := req.Capacity.Value
 		if !isValidCapacity(v) {
-			writeError(w, http.StatusBadRequest, capacityErrorMessage)
-			return
+			return fail("capacity", capacityErrorMessage)
 		}
 		capacity = &v // key present with a value.
 	}
@@ -542,8 +608,7 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	if req.SignupURL != nil {
 		normalized := normalizeOptionalCampaignField(req.SignupURL)
 		if normalized != nil && !IsSafeLinkHref(*normalized) {
-			writeError(w, http.StatusBadRequest, signupURLErrorMessage)
-			return
+			return fail("signup_url", signupURLErrorMessage)
 		}
 		signupURL = normalized
 	}
@@ -551,8 +616,7 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	if req.CoverImage != nil {
 		normalized := normalizeOptionalCampaignField(req.CoverImage)
 		if normalized != nil && !isSafeCoverImage(*normalized) {
-			writeError(w, http.StatusBadRequest, coverImageErrorMessage)
-			return
+			return fail("cover_image", coverImageErrorMessage)
 		}
 		coverImage = normalized
 	}
@@ -565,7 +629,7 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		interestIDs = *req.InterestIDs
 	}
 
-	updated, err := h.store.Update(r.Context(), id, workshops.UpdateInput{
+	updated, err := h.store.Update(ctx, id, workshops.UpdateInput{
 		Title:       title,
 		Summary:     summary,
 		BodyMD:      bodyMD,
@@ -579,74 +643,38 @@ func (h *AdminWorkshopsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		InterestIDs: interestIDs,
 		EventTypeID: req.EventTypeID,
 	})
-	switch {
-	case err == nil:
-	case errors.Is(err, workshops.ErrNotFound):
-		writeError(w, http.StatusNotFound, "event not found")
-		return
-	case errors.Is(err, workshops.ErrTitleRequired):
-		writeError(w, http.StatusBadRequest, "title cannot be empty")
-		return
-	case errors.Is(err, workshops.ErrUnknownStatus):
-		writeError(w, http.StatusBadRequest, "status must be one of draft, published, canceled")
-		return
-	case errors.Is(err, workshops.ErrInterestNotFound):
-		writeError(w, http.StatusBadRequest, "one or more interest ids do not exist")
-		return
-	case errors.Is(err, workshops.ErrEventTypeNotFound):
-		writeError(w, http.StatusBadRequest, eventTypeNotFoundMessage)
-		return
-	case errors.Is(err, workshops.ErrEventTypeDisabled):
-		writeError(w, http.StatusBadRequest, eventTypeDisabledMessage)
-		return
-	case errors.Is(err, workshops.ErrVenueNotFound):
-		writeError(w, http.StatusBadRequest, venueNotFoundMessage)
-		return
-	case errors.Is(err, workshops.ErrVenueDisabled):
-		writeError(w, http.StatusBadRequest, venueDisabledMessage)
-		return
-	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+	if errors.Is(err, workshops.ErrTitleRequired) {
+		return fail("title", "title cannot be empty")
+	}
+	if err != nil {
+		return workshops.Workshop{}, workshops.Workshop{}, err
 	}
 
 	h.invalidate()
 
-	if h.auditor != nil {
-		actorID := actor.ID
-		targetID := updated.ID
-		action := audit.ActionWorkshopUpdated
-		switch {
-		case current.Status != workshops.StatusPublished && updated.Status == workshops.StatusPublished:
-			action = audit.ActionWorkshopPublished
-		case current.Status == workshops.StatusPublished && updated.Status == workshops.StatusDraft:
-			action = audit.ActionWorkshopUnpublished
-		case current.Status != workshops.StatusCanceled && updated.Status == workshops.StatusCanceled:
-			action = audit.ActionWorkshopCanceled
-		}
-		h.auditor.Record(r.Context(), audit.Entry{
-			ActorID:    &actorID,
-			Action:     action,
-			TargetType: audit.TargetWorkshop,
-			TargetID:   &targetID,
-			Metadata: map[string]any{
-				"slug":             updated.Slug,
-				"old_status":       current.Status,
-				"new_status":       updated.Status,
-				"old_title":        current.Title,
-				"new_title":        updated.Title,
-				"old_interest_ids": current.InterestIDs,
-				"new_interest_ids": updated.InterestIDs,
-				"old_event_type":   current.EventTypeSlug,
-				"new_event_type":   updated.EventTypeSlug,
-				"old_venue_id":     current.VenueID,
-				"new_venue_id":     updated.VenueID,
-			},
-			IP: clientIP(r),
-		})
+	action := audit.ActionWorkshopUpdated
+	switch {
+	case current.Status != workshops.StatusPublished && updated.Status == workshops.StatusPublished:
+		action = audit.ActionWorkshopPublished
+	case current.Status == workshops.StatusPublished && updated.Status == workshops.StatusDraft:
+		action = audit.ActionWorkshopUnpublished
+	case current.Status != workshops.StatusCanceled && updated.Status == workshops.StatusCanceled:
+		action = audit.ActionWorkshopCanceled
 	}
-
-	writeJSON(w, http.StatusOK, toWorkshopView(updated))
+	h.recordWorkshop(ctx, ip, actorID, updated.ID, action, map[string]any{
+		"slug":             updated.Slug,
+		"old_status":       current.Status,
+		"new_status":       updated.Status,
+		"old_title":        current.Title,
+		"new_title":        updated.Title,
+		"old_interest_ids": current.InterestIDs,
+		"new_interest_ids": updated.InterestIDs,
+		"old_event_type":   current.EventTypeSlug,
+		"new_event_type":   updated.EventTypeSlug,
+		"old_venue_id":     current.VenueID,
+		"new_venue_id":     updated.VenueID,
+	})
+	return current, updated, nil
 }
 
 // ── DELETE /admin/workshops/{id} ─────────────────────────────────────────────
@@ -951,17 +979,17 @@ func isValidCapacity(v int) bool {
 }
 
 // parseOptionalTime parses an optional RFC 3339 timestamp field. A nil or
-// empty raw is treated as "unset" (returns nil, true); a non-empty value
-// that fails to parse writes a 400 and returns ok=false, mirroring
-// AdminCampaignsHandler.Send's scheduled_at parsing.
-func parseOptionalTime(w http.ResponseWriter, raw *string, field string) (*time.Time, bool) {
+// empty raw is treated as "unset" (nil, nil); a non-empty value that fails
+// to parse is a 400 *workshopFieldError naming field, mirroring
+// AdminCampaignsHandler.Send's scheduled_at parsing. Transport-free since
+// #0677, so the admin routes and the v1 operations share it.
+func parseOptionalTime(raw *string, field string) (*time.Time, error) {
 	if raw == nil || strings.TrimSpace(*raw) == "" {
-		return nil, true
+		return nil, nil
 	}
 	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(*raw))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, field+" must be RFC 3339")
-		return nil, false
+		return nil, &workshopFieldError{http.StatusBadRequest, field, field + " must be RFC 3339"}
 	}
-	return &parsed, true
+	return &parsed, nil
 }

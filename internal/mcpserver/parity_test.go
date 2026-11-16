@@ -61,9 +61,6 @@ var specTools = map[string]string{
 // adds an operation deletes its name here, or TestMCPToolSetMatchesIssueSpec
 // fails.
 var pendingTools = []string{
-	// #0677
-	"list_events", "get_event", "create_event", "update_event", "publish_event", "unpublish_event",
-	"cancel_event", "duplicate_event", "list_venues", "list_event_types", "list_interests",
 	// #0678
 	"event_coverage", "list_cadence_rules", "set_cadence_rule",
 }
