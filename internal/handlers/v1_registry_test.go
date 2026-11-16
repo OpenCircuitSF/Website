@@ -20,7 +20,8 @@ func TestBuildV1RegistryListsOperations(t *testing.T) {
 		"schedule_guide_post", "unschedule_guide_post", "send_guide_post", "post_guide_again",
 		"delete_guide_post", "guide_posts_overview", "list_channels",
 		"list_events", "get_event", "create_event", "update_event", "publish_event", "unpublish_event",
-		"cancel_event", "duplicate_event", "list_venues", "list_event_types", "list_interests"}
+		"cancel_event", "duplicate_event", "list_venues", "list_event_types", "list_interests",
+		"event_coverage", "list_cadence_rules", "set_cadence_rule"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("operations %v, want %v", names, want)
 	}

@@ -1404,3 +1404,86 @@ export interface GuidePostCreated {
   post: GuidePost;
   link_error: string | null;
 }
+
+// ── Event cadence and coverage (#0678) ──────────────────────────────────────
+
+/** One cadence rule, as GET /admin/event-cadence and v1 return it (cadenceRuleV1). */
+export interface CadenceRule {
+  id: number;
+  name: string;
+  description: string;
+  event_type: { id: number; slug: string; name: string } | null;
+  title_prefix: string | null;
+  frequency: 'weekly' | 'monthly';
+  weekday: string | null;
+  per_month: number | null;
+  venue: { id: number; name: string } | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** The body of POST /admin/event-cadence and PATCH /admin/event-cadence/{id}. */
+export interface CadenceRulePayload {
+  name: string;
+  event_type_id?: number;
+  title_prefix?: string;
+  frequency: 'weekly' | 'monthly';
+  weekday?: string;
+  per_month?: number;
+  venue_id?: number;
+  active: boolean;
+}
+
+/** An event in the coverage report. starts_at is Pacific. */
+export interface CoverageEvent {
+  id: number;
+  slug: string;
+  title: string;
+  status: string;
+  starts_at: string;
+  admin_url: string;
+  public_url: string;
+}
+
+/** One active rule's result in the coverage report. */
+export interface RuleCoverage {
+  rule: CadenceRule;
+  expected: { dates: string[]; count: number };
+  events: CoverageEvent[];
+  canceled: CoverageEvent[];
+  drafts: CoverageEvent[];
+  missing_dates: string[];
+  draft_only_dates: string[];
+  missing: number;
+  state: 'ok' | 'drafts' | 'missing';
+}
+
+/** The coverage report's Luma comparison; the lists are empty unless status is ok. */
+export interface CoverageLuma {
+  status: 'ok' | 'off' | 'unreachable' | 'malformed';
+  read_at: string | null;
+  last_good_at: string | null;
+  not_on_luma: CoverageEvent[];
+  differs: {
+    event: CoverageEvent;
+    luma_url: string | null;
+    luma_title: string | null;
+    diffs: { field: string; label: string; site: string; luma: string }[];
+  }[];
+  only_on_luma: { title: string; starts_at: string; luma_url: string | null }[];
+  note: string | null;
+}
+
+/** GET /admin/event-coverage, the same JSON as v1's event_coverage. */
+export interface Coverage {
+  month: string;
+  label: string;
+  zone: string;
+  from: string;
+  to: string;
+  rules: RuleCoverage[];
+  unmatched_events: CoverageEvent[];
+  luma: CoverageLuma;
+  summary: { rules: number; missing: number; drafts: number; unmatched: number };
+}

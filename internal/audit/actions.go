@@ -332,6 +332,13 @@ const (
 	ActionVenueDefaultChanged = "venue.default_changed"
 	ActionVenueDeleted        = "venue.deleted"
 
+	// Event cadence rules (#0678): what a normal month of events looks like,
+	// for the coverage report. Written by the admin routes and by v1's
+	// set_cadence_rule; deleting is admin-only.
+	ActionEventCadenceCreated = "event_cadence.created"
+	ActionEventCadenceUpdated = "event_cadence.updated"
+	ActionEventCadenceDeleted = "event_cadence.deleted"
+
 	// CRT session commands (#0393, PRD is silent — this predates a PRD
 	// section): the admin-editable rows behind the home hero's live CRT
 	// screen (#0270, #0274). Unlike the interest taxonomy above, there is no
@@ -602,6 +609,9 @@ const (
 	TargetEventType = "event_type"
 	// TargetVenue is the target type for the venue.* actions (#0617).
 	TargetVenue = "venue"
+	// TargetEventCadenceRule is the target type for the event_cadence.*
+	// actions (#0678); TargetID is the event_cadence_rules id.
+	TargetEventCadenceRule = "event_cadence_rule"
 	// TargetEmailCampaign is the target type for the email_campaign.*
 	// actions above (#0041).
 	TargetEmailCampaign = "email_campaign"

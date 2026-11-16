@@ -11,6 +11,9 @@ import type {
   Setting,
   EventType,
   Venue,
+  CadenceRule,
+  CadenceRulePayload,
+  Coverage,
   Interest,
   CrtCommand,
   OutreachConnections,
@@ -472,6 +475,34 @@ export function updateEventType(
 /** DELETE /admin/event-types/{id}: refused (409) when in use or the default. */
 export function deleteEventType(id: number): Promise<{ message: string }> {
   return apiDelete<{ message: string }>(`/admin/event-types/${id}`);
+}
+
+// ── Admin: event cadence and coverage (#0678) ────────────────────────────────
+
+/** GET /admin/event-cadence: every rule, active or not, by id. */
+export function listCadenceRules(): Promise<{ rules: CadenceRule[] }> {
+  return apiGet<{ rules: CadenceRule[] }>('/admin/event-cadence');
+}
+
+/** POST /admin/event-cadence. */
+export function createCadenceRule(rule: CadenceRulePayload): Promise<CadenceRule> {
+  return apiPost<CadenceRule>('/admin/event-cadence', rule);
+}
+
+/** PATCH /admin/event-cadence/{id}: replaces the whole rule. */
+export function updateCadenceRule(id: number, rule: CadenceRulePayload): Promise<CadenceRule> {
+  return apiPatch<CadenceRule>(`/admin/event-cadence/${id}`, rule);
+}
+
+/** DELETE /admin/event-cadence/{id}. */
+export function deleteCadenceRule(id: number): Promise<{ message: string }> {
+  return apiDelete<{ message: string }>(`/admin/event-cadence/${id}`);
+}
+
+/** GET /admin/event-coverage: a month's coverage report (default next month, Pacific). */
+export function getEventCoverage(month?: string): Promise<Coverage> {
+  const q = month ? `?month=${encodeURIComponent(month)}` : '';
+  return apiGet<Coverage>(`/admin/event-coverage${q}`);
 }
 
 /** GET /admin/venues: every venue, with a per-venue listing count (#0617). */

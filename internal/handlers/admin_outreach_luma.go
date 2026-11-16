@@ -55,6 +55,17 @@ func strOrNil(s string) *string {
 	return &s
 }
 
+// lumaWorkshopFor is the part of a dated event luma.Compare reads. The
+// outreach Luma route and the #0678 coverage report both build their lists
+// with it, so the two compare the same fields.
+func lumaWorkshopFor(wk workshops.Workshop) luma.Workshop {
+	lw := luma.Workshop{ID: wk.ID, Title: wk.Title, Start: *wk.StartsAt, End: wk.EndsAt}
+	if wk.LocationAddress != nil {
+		lw.Address = *wk.LocationAddress
+	}
+	return lw
+}
+
 // Luma handles GET /admin/outreach-luma (#0648): each upcoming published
 // event's state against the Luma calendar's public feed (on Luma, differs,
 // not on Luma), the fields that differ, and the Luma events that match no
@@ -86,11 +97,7 @@ func (h *AdminOutreachHandler) Luma(w http.ResponseWriter, r *http.Request) {
 		if wk.Status != workshops.StatusPublished || wk.StartsAt == nil {
 			continue
 		}
-		lw := luma.Workshop{ID: wk.ID, Title: wk.Title, Start: *wk.StartsAt, End: wk.EndsAt}
-		if wk.LocationAddress != nil {
-			lw.Address = *wk.LocationAddress
-		}
-		list = append(list, lw)
+		list = append(list, lumaWorkshopFor(wk))
 	}
 	results, left := luma.Compare(list, snap.Events, now)
 	for _, res := range results {

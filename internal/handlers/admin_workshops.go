@@ -116,6 +116,10 @@ type AdminWorkshopsHandler struct {
 	// production call site passes cfg.BaseURL) produces a relative
 	// "/events/{slug}" link rather than panicking.
 	baseURL string
+	// cadence is the #0678 event coverage service, whose admin routes
+	// mountAndServe registers alongside /admin/workshops (SetCadence). nil
+	// omits them.
+	cadence *EventCadenceHandler
 }
 
 // NewAdminWorkshopsHandler constructs an AdminWorkshopsHandler. A nil
