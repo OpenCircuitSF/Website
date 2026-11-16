@@ -416,7 +416,7 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
       {
         title: 'Use the C3 DevKitM-1 entry',
-        body: 'There is no SuperMini entry in PlatformIO’s board list. board = esp32-c3-devkitm-1 is the same chip and works. Picking esp32dev, the original ESP32, builds fine and then fails to upload with “This chip is ESP32-C3 not ESP32”.',
+        body: 'PlatformIO’s standard espressif32 platform has no SuperMini entry. board = esp32-c3-devkitm-1 is the same chip and works. Picking esp32dev, the original ESP32, builds fine and then fails to upload with “This chip is ESP32-C3 not ESP32”.',
       },
       {
         title: 'Build, Upload, Monitor',

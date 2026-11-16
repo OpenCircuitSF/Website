@@ -116,6 +116,12 @@ export function upload(s: ButtonsState): UploadOutcome {
     const message = 'Upload done. Press RST to run the new code.';
     return { state: withLog({ ...s, pendingNew: true }, message), ok: true, message };
   }
+  if (s.boot) {
+    // The tool resets the board after writing, and BOOT is still down, so
+    // GPIO9 reads low and the chip comes back up in download mode.
+    const message = 'Upload done, but BOOT is still held, so the board restarted into download mode. Let go of BOOT and press RST.';
+    return { state: withLog({ ...s, mode: 'download', pendingNew: true }, message), ok: true, message };
+  }
   const message = 'Upload done. The tool reset the board for you and the new code is running.';
   return { state: withLog({ ...s, sketch: 'ok', pendingNew: false }, message), ok: true, message };
 }
@@ -214,7 +220,7 @@ export const TROUBLE_FIXES: Record<string, TroubleFix> = {
   'fix-monitor': {
     id: 'fix-monitor',
     title: 'Close the monitor first',
-    body: 'Close every serial monitor, then upload again. The error usually says the port is busy, or “Could not exclusively lock port”. You can reopen the monitor once the upload finishes.',
+    body: 'Close every serial monitor, then upload again. The error usually says the port is busy: “Could not exclusively lock port” on a Mac or Linux, “Access is denied” on Windows. You can reopen the monitor once the upload finishes.',
   },
   'fix-read': {
     id: 'fix-read',
@@ -327,7 +333,7 @@ export interface IniLine {
 export const INI_EXPLAIN: Record<IniKey, string> = {
   env: 'Each [env:name] section is one way to build. The name is yours; it shows up in the PlatformIO toolbar. One is enough to start.',
   platform: 'The chip family. espressif32 covers every ESP32, the C3 included. PlatformIO downloads the compiler for it the first time.',
-  board: 'Which board, so PlatformIO knows the chip, flash size and pins. There is no SuperMini entry; esp32-c3-devkitm-1 is the same chip and works.',
+  board: 'Which board, so PlatformIO knows the chip, flash size and pins. PlatformIO’s standard espressif32 platform has no SuperMini entry; esp32-c3-devkitm-1 is the same chip and works.',
   framework: 'The style of code. arduino gives you setup(), loop(), Serial and pinMode().',
   monitor_speed: 'The serial monitor’s baud rate. Over the C3’s own USB port the number is ignored, but keep it matching Serial.begin() in case you ever use pins 20 and 21.',
   build_flags: 'Makes Serial print over the USB-C port. Without these two lines, Serial goes to pins 20 and 21 instead.',
@@ -363,7 +369,7 @@ export function checkIni(c: IniConfig): IniProblem[] {
   } else if (c.board === 'uno') {
     out.push({ key: 'board', severity: 'error', text: 'The build stops with “Unknown board ID”: uno isn’t an espressif32 board.' });
   }
-  if (c.board === 'esp32dev') {
+  if (c.platform === 'espressif32' && c.board === 'esp32dev') {
     out.push({ key: 'board', severity: 'error', text: 'esp32dev is the original ESP32. It builds, then the upload fails: “This chip is ESP32-C3 not ESP32”.' });
   }
   if (c.framework !== 'arduino') {

@@ -64,6 +64,15 @@ describe('BOOT and RESET', () => {
     expect(upload(initialButtons('ok')).ok).toBe(true);
   });
 
+  it('uploading with BOOT still held comes back up in download mode', () => {
+    const r = upload(toggleBoot(initialButtons('ok')));
+    expect(r.ok).toBe(true);
+    expect(r.state.mode).toBe('download');
+    const run = toggleReset(toggleReset(toggleBoot(r.state)));
+    expect(run.mode).toBe('running');
+    expect(run.sketch).toBe('ok');
+  });
+
   it('keeps the log short', () => {
     let s = initialButtons();
     for (let i = 0; i < 20; i++) s = toggleBoot(s);
@@ -142,6 +151,8 @@ describe('platformio.ini', () => {
     expect(checkIni({ ...DEFAULT_INI, framework: 'espidf' })[0].key).toBe('framework');
     expect(checkIni({ ...DEFAULT_INI, platform: 'atmelavr' })[0].key).toBe('platform');
     expect(checkIni({ ...DEFAULT_INI, env: 'my board' })[0].key).toBe('env');
+    // Under atmelavr the esp32dev upload message would be wrong; only the platform is flagged.
+    expect(checkIni({ ...DEFAULT_INI, platform: 'atmelavr', board: 'esp32dev' }).map((p) => p.key)).toEqual(['platform']);
   });
   it('missing USB flags and an odd monitor speed are warnings', () => {
     const p = checkIni({ ...DEFAULT_INI, usbFlags: false, monitorSpeed: '9600' });
