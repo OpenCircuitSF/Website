@@ -415,6 +415,54 @@
       "set": "esp32"
     },
     {
+      "slug": "resistor-color-codes",
+      "title": "Reading resistor color bands",
+      "hook": "Those colored stripes are a number. Tap the bands to change them, or type a value and see which colors it takes.",
+      "minutes": 3,
+      "tags": [
+        "components",
+        "resistors"
+      ],
+      "post": "Those colored stripes on a resistor are a number. Tap the bands and watch the value change, or type 4.7k and see its colors.",
+      "set": "components"
+    },
+    {
+      "slug": "ohms-law-resistors",
+      "title": "Ohm’s law, series and parallel",
+      "hook": "Volts, ohms and milliamps on one small circuit. Drag the sliders and see the current, and which resistor gets too hot.",
+      "minutes": 4,
+      "tags": [
+        "components",
+        "resistors"
+      ],
+      "post": "Ohm’s law on one small circuit: drag the voltage and resistance, switch between series and parallel, and see which resistor gets too hot.",
+      "set": "components"
+    },
+    {
+      "slug": "led-basics",
+      "title": "LED basics: which way round, and why it needs a resistor",
+      "hook": "The long leg goes to plus. Flip the LED, pull out its resistor and change its color to see what lights and what burns.",
+      "minutes": 3,
+      "tags": [
+        "components",
+        "LEDs"
+      ],
+      "post": "Which way round does an LED go, and why does it need a resistor? Flip it, pull the resistor out and change the color to see.",
+      "set": "components"
+    },
+    {
+      "slug": "led-resistor-calculator",
+      "title": "Picking the resistor for an LED",
+      "hook": "Supply voltage, LED color and current in; the resistor out, rounded to a value you can actually buy.",
+      "minutes": 3,
+      "tags": [
+        "components",
+        "LEDs"
+      ],
+      "post": "Which resistor for an LED? Pick 3.3 V or 5 V, the LED color and the current, and get a resistor you can actually buy, with its color bands.",
+      "set": "components"
+    },
+    {
       "slug": "capacitor-types",
       "title": "Capacitor types: ceramic, electrolytic and tantalum",
       "hook": "What 104 means, which leg is negative, and why the voltage on the can matters.",

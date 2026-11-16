@@ -46,6 +46,11 @@ import BjtSwitchDemo from './BjtSwitchDemo.svelte';
 import MosfetSwitchDemo from './MosfetSwitchDemo.svelte';
 import FlybackDemo from './FlybackDemo.svelte';
 import SwitchPickerDemo from './SwitchPickerDemo.svelte';
+// Components: resistors and LEDs (#0690)
+import ResistorBandsDemo from './ResistorBandsDemo.svelte';
+import OhmsLawDemo from './OhmsLawDemo.svelte';
+import LedBasicsDemo from './LedBasicsDemo.svelte';
+import LedResistorDemo from './LedResistorDemo.svelte';
 
 afterEach(cleanup);
 
@@ -490,5 +495,53 @@ describe('guide demos', () => {
     await fireEvent.input(r.getByRole('slider'), { target: { value: '4' } });
     expect(r.getByRole('heading', { name: 'Use a logic-level MOSFET' })).toBeTruthy();
     expect(r.getByRole('region', { name: 'NPN transistor: not suitable' })).toBeTruthy();
+  });
+
+  // Components: resistors and LEDs (#0690)
+  it('resistor bands: tapping a band changes the value, and typing a value sets the bands', async () => {
+    const r = render(ResistorBandsDemo);
+    expect(r.container.textContent).toContain('220 Ω ± 5%');
+    await fireEvent.click(r.getByRole('button', { name: /Band 3, multiplier: brown/ }));
+    expect(r.container.textContent).toContain('2.2 kΩ ± 5%');
+    await fireEvent.input(r.getByRole('textbox', { name: /type a value/i }), { target: { value: '4k7' } });
+    expect(r.getByRole('button', { name: /Band 1, digit 1: yellow/ })).toBeTruthy();
+    expect(r.getByRole('button', { name: /Band 2, digit 2: violet/ })).toBeTruthy();
+    expect(r.container.textContent).toContain('4.7 kΩ ± 5%');
+    await fireEvent.click(r.getByRole('radio', { name: '5 bands' }));
+    expect(r.getAllByRole('button', { name: /^Band \d/ })).toHaveLength(5);
+    expect(r.container.textContent).toContain('4.7 kΩ ± 1%');
+  });
+
+  it('ohms law: 12 V across 10 Ω is far past 1/4 W', async () => {
+    const r = render(OhmsLawDemo);
+    expect(r.container.textContent).toContain('under 1/4 W');
+    await fireEvent.input(r.getByRole('slider', { name: /Voltage/ }), { target: { value: '12' } });
+    await fireEvent.input(r.getByRole('slider', { name: /R1/ }), { target: { value: '0' } });
+    expect(r.container.textContent).toContain('R1 is turning 14.4 W into heat');
+    await fireEvent.click(r.getByRole('radio', { name: 'Series' }));
+    expect(r.getByRole('slider', { name: /R2/ })).toBeTruthy();
+    expect(r.getByRole('rowheader', { name: 'Total' })).toBeTruthy();
+  });
+
+  it('led basics: backwards stays dark, no resistor is too much current', async () => {
+    const r = render(LedBasicsDemo);
+    expect(r.getByRole('heading', { name: 'Lit: 5.91 mA' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('button', { name: 'Flip the LED' }));
+    expect(r.getByRole('heading', { name: 'Dark: the LED is backwards' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('button', { name: 'Flip the LED' }));
+    await fireEvent.click(r.getByRole('checkbox', { name: /resistor/ }));
+    expect(r.getByRole('heading', { name: 'No resistor: too much current' })).toBeTruthy();
+  });
+
+  it('led resistor: red at 10 mA on a pin needs 150 Ω; 30 mA warns about the pin', async () => {
+    const r = render(LedResistorDemo);
+    expect(r.container.textContent).toContain('= 130 Ω');
+    expect(r.container.querySelector('dd strong')?.textContent).toBe('150 Ω');
+    await fireEvent.input(r.getByRole('slider', { name: /Target current/ }), { target: { value: '30' } });
+    expect(r.container.textContent).toContain('from an ESP32 pin');
+    await fireEvent.click(r.getByRole('radio', { name: /Blue/ }));
+    await fireEvent.click(r.getByRole('radio', { name: 'Custom' }));
+    await fireEvent.input(r.getByRole('spinbutton', { name: /Supply voltage/ }), { target: { value: '3' } });
+    expect(r.getByRole('heading', { name: 'Can’t light it' })).toBeTruthy();
   });
 });

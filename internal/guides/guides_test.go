@@ -11,10 +11,10 @@ func TestCatalogLoadsEmbeddedGuides(t *testing.T) {
 		t.Fatalf("workshop guides = %+v", ws)
 	}
 	ts := Topics()
-	if len(ts) != 38 {
-		t.Fatalf("got %d topics, want 38", len(ts))
+	if len(ts) != 42 {
+		t.Fatalf("got %d topics, want 42", len(ts))
 	}
-	if len(All()) != 39 || All()[0].Kind != Workshop {
+	if len(All()) != 43 || All()[0].Kind != Workshop {
 		t.Fatalf("All() = %+v", All())
 	}
 	b, ok := Lookup("baud-rate")
