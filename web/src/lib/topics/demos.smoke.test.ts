@@ -41,6 +41,11 @@ import C3PowerDemo from './C3PowerDemo.svelte';
 import CapCodeDemo from './CapCodeDemo.svelte';
 import RcChargeDemo from './RcChargeDemo.svelte';
 import DecouplingDemo from './DecouplingDemo.svelte';
+// Components: transistors and MOSFETs (#0692)
+import BjtSwitchDemo from './BjtSwitchDemo.svelte';
+import MosfetSwitchDemo from './MosfetSwitchDemo.svelte';
+import FlybackDemo from './FlybackDemo.svelte';
+import SwitchPickerDemo from './SwitchPickerDemo.svelte';
 
 afterEach(cleanup);
 
@@ -438,5 +443,52 @@ describe('guide demos', () => {
     expect(r.container.textContent).toContain('Move it closer to the power pin');
     await fireEvent.input(r.getByRole('slider', { name: /Distance/ }), { target: { value: '40' } });
     expect(r.getByRole('heading', { name: 'Dips below 3.0 V' })).toBeTruthy();
+  });
+
+  // Components: transistors and MOSFETs (#0692)
+  it('bjt switch: 10 kΩ base resistor leaves it not saturated; pin low turns it off', async () => {
+    const r = render(BjtSwitchDemo);
+    expect(r.getByRole('heading', { name: 'Saturated: fully on' })).toBeTruthy();
+    const [rb] = r.getAllByRole('slider');
+    await fireEvent.input(rb, { target: { value: '12' } });
+    expect(r.getByRole('heading', { name: 'Not saturated' })).toBeTruthy();
+    expect(r.getByRole('img', { name: /10 kΩ base resistor/ })).toBeTruthy();
+    await fireEvent.click(r.getByRole('button', { name: /GPIO 4 is HIGH/ }));
+    expect(r.getByRole('heading', { name: 'Off' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: '2N3904' }));
+    expect(r.getByRole('img', { name: /2N3904 in TO-92.*E, B, C/ })).toBeTruthy();
+  });
+
+  it('mosfet switch: IRFZ44N barely turns on at 3.3 V, fully at 10 V; no pull-down floats', async () => {
+    const r = render(MosfetSwitchDemo);
+    expect(r.getByRole('heading', { name: 'Fully on' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: /IRFZ44N/ }));
+    expect(r.getByRole('heading', { name: 'Barely on' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: '10 V (gate driver)' }));
+    expect(r.getByRole('heading', { name: 'Fully on' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: /Board booting/ }));
+    expect(r.getByRole('heading', { name: 'Off' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('checkbox', { name: /pull-down/ }));
+    expect(r.getByRole('heading', { name: 'Floating: it could be half on' })).toBeTruthy();
+  });
+
+  it('flyback: no diode breaks the transistor down; band to + clamps; reversed shorts when on', async () => {
+    const r = render(FlybackDemo);
+    await fireEvent.click(r.getByRole('button', { name: 'Switch off' }));
+    expect(r.getByRole('heading', { name: 'Spike: the transistor breaks down' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: 'Diode, band (cathode) to +' }));
+    expect(r.getByRole('heading', { name: 'Clamped at 5.7 V' })).toBeTruthy();
+    expect(r.getByRole('img', { name: /band to the positive supply/ })).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: 'Diode reversed' }));
+    await fireEvent.click(r.getByRole('button', { name: 'Switch on' }));
+    expect(r.getByRole('heading', { name: 'Short circuit!' })).toBeTruthy();
+  });
+
+  it('bjt vs mosfet: 50 mA is either, 500 mA wants a MOSFET', async () => {
+    const r = render(SwitchPickerDemo);
+    expect(r.getByRole('heading', { name: 'Either works' })).toBeTruthy();
+    await fireEvent.input(r.getByRole('slider'), { target: { value: '4' } });
+    expect(r.getByRole('heading', { name: 'Use a logic-level MOSFET' })).toBeTruthy();
+    expect(r.getByRole('region', { name: 'NPN transistor: not suitable' })).toBeTruthy();
   });
 });

@@ -450,6 +450,55 @@
       ],
       "post": "Why does every chip have a 100 nF capacitor next to it? Add one, slide it away from the power pin, and watch the supply rail dip on a scope trace.",
       "set": "components"
+    },
+    {
+      "slug": "bjt-transistor-switch",
+      "title": "Switching a bigger load with a transistor",
+      "hook": "An ESP32 pin gives a few milliamps at 3.3 V. An NPN transistor like the 2N2222 lets that pin switch a 5 V load drawing far more. Pick the base resistor and see when it fully turns on.",
+      "minutes": 4,
+      "tags": [
+        "components",
+        "transistors"
+      ],
+      "post": "A GPIO pin can’t power a motor or a strip of lights, but it can switch a transistor that does. Pick a base resistor and watch base current, gain and Vce change live.",
+      "set": "components"
+    },
+    {
+      "slug": "mosfet-switch",
+      "title": "Switching with a MOSFET from a 3.3 V pin",
+      "hook": "A logic-level MOSFET switches amps with almost no current from the pin. Pick a part and see why an IRFZ44N barely turns on at 3.3 V while an IRLZ44N or AO3400 runs cool.",
+      "minutes": 4,
+      "tags": [
+        "components",
+        "MOSFETs"
+      ],
+      "post": "Why does an IRFZ44N barely switch from an ESP32 when an IRLZ44N works fine? Pick a MOSFET, set the gate voltage, and watch Rds(on) and the heat change.",
+      "set": "components"
+    },
+    {
+      "slug": "flyback-diodes",
+      "title": "Flyback diodes for motors and relays",
+      "hook": "Switch off a relay, motor or solenoid and its coil kicks back with a voltage spike. One diode across the coil, band to the positive supply, soaks it up.",
+      "minutes": 3,
+      "tags": [
+        "components",
+        "motors"
+      ],
+      "post": "Switch off a relay coil and the voltage at your transistor can jump far past its rating. See the spike with no diode, the right diode, and one put in backwards.",
+      "set": "components"
+    },
+    {
+      "slug": "bjt-vs-mosfet",
+      "title": "Transistor or MOSFET: which to use",
+      "hook": "For a small LED or buzzer, a transistor is fine. For amps, a logic-level MOSFET. Set your load and supply and see which part fits, and why.",
+      "minutes": 3,
+      "tags": [
+        "components",
+        "transistors",
+        "MOSFETs"
+      ],
+      "post": "Transistor or MOSFET? Set your load current and supply voltage and see which one to use with an ESP32, and how much heat each would make.",
+      "set": "components"
     }
   ]
 }
