@@ -22,6 +22,12 @@ import TinningDemo from './TinningDemo.svelte';
 import JointQuiz from './JointQuiz.svelte';
 import TipCareDemo from './TipCareDemo.svelte';
 import HeaderPinsDemo from './HeaderPinsDemo.svelte';
+// ESP32-C3: pins and power (#0671)
+import C3BootPinsDemo from './C3BootPinsDemo.svelte';
+import C3PinChooserDemo from './C3PinChooserDemo.svelte';
+import C3AnalogDemo from './C3AnalogDemo.svelte';
+import C3PwmDemo from './C3PwmDemo.svelte';
+import C3PowerDemo from './C3PowerDemo.svelte';
 
 /** The page body of one topic guide; its metadata comes from the catalog. */
 export interface TopicBody {
@@ -341,6 +347,102 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
     ],
     takeaway: 'Breadboard as a jig, two opposite corners, check it’s flat, then the rest.',
+  },
+  // ESP32-C3: pins and power (#0671)
+  'esp32-c3-boot-pins': {
+    demo: C3BootPinsDemo,
+    tryIt: 'Pick a pin, hang a part on it, and press RESET. Try a button on GPIO 9, held and not held.',
+    ideas: [
+      {
+        title: 'Three pins are read at reset',
+        body: 'At the moment you power up or press RESET, the chip checks GPIO 2, 8 and 9 to decide how to start. These are the strapping pins. A moment later they become normal pins again.',
+      },
+      {
+        title: 'GPIO 9 low means "wait for new code"',
+        body: 'GPIO 9 has an internal pull-up and the BOOT button, which connects it to ground. Held low at reset, the chip skips your program and waits in download mode. Download mode also needs GPIO 8 high; on the SuperMini the onboard LED on GPIO 8 keeps it there. Espressif also recommends keeping GPIO 2 high or floating at reset.',
+      },
+      {
+        title: 'Keep low-pulling parts off them',
+        body: 'Don’t put a button to ground, a pull-down resistor, an LED to ground or a sensor that idles low on 2, 8 or 9. Once your program is running they’re fine, but you can’t choose when the board resets. Use another pin, like 4, 6 or 7.',
+      },
+    ],
+    takeaway: 'Board won’t start your code? Check what’s wired to GPIO 2, 8 and 9.',
+  },
+  'esp32-c3-reserved-pins': {
+    demo: C3PinChooserDemo,
+    tryIt: 'Pick a job. Green pins are good, amber work with care, red to avoid. Tap a pin to see why.',
+    ideas: [
+      {
+        title: 'Some pins are already busy',
+        body: 'GPIO 18 and 19 are the USB D− and D+ wires: use them and uploads and the serial monitor stop working. GPIO 11 to 17 talk to the flash chip that holds your program. The SuperMini doesn’t even bring those out to its pins.',
+      },
+      {
+        title: 'Some are busy only sometimes',
+        body: 'GPIO 20 and 21 are the chip’s hardware serial port (UART0); the chip prints boot messages on 21 at every reset. GPIO 2, 8 and 9 are read at boot. GPIO 4 to 7 can be used for JTAG debugging, but only if you set that up, so they’re normal pins otherwise.',
+      },
+      {
+        title: 'Analog only on 0 to 4',
+        body: 'analogRead() works on GPIO 0 to 4 (ADC1). GPIO 5 is on ADC2, which Espressif lists as unreliable on this chip and which clashes with WiFi. Plain digital jobs like buttons and LEDs can use any free pin.',
+      },
+    ],
+    takeaway: 'First choices: 0, 1, 3, 4 for analog, 4 to 7 and 10 for everything else.',
+  },
+  'esp32-c3-analog-input': {
+    demo: C3AnalogDemo,
+    tryIt: 'Slide the voltage and compare the three readings. Press "Read again" to see the noise. Then go above 2.5 V.',
+    ideas: [
+      {
+        title: '0 to 4095, but only up to about 2.5 V',
+        body: 'The ADC turns a voltage into a 12-bit number, 0 to 4095. At the Arduino default setting it is only calibrated from 0 to about 2.5 V. Above that the readings flatten out. Never put more than 3.3 V on any pin.',
+      },
+      {
+        title: 'Noisy, and bent at the ends',
+        body: 'Each reading jumps around a little, and readings near 0 V and near the top aren’t in a straight line with the voltage. Take several readings and average them. analogReadMilliVolts() uses the chip’s factory calibration and gives you millivolts directly.',
+      },
+      {
+        title: 'Bigger voltages need a divider',
+        body: 'To measure a 4.2 V battery, put two resistors in series from the battery to ground and read the point between them. Two equal resistors halve it to 2.1 V. Multiply the reading by 2 in your code. Use large values like 100 kΩ so the divider barely drains the battery.',
+      },
+    ],
+    takeaway: 'Use pins 0 to 4, stay under 2.5 V, average a few analogReadMilliVolts() readings.',
+  },
+  'esp32-c3-pwm': {
+    demo: C3PwmDemo,
+    tryIt: 'Drag the duty cycle to 50% and see how bright it looks. Turn on gamma correction. Then try other frequencies.',
+    ideas: [
+      {
+        title: 'On and off, very fast',
+        body: 'A pin can only be on (3.3 V) or off. PWM switches it thousands of times a second. The share of time it is on is the duty cycle. At 25% the LED is on a quarter of the time, and your eye blends that into a dimmer light.',
+      },
+      {
+        title: 'Any output pin, two ways to code it',
+        body: 'Any output GPIO can do PWM. analogWrite(pin, 0–255) is the simple way. For control, arduino-esp32 3.x uses ledcAttach(pin, frequency, bits) and then ledcWrite(pin, duty). Older 2.x code used ledcSetup and ledcAttachPin instead. The C3 has six PWM channels.',
+      },
+      {
+        title: 'Frequency costs resolution',
+        body: 'The timer counts on an 80 MHz clock, so faster PWM leaves fewer steps per cycle: up to 14 bits at 1 kHz, but 6 bits at 1 MHz. For LEDs, 1 to 5 kHz at 8 bits is plenty. Our eyes see 50% duty as much more than half as bright, so a gamma curve makes fades look even.',
+      },
+    ],
+    takeaway: 'Duty cycle sets brightness. ledcAttach(pin, 5000, 8), then ledcWrite(pin, 0–255).',
+  },
+  'esp32-c3-power': {
+    demo: C3PowerDemo,
+    tryIt: 'Pick a power source and where it connects. Then tick "USB cable also plugged in".',
+    ideas: [
+      {
+        title: '5V pin: anything about 4.5 to 5.5 V',
+        body: 'The 5V pin feeds the board’s 3.3 V regulator, just like USB does. A 5 V supply, a USB power bank or 3 × AA batteries all work there. A single LiPo cell (3.7–4.2 V) works too, until it runs low. Never 9 V.',
+      },
+      {
+        title: '3.3 pin: exactly 3.3 V or nothing',
+        body: 'Power fed into the 3.3 pin skips the regulator and goes straight to the chip, which can take no more than 3.6 V. Only a regulated 3.3 V supply belongs there. Never 5 V, and never a LiPo straight onto it.',
+      },
+      {
+        title: 'One supply at a time, grounds together',
+        body: 'Many SuperMinis have no diode between the USB port and the 5V pin, so an external supply and a USB cable at once can push current back into your computer. Check your board; the safest habit is never both. Connect every ground together, and budget the current (see How many LEDs can USB power?).',
+      },
+    ],
+    takeaway: '5 V goes to the 5V pin, 3.3 V to the 3.3 pin, and only one supply at a time.',
   },
 };
 

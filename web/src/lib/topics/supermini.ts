@@ -29,6 +29,7 @@ export const SUPERMINI_PINS: SuperMiniPin[] = [
     facts: [
       'Straight from the USB-C port. Use it to power 5V parts like an LED strip.',
       'Limited by what USB can supply: plan on about 500 mA total.',
+      'It also works the other way: feed 5 V in here to run without USB. It goes through the 3.3 V regulator.',
       'Never connect this to a GPIO pin.',
     ],
     tags: ['power out'],
@@ -48,6 +49,7 @@ export const SUPERMINI_PINS: SuperMiniPin[] = [
     facts: [
       'The chip runs at 3.3 V. Use this for sensors and modules that want 3.3 V.',
       'The small regulator has limited current to spare. It is not for LED strips.',
+      'You can feed exactly 3.3 V in here instead, which skips the regulator. Never feed 5 V or a raw LiPo battery here.',
     ],
     tags: ['power out'],
   },
@@ -70,7 +72,7 @@ export const SUPERMINI_PINS: SuperMiniPin[] = [
     id: 'gpio2', label: '2', kind: 'gpio', row: 5, col: 'a',
     title: 'GPIO 2: strapping pin',
     facts: [
-      'The chip reads this pin at power-on to decide how to boot.',
+      'The chip reads this pin at reset. Espressif recommends it be high or left floating then.',
       'Fine to use, but avoid wiring anything that pulls it low at startup.',
       'Can read an analog voltage (ADC).',
     ],
@@ -111,7 +113,7 @@ export const SUPERMINI_PINS: SuperMiniPin[] = [
     title: 'GPIO 8: onboard LED, strapping pin',
     facts: [
       'The small blue LED on the board is wired here. It lights when the pin is LOW.',
-      'Also a strapping pin: it must not be held low at power-on.',
+      'Also a strapping pin: download mode needs it high at reset, so don’t hold it low at power-on.',
     ],
     tags: ['digital', 'onboard LED', 'strapping'],
   },
@@ -144,7 +146,7 @@ export const SUPERMINI_PINS: SuperMiniPin[] = [
     title: 'GPIO 21: TX',
     facts: [
       'The transmit line of the chip’s hardware serial port (UART0).',
-      'Usable as a normal pin when you are not using that serial port.',
+      'Usable as a normal pin when you are not using that serial port. The chip prints boot messages here at every reset.',
     ],
     tags: ['digital', 'UART TX'],
   },
