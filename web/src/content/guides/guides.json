@@ -227,6 +227,66 @@
       ],
       "post": "Straight header pins on the first try: use a breadboard as a jig and tack two opposite corners first. A step-by-step guide for the ESP32-C3 SuperMini.",
       "set": "soldering"
+    },
+    {
+      "slug": "esp32-c3-boot-reset-buttons",
+      "title": "The BOOT and RESET buttons on the ESP32-C3",
+      "hook": "Hold BOOT, tap RESET, let go of BOOT. It rescues a board that won’t take new code.",
+      "minutes": 3,
+      "tags": [
+        "ESP32",
+        "uploading"
+      ],
+      "post": "Two tiny buttons on the ESP32-C3 SuperMini: RESET restarts your code, and BOOT + RESET puts the board in download mode. Try the sequence on a live board.",
+      "set": "esp32"
+    },
+    {
+      "slug": "esp32-c3-wont-upload",
+      "title": "When your ESP32-C3 won’t upload",
+      "hook": "No port, the wrong port, a busy port, or a board too busy to listen. Answer a few questions and find the fix.",
+      "minutes": 3,
+      "tags": [
+        "ESP32",
+        "debugging"
+      ],
+      "post": "ESP32-C3 won’t take your code? Answer a few yes/no questions and get the fix: cable, port, serial monitor, or download mode.",
+      "set": "esp32"
+    },
+    {
+      "slug": "esp32-c3-serial-output",
+      "title": "Where did my Serial output go?",
+      "hook": "Your code prints, the monitor stays blank. On an ESP32-C3, two missing lines in platformio.ini send it all to pin 21.",
+      "minutes": 3,
+      "tags": [
+        "ESP32",
+        "serial"
+      ],
+      "post": "Serial.println() on an ESP32-C3 and a blank monitor? Two build flags decide whether output goes over USB or out of pin 21. See both, live.",
+      "set": "esp32"
+    },
+    {
+      "slug": "platformio-first-project",
+      "title": "Your first PlatformIO project for the ESP32-C3",
+      "hook": "A few lines of platformio.ini get you building. Tap each one to see what it does, and what breaks if it’s wrong.",
+      "minutes": 4,
+      "tags": [
+        "ESP32",
+        "code"
+      ],
+      "post": "A platformio.ini for the ESP32-C3 SuperMini, one line at a time. Change a line and see what breaks: wrong board, wrong framework, missing USB flags.",
+      "set": "esp32"
+    },
+    {
+      "slug": "esp32-ota-updates",
+      "title": "Updating your ESP32 over WiFi",
+      "hook": "Once the first upload is done by cable, the next ones can go over WiFi. The board keeps two copies, so a dropped update leaves the old code running.",
+      "minutes": 4,
+      "tags": [
+        "ESP32",
+        "WiFi"
+      ],
+      "post": "Update an ESP32 without plugging it in. See how over-the-air updates write into a second slot, so a dropped update leaves the old code running.",
+      "set": "esp32"
     }
   ]
 }
