@@ -132,8 +132,6 @@ for DESTRUCTIVE, and `readOnlyHint` for every read.
 | | `set_cadence_rule` | | `events:write` | |
 | Engagement | `get_engagement` | | `engagement:read` | |
 
-<!-- verify after #0678 merges: the three Coverage rows come from issues/0678.md's Plan; confirm with tools/list. -->
-
 `update_event` on a published event changes the public page right away, even
 though the tool is not flagged PUBLIC. Treat it with the same care.
 
@@ -265,18 +263,19 @@ house rules.
 > Yes, create them.
 
 4. For each missing date or count, find the most recent event matching the
-   rule (`list_events` with the rule's `type`, title prefix and venue), then:
+   rule: `list_events` with `type` set to the rule's `event_type.slug` and
+   `venue` to its `venue.id`, then pick by the rule's `title_prefix` (there is
+   no title filter). Then:
 
    ```json
    duplicate_event {"id": 31, "starts_at": "2026-12-01T18:00:00-08:00",
                     "idempotency_key": "coverage-2026-12-rule-3-2026-12-01"}
    ```
 
-   If nothing matches, use `create_event` with the rule's `event_type_id`,
-   title and venue, and an `idempotency_key` of the same shape. A monthly rule
-   only gives a count, so propose dates first and confirm them.
+   If nothing matches, use `create_event` with `event_type_id` and `venue_id`
+   from the rule's `event_type.id` and `venue.id`, a title from its
+   `title_prefix` or `name`, and an `idempotency_key` of the same shape. A
+   monthly rule only gives a count, so propose dates first and confirm them.
 5. `event_coverage {"month": "2026-12"}` again. Those rules should now show
    `state: "drafts"`. List the drafts with their `admin_url`s, and **ask**
    before publishing any.
-
-<!-- verify after #0678 merges: workflow C uses event_coverage's field names from issues/0678.md's Plan. -->

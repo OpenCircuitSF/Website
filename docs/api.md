@@ -448,8 +448,6 @@ curl -s -H "Authorization: Bearer $OCSF_API_KEY" $B/interests
 
 ### Coverage and cadence rules (`events:read`, `events:write`)
 
-<!-- verify after #0678 merges: written from issues/0678.md's Plan, not from the running server. Check routes, field names and the cadence rule input against /api/v1/openapi.json. -->
-
 A **cadence rule** says what a normal month looks like, for example "Hack
 Night every Tuesday" or "2 workshops a month". The **coverage report** checks a
 month's events against the rules. Rules are stated in Pacific time.
@@ -465,11 +463,17 @@ month in Pacific time. For each active rule it returns:
 
 It also returns:
 
-- `unmatched_events`, the month's events that no rule matches;
-- `summary`;
-- a `luma` section listing published events not on Luma, events that differ
-  from Luma, and Luma-only events. This section has its own `status` and never
-  fails the report.
+- `month`, `label` (for example `December 2026`), `zone`, and the month's
+  Pacific bounds `from` and `to`;
+- `unmatched_events`, the month's events that match no active rule (canceled
+  ones excluded);
+- `summary`: `{rules, missing, drafts, unmatched}`;
+- a `luma` section: `not_on_luma` (published events with no Luma copy),
+  `differs` (each with `luma_url`, `luma_title` and `diffs`) and
+  `only_on_luma`. Its `status` is `ok`, `off`, `unreachable` or `malformed`.
+  Unless it is `ok` the lists are empty, and the report still answers `200`.
+  Its `read_at` and `last_good_at` are UTC. Once the month has started,
+  `only_on_luma` covers only Luma events from now on, and `note` says so.
 
 Canceled events never count toward a rule. Undated events are ignored. Each
 listed event carries its `admin_url` and `public_url`.
@@ -489,6 +493,10 @@ replaces one when `id` is given. It is an upsert and takes no
   with `per_month` (1 to 31);
 - an optional `venue_id`;
 - `active` (default true).
+
+Create and replace both answer `200` with the rule, which names its type as
+`event_type {id, slug, name}` and its venue as `venue {id, name}`. An unknown
+`id` is `404`. `weekday` is read case-insensitively.
 
 There is no delete call. `"active": false` retires a rule, and deleting is in
 the admin UI only.
