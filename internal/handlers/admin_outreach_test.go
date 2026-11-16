@@ -36,8 +36,11 @@ type fakeShortLinker struct {
 	// linkErrFor fails one slot's link, keyed utm_source+"/"+utm_content;
 	// checked before linkErr (#0568).
 	linkErrFor map[string]error
-	byDest     map[string]string // destination -> key, for de-duplication
-	campSlug   string
+	// linkErrForSource fails every link for one utm_source (one channel),
+	// checked after linkErrFor (#0676).
+	linkErrForSource map[string]error
+	byDest           map[string]string // destination -> key, for de-duplication
+	campSlug         string
 	// fixedKey, when set, makes every CreateLink return that key, as real
 	// ShortLinks does for a repeated destination (it de-duplicates).
 	fixedKey string
@@ -141,6 +144,9 @@ func (f *fakeShortLinker) CreateLink(_ context.Context, req shortlinks.CreateLin
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.linkErrFor[req.UTMSource+"/"+req.UTMContent]; err != nil {
+		return nil, err
+	}
+	if err := f.linkErrForSource[req.UTMSource]; err != nil {
 		return nil, err
 	}
 	if f.linkErr != nil {

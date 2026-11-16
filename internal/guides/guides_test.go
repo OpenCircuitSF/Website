@@ -55,27 +55,76 @@ func TestGuidePath(t *testing.T) {
 }
 
 func TestLoadRejectsBadCatalog(t *testing.T) {
-	const w = `{"slug":"w","title":"W","hook":"h"}`
-	const tp = `{"slug":"t","title":"T","hook":"h","minutes":2,"post":"p"}`
+	const sets = `"sets":[{"id":"s","title":"S","blurb":"b"}],`
+	const w = `{"slug":"w","title":"W","hook":"h","set":"s"}`
+	const tp = `{"slug":"t","title":"T","hook":"h","minutes":2,"post":"p","set":"s"}`
 	cases := map[string]string{
 		"malformed JSON":                     `{`,
-		"empty lists":                        `{"workshopGuides":[],"topics":[]}`,
-		"duplicate slug":                     `{"workshopGuides":[` + w + `],"topics":[{"slug":"w","title":"T","hook":"h","minutes":2,"post":"p"}]}`,
-		"bad slug":                           `{"workshopGuides":[{"slug":"Bad_Slug","title":"W","hook":"h"}],"topics":[` + tp + `]}`,
-		"empty title":                        `{"workshopGuides":[{"slug":"w","title":"","hook":"h"}],"topics":[` + tp + `]}`,
-		"empty hook":                         `{"workshopGuides":[` + w + `],"topics":[{"slug":"t","title":"T","hook":" ","minutes":2,"post":"p"}]}`,
-		"zero minutes":                       `{"workshopGuides":[` + w + `],"topics":[{"slug":"t","title":"T","hook":"h","post":"p"}]}`,
-		"soft hyphen in hook-as-description": `{"workshopGuides":[` + w + `],"topics":[{"slug":"t","title":"T","hook":"a­b","minutes":2,"post":"p"}]}`,
-		"topic without post":                 `{"workshopGuides":[` + w + `],"topics":[{"slug":"t","title":"T","hook":"h","minutes":2}]}`,
-		"workshop guide with post":           `{"workshopGuides":[{"slug":"w","title":"W","hook":"h","post":"p"}],"topics":[` + tp + `]}`,
+		"empty lists":                        `{` + sets + `"workshopGuides":[],"topics":[]}`,
+		"duplicate slug":                     `{` + sets + `"workshopGuides":[` + w + `],"topics":[{"slug":"w","title":"T","hook":"h","minutes":2,"post":"p","set":"s"}]}`,
+		"bad slug":                           `{` + sets + `"workshopGuides":[{"slug":"Bad_Slug","title":"W","hook":"h","set":"s"}],"topics":[` + tp + `]}`,
+		"empty title":                        `{` + sets + `"workshopGuides":[{"slug":"w","title":"","hook":"h","set":"s"}],"topics":[` + tp + `]}`,
+		"empty hook":                         `{` + sets + `"workshopGuides":[` + w + `],"topics":[{"slug":"t","title":"T","hook":" ","minutes":2,"post":"p","set":"s"}]}`,
+		"zero minutes":                       `{` + sets + `"workshopGuides":[` + w + `],"topics":[{"slug":"t","title":"T","hook":"h","post":"p","set":"s"}]}`,
+		"soft hyphen in hook-as-description": `{` + sets + `"workshopGuides":[` + w + `],"topics":[{"slug":"t","title":"T","hook":"a­b","minutes":2,"post":"p","set":"s"}]}`,
+		"topic without post":                 `{` + sets + `"workshopGuides":[` + w + `],"topics":[{"slug":"t","title":"T","hook":"h","minutes":2,"set":"s"}]}`,
+		"workshop guide with post":           `{` + sets + `"workshopGuides":[{"slug":"w","title":"W","hook":"h","post":"p","set":"s"}],"topics":[` + tp + `]}`,
 	}
 	for name, raw := range cases {
-		if _, err := load([]byte(raw)); err == nil {
+		if _, _, err := load([]byte(raw)); err == nil {
 			t.Errorf("%s: load accepted it", name)
 		}
 	}
-	if _, err := load([]byte(`{"workshopGuides":[` + w + `],"topics":[` + tp + `]}`)); err != nil {
+	if _, _, err := load([]byte(`{` + sets + `"workshopGuides":[` + w + `],"topics":[` + tp + `]}`)); err != nil {
 		t.Errorf("valid catalog rejected: %v", err)
+	}
+}
+
+// TestSetsLoadedAndEveryGuideHasKnownSet (#0676): the embedded catalog's sets
+// load in order and every guide names one of them.
+func TestSetsLoadedAndEveryGuideHasKnownSet(t *testing.T) {
+	sets := Sets()
+	if len(sets) == 0 {
+		t.Fatal("no sets loaded")
+	}
+	known := map[string]bool{}
+	for _, s := range sets {
+		if s.ID == "" || s.Title == "" {
+			t.Errorf("set %+v lacks an id or title", s)
+		}
+		known[s.ID] = true
+	}
+	if !known["esp32"] {
+		t.Error("the esp32 set is missing")
+	}
+	for _, g := range All() {
+		if !known[g.Set] {
+			t.Errorf("%s names unknown set %q", g.Slug, g.Set)
+		}
+	}
+	if Workshop.String() != "workshop" || Topic.String() != "topic" {
+		t.Errorf("Kind.String: %q, %q", Workshop, Topic)
+	}
+}
+
+func TestLoadRejectsUnknownSet(t *testing.T) {
+	raw := `{"sets":[{"id":"s","title":"S"}],"workshopGuides":[{"slug":"w","title":"W","hook":"h","set":"s"}],` +
+		`"topics":[{"slug":"t","title":"T","hook":"h","minutes":2,"post":"p","set":"nope"}]}`
+	if _, _, err := load([]byte(raw)); err == nil || !strings.Contains(err.Error(), "not declared") {
+		t.Fatalf("err = %v, want an undeclared-set error", err)
+	}
+	dup := `{"sets":[{"id":"s","title":"S"},{"id":"s","title":"S2"}],"workshopGuides":[{"slug":"w","title":"W","hook":"h","set":"s"}],` +
+		`"topics":[{"slug":"t","title":"T","hook":"h","minutes":2,"post":"p","set":"s"}]}`
+	if _, _, err := load([]byte(dup)); err == nil || !strings.Contains(err.Error(), "duplicate set") {
+		t.Fatalf("err = %v, want a duplicate-set error", err)
+	}
+}
+
+func TestLoadRejectsMissingSet(t *testing.T) {
+	raw := `{"sets":[{"id":"s","title":"S"}],"workshopGuides":[{"slug":"w","title":"W","hook":"h"}],` +
+		`"topics":[{"slug":"t","title":"T","hook":"h","minutes":2,"post":"p","set":"s"}]}`
+	if _, _, err := load([]byte(raw)); err == nil || !strings.Contains(err.Error(), "needs a set") {
+		t.Fatalf("err = %v, want a missing-set error", err)
 	}
 }
 

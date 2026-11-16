@@ -114,6 +114,8 @@ func (s *Store) Create(ctx context.Context, slug, channel, body, base, campaign 
 
 // UpdateBody replaces a draft, scheduled or failed post's text. A linked
 // post is measured as sent; an unlinked one with its token as a short URL.
+// On a linked post the link token means the post's own short link and is
+// filled in before the checks (#0676).
 func (s *Store) UpdateBody(ctx context.Context, id int64, body string) (Post, error) {
 	cur, err := s.Get(ctx, id)
 	if err != nil {
@@ -121,6 +123,9 @@ func (s *Store) UpdateBody(ctx context.Context, id int64, body string) (Post, er
 	}
 	if err := lockedStatus(cur.Status); err != nil {
 		return Post{}, err
+	}
+	if cur.ShortURL != nil {
+		body = strings.ReplaceAll(body, outreach.LinkToken, *cur.ShortURL)
 	}
 	if cur.ShortURL != nil && !containsURL(body, *cur.ShortURL) {
 		return Post{}, ErrLinkRemoved
@@ -141,6 +146,36 @@ func (s *Store) UpdateBody(ctx context.Context, id int64, body string) (Post, er
 	}
 	if err != nil {
 		return Post{}, fmt.Errorf("guideposts: update body: %w", err)
+	}
+	return p, nil
+}
+
+// UpdateCampaign changes an unlinked draft's ShortLinks campaign; campaign
+// follows Create's rule (blank is CampaignSlug). Once the post has its short
+// link the campaign is fixed: ErrLinkFixed.
+func (s *Store) UpdateCampaign(ctx context.Context, id int64, campaign string) (Post, error) {
+	campaign, err := NormalizeCampaignSlug(campaign)
+	if err != nil {
+		return Post{}, err
+	}
+	p, err := scanPost(s.pool.QueryRow(ctx,
+		`UPDATE guide_posts SET campaign_slug = $2, updated_at = now()
+		 WHERE id = $1 AND status = 'draft' AND short_link_key IS NULL RETURNING `+postColumns, id, campaign))
+	if errors.Is(err, pgx.ErrNoRows) {
+		cur, gerr := s.Get(ctx, id)
+		if gerr != nil {
+			return Post{}, gerr
+		}
+		if lerr := lockedStatus(cur.Status); lerr != nil {
+			return Post{}, lerr
+		}
+		if cur.ShortLinkKey != nil {
+			return Post{}, ErrLinkFixed
+		}
+		return Post{}, ErrWrongStatus
+	}
+	if err != nil {
+		return Post{}, fmt.Errorf("guideposts: update campaign: %w", err)
 	}
 	return p, nil
 }

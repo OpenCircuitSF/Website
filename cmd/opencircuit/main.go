@@ -444,11 +444,12 @@ func servePostgres(cfg *config.Config) error {
 	apiTokensH := handlers.NewAPITokensHandler(apitokens.NewStore(pool), auditLogger)
 	settingsH.SetAPITokens(apiTokensH)
 	// #0675: the /api/v1 operation registry (whoami, the #0652 probe, and
-	// #0653's engagement check). BuildV1Registry is the one list of v1
+	// #0653's engagement check, and #0676's guides and guide posts, which
+	// share adminGuidePostsH). BuildV1Registry is the one list of v1
 	// operations; mountAndServe serves it with api.NewHTTPRouter.
 	apiTokensH.SetV1(handlers.BuildV1Registry(
 		api.Config{Version: version, Idempotency: api.NewIdempotencyStore(pool)},
-		handlers.V1Deps{Engagement: outreachStore},
+		handlers.V1Deps{Engagement: outreachStore, BaseURL: cfg.BaseURL, GuidePosts: adminGuidePostsH},
 	))
 
 	// Admin subscribers screen (#0032, PRD §5.2/§6.2): list/search/detail,
