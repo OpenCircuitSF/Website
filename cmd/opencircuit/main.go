@@ -47,6 +47,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/luma"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
+	"github.com/brennanMKE/OpenCircuitSF/internal/mcpserver"
 	"github.com/brennanMKE/OpenCircuitSF/internal/media"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
@@ -1860,6 +1861,10 @@ func mountAndServe(
 	if t := settingsH.APITokens(); t != nil && t.V1() != nil {
 		apiTokenLimiter := middleware.NewAPITokenRateLimiter()
 		api.Mount(mux, api.NewHTTPRouter(t.V1(), api.RouterDeps{Resolver: t.Resolver(), Limiter: apiTokenLimiter, BaseURL: cfg.BaseURL}))
+		// MCP (#0679): Streamable HTTP, stateless JSON, over the same
+		// registry and the same per-key limiter as /api/v1/. Bearer only;
+		// no session cookie is read.
+		mcpserver.Mount(mux, mcpserver.NewHandler(mcpserver.Deps{Registry: t.V1(), Resolver: t.Resolver(), Limiter: apiTokenLimiter, Logger: slog.Default().With("component", "mcp")}))
 	}
 
 	// Current user profile — behind RequireSession; returns the caller's

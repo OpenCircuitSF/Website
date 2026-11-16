@@ -103,7 +103,8 @@ func TestAdminRoutesRegisteredOnlyViaTable(t *testing.T) {
 			// `r.method+" "+r.path` lands here. Since #0675 replaced the
 			// /api/v1/ loop with one api.Mount call (which registers its
 			// patterns inside internal/api, and is
-			// TestAPIV1MountedOnlyViaRegistry's subject), that is the only
+			// TestAPIV1AndMCPMountedOnlyViaRegistry's subject, as is #0679's
+			// mcpserver.Mount), that is the only
 			// non-literal pattern mux.Handle/HandleFunc is called with in
 			// this file (verified by inspection), so it is not further
 			// validated here —
@@ -141,41 +142,56 @@ func TestAdminRoutesRegisteredOnlyViaTable(t *testing.T) {
 	}
 }
 
-// TestAPIV1MountedOnlyViaRegistry (#0675) is the /api/v1 twin of the test
-// above. Every v1 route comes from the operation registry
-// (handlers.BuildV1Registry), and api.NewHTTPRouter puts each behind
-// RequireAPIToken, the per-token rate limit and the scope check. A route
-// mounted on mux directly, beside that router, would get none of them. So:
-// no mux.Handle/HandleFunc in main.go may have a literal pattern whose path
-// starts with /api/v1, and api.Mount must be called exactly once, with mux
-// and a call to api.NewHTTPRouter. (api.Mount registers one
-// "<METHOD> /api/v1/" pattern per method, because a bare "/api/v1/"
-// conflicts with the SPA's "GET /" in Go's ServeMux.)
-func TestAPIV1MountedOnlyViaRegistry(t *testing.T) {
+// TestAPIV1AndMCPMountedOnlyViaRegistry (#0675, #0679) is the /api/v1 and
+// /mcp twin of the test above. Every v1 route comes from the operation
+// registry (handlers.BuildV1Registry), and api.NewHTTPRouter puts each behind
+// RequireAPIToken, the per-token rate limit and the scope check; /mcp is the
+// same registry served by mcpserver.NewHandler, behind the same token and
+// rate-limit middleware. A route mounted on mux directly, beside either,
+// would get none of that. So: no mux.Handle/HandleFunc in main.go may have
+// a literal pattern whose path starts with /api/v1 or /mcp; api.Mount must
+// be called exactly once, with mux and a call to api.NewHTTPRouter; and
+// mcpserver.Mount exactly once, with mux and a call to
+// mcpserver.NewHandler. (Both Mounts register one "<METHOD> <path>" pattern
+// per method, because a pattern with no method conflicts with the SPA's
+// "GET /" in Go's ServeMux.)
+func TestAPIV1AndMCPMountedOnlyViaRegistry(t *testing.T) {
 	if v := v1MountViolations(t, "main.go"); len(v) > 0 {
-		t.Fatalf("/api/v1 must be mounted once, as api.Mount(mux, api.NewHTTPRouter(...)):\n%s", strings.Join(v, "\n"))
+		t.Fatalf("/api/v1 and /mcp must each be mounted once, as api.Mount(mux, api.NewHTTPRouter(...)) and mcpserver.Mount(mux, mcpserver.NewHandler(...)):\n%s", strings.Join(v, "\n"))
 	}
 }
 
 // TestAPIV1MountGuardCatchesRogueRoute proves the guard above fails: copies
-// of main.go with a rogue literal v1 route, with the router swapped for
-// another call, and with a second mount each report a violation. The copies
-// live in t.TempDir() and are only parsed, never compiled; main.go itself is
-// never touched.
+// of main.go with a rogue literal v1 or MCP route, with the router or MCP
+// handler swapped for another call, and with a second mount of either each
+// report a violation. The copies live in t.TempDir() and are only parsed,
+// never compiled; main.go itself is never touched.
 func TestAPIV1MountGuardCatchesRogueRoute(t *testing.T) {
 	src, err := os.ReadFile("main.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	const mount = `api.Mount(mux, api.NewHTTPRouter(`
-	if strings.Count(string(src), mount) != 1 {
-		t.Fatalf("main.go does not hold exactly one %q", mount)
+	const mcpMount = `mcpserver.Mount(mux, mcpserver.NewHandler(`
+	for _, m := range []string{mount, mcpMount} {
+		if strings.Count(string(src), m) != 1 {
+			t.Fatalf("main.go does not hold exactly one %q", m)
+		}
 	}
-	rogue := strings.Replace(string(src), mount,
-		`mux.Handle("GET /api/v1/rogue", http.NotFoundHandler())`+"\n\t\t"+mount, 1)
-	bypassed := strings.Replace(string(src), mount, `api.Mount(mux, handlers.NotARouter(`, 1)
-	twice := strings.Replace(string(src), mount, `api.Mount(mux, api.NewHTTPRouter(t.V1(), api.RouterDeps{}))`+"\n\t\t"+mount, 1)
-	for name, body := range map[string]string{"rogue": rogue, "bypassed": bypassed, "twice": twice} {
+	cases := map[string]string{
+		"rogue": strings.Replace(string(src), mount,
+			`mux.Handle("GET /api/v1/rogue", http.NotFoundHandler())`+"\n\t\t"+mount, 1),
+		"bypassed": strings.Replace(string(src), mount, `api.Mount(mux, handlers.NotARouter(`, 1),
+		"twice":    strings.Replace(string(src), mount, `api.Mount(mux, api.NewHTTPRouter(t.V1(), api.RouterDeps{}))`+"\n\t\t"+mount, 1),
+		"mcp rogue": strings.Replace(string(src), mcpMount,
+			`mux.Handle("POST /mcp", http.NotFoundHandler())`+"\n\t\t"+mcpMount, 1),
+		"mcp subpath": strings.Replace(string(src), mcpMount,
+			`mux.HandleFunc("/mcp/x", nil)`+"\n\t\t"+mcpMount, 1),
+		"mcp bypassed": strings.Replace(string(src), mcpMount, `mcpserver.Mount(mux, handlers.NotAnMCPHandler(`, 1),
+		"mcp twice":    strings.Replace(string(src), mcpMount, `mcpserver.Mount(mux, mcpserver.NewHandler(mcpserver.Deps{}))`+"\n\t\t"+mcpMount, 1),
+		"mcp missing":  strings.Replace(string(src), mcpMount, `noMount(mux, mcpserver.NewHandler(`, 1),
+	}
+	for name, body := range cases {
 		p := filepath.Join(t.TempDir(), "main.go")
 		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
@@ -186,8 +202,8 @@ func TestAPIV1MountGuardCatchesRogueRoute(t *testing.T) {
 	}
 }
 
-// v1MountViolations parses path and lists every /api/v1 mux registration
-// that is not the one registry mount.
+// v1MountViolations parses path and lists every /api/v1 or /mcp mux
+// registration that is not the one registry mount of each.
 func v1MountViolations(t *testing.T, path string) []string {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -196,7 +212,7 @@ func v1MountViolations(t *testing.T, path string) []string {
 		t.Fatalf("parse %s: %v", path, err)
 	}
 	var violations []string
-	mounts := 0
+	mounts, mcpMounts := 0, 0
 	ast.Inspect(file, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok || len(call.Args) < 2 {
@@ -214,8 +230,13 @@ func v1MountViolations(t *testing.T, path string) []string {
 		switch {
 		case recv.Name == "api" && sel.Sel.Name == "Mount":
 			mounts++
-			if m, ok := call.Args[0].(*ast.Ident); !ok || m.Name != "mux" || !isAPINewHTTPRouterCall(call.Args[1]) {
+			if m, ok := call.Args[0].(*ast.Ident); !ok || m.Name != "mux" || !isPkgCall(call.Args[1], "api", "NewHTTPRouter") {
 				violations = append(violations, fmt.Sprintf("%s: api.Mount must be given mux and api.NewHTTPRouter(...)", pos))
+			}
+		case recv.Name == "mcpserver" && sel.Sel.Name == "Mount":
+			mcpMounts++
+			if m, ok := call.Args[0].(*ast.Ident); !ok || m.Name != "mux" || !isPkgCall(call.Args[1], "mcpserver", "NewHandler") {
+				violations = append(violations, fmt.Sprintf("%s: mcpserver.Mount must be given mux and mcpserver.NewHandler(...)", pos))
 			}
 		case recv.Name == "mux" && (sel.Sel.Name == "Handle" || sel.Sel.Name == "HandleFunc"):
 			lit, ok := call.Args[0].(*ast.BasicLit)
@@ -233,25 +254,31 @@ func v1MountViolations(t *testing.T, path string) []string {
 			if strings.HasPrefix(p, "/api/v1") {
 				violations = append(violations, fmt.Sprintf("%s: mux.%s(%q, ...) bypasses the v1 registry", pos, sel.Sel.Name, pattern))
 			}
+			if p == "/mcp" || strings.HasPrefix(p, "/mcp/") {
+				violations = append(violations, fmt.Sprintf("%s: mux.%s(%q, ...) bypasses mcpserver.Mount", pos, sel.Sel.Name, pattern))
+			}
 		}
 		return true
 	})
 	if mounts != 1 {
 		violations = append(violations, fmt.Sprintf("%s: api.Mount is called %d times, want 1", path, mounts))
 	}
+	if mcpMounts != 1 {
+		violations = append(violations, fmt.Sprintf("%s: mcpserver.Mount is called %d times, want 1", path, mcpMounts))
+	}
 	return violations
 }
 
-// isAPINewHTTPRouterCall reports whether e is a call api.NewHTTPRouter(...).
-func isAPINewHTTPRouterCall(e ast.Expr) bool {
+// isPkgCall reports whether e is a call pkg.fn(...).
+func isPkgCall(e ast.Expr, pkg, fn string) bool {
 	call, ok := e.(*ast.CallExpr)
 	if !ok {
 		return false
 	}
 	sel, ok := call.Fun.(*ast.SelectorExpr)
-	if !ok || sel.Sel.Name != "NewHTTPRouter" {
+	if !ok || sel.Sel.Name != fn {
 		return false
 	}
-	pkg, ok := sel.X.(*ast.Ident)
-	return ok && pkg.Name == "api"
+	id, ok := sel.X.(*ast.Ident)
+	return ok && id.Name == pkg
 }
