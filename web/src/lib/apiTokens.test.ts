@@ -12,6 +12,7 @@ import {
   tokenStatusLabel,
   validateTokenName,
 } from './apiTokens';
+import * as apiTokens from './apiTokens';
 
 describe('apiTokens (#0652)', () => {
   it('labels engagement:read as Read engagement', () => {
@@ -55,6 +56,17 @@ describe('apiTokens v2 (#0674)', () => {
       'events:write',
       'venues:read',
     ]);
+  });
+  // #0682: internal/db's TestAPITokenScopesMatchWeb ties the SCOPE_*
+  // constants to apitokens.KnownScopes; this ties KNOWN_SCOPES (the form's
+  // checkboxes) to the SCOPE_* constants, so neither can drop a scope.
+  it('KNOWN_SCOPES covers every SCOPE_ constant', () => {
+    const constants = Object.entries(apiTokens)
+      .filter(([k]) => k.startsWith('SCOPE_') && k !== 'SCOPE_GROUPS')
+      .map(([, v]) => v as string);
+    expect(constants.length).toBeGreaterThan(0);
+    expect([...KNOWN_SCOPES].sort()).toEqual([...new Set(constants)].sort());
+    expect(new Set(KNOWN_SCOPES).size).toBe(KNOWN_SCOPES.length);
   });
   it('the Agent preset is every guide and event scope, not engagement', () => {
     expect(AGENT_PRESET).not.toContain('engagement:read');
