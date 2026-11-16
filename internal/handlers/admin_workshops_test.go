@@ -1552,3 +1552,25 @@ func TestAdminWorkshops_LocationFieldsInBodyRefused(t *testing.T) {
 		}
 	}
 }
+
+// TestAdminWorkshops_EndsBeforeStartIs400 pins #0677's new rule on the
+// admin routes: an end that is not after the start is refused on create and
+// on patch, with the same message the v1 API gives.
+func TestAdminWorkshops_EndsBeforeStartIs400(t *testing.T) {
+	pool, do := workshopEventTypeServer(t)
+	const msg = "ends_at must be after starts_at"
+	code, b := do(http.MethodPost, "/admin/workshops", fmt.Sprintf(
+		`{"title":"zz-%d","starts_at":"2030-06-04T18:00:00Z","ends_at":"2030-06-04T18:00:00Z"}`, testdb.Unique()))
+	if code != http.StatusBadRequest || !strings.Contains(string(b), msg) {
+		t.Errorf("create status = %d (%s)", code, b)
+	}
+	row := createWorkshopVenue(t, pool, do, `,"starts_at":"2030-06-04T18:00:00Z"`)
+	code, b = do(http.MethodPatch, fmt.Sprintf("/admin/workshops/%d", row.ID), `{"ends_at":"2030-06-04T17:00:00Z"}`)
+	if code != http.StatusBadRequest || !strings.Contains(string(b), msg) {
+		t.Errorf("patch status = %d (%s)", code, b)
+	}
+	code, b = do(http.MethodPatch, fmt.Sprintf("/admin/workshops/%d", row.ID), `{"ends_at":"2030-06-04T20:00:00Z"}`)
+	if code != http.StatusOK {
+		t.Errorf("valid patch status = %d (%s)", code, b)
+	}
+}

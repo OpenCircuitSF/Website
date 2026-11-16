@@ -975,3 +975,51 @@ func TestCreateDefaultVenueRacingDisable(t *testing.T) {
 		}
 	}
 }
+
+// TestCreateRejectsEndsBeforeStart pins ErrEndsBeforeStart on Create
+// (#0677): an end before or equal to the start is refused with no row
+// written, and a start with no end is fine.
+func TestCreateRejectsEndsBeforeStart(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	start := time.Date(2030, 3, 4, 18, 0, 0, 0, time.UTC)
+	for name, end := range map[string]time.Time{"before": start.Add(-time.Hour), "equal": start} {
+		title := uniqueTitle(t)
+		_, err := store.Create(ctx, CreateInput{Title: title, StartsAt: &start, EndsAt: &end})
+		if !errors.Is(err, ErrEndsBeforeStart) {
+			t.Errorf("%s: err = %v, want ErrEndsBeforeStart", name, err)
+		}
+		var n int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM workshops WHERE title = $1`, title).Scan(&n); err != nil || n != 0 {
+			t.Errorf("%s: %d rows written (err %v)", name, n, err)
+		}
+	}
+	w, err := store.Create(ctx, CreateInput{Title: uniqueTitle(t), StartsAt: &start})
+	if err != nil {
+		t.Fatalf("start without end: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM workshops WHERE id = $1`, w.ID) })
+}
+
+// TestUpdateRejectsEndsBeforeStart is Update's half of the same rule.
+func TestUpdateRejectsEndsBeforeStart(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	w := createTestWorkshop(t, store, uniqueTitle(t))
+	start := time.Date(2030, 3, 4, 18, 0, 0, 0, time.UTC)
+	for name, end := range map[string]time.Time{"before": start.Add(-time.Minute), "equal": start} {
+		_, err := store.Update(ctx, w.ID, UpdateInput{Title: w.Title, Status: StatusDraft, StartsAt: &start, EndsAt: &end})
+		if !errors.Is(err, ErrEndsBeforeStart) {
+			t.Errorf("%s: err = %v, want ErrEndsBeforeStart", name, err)
+		}
+	}
+	end := start.Add(2 * time.Hour)
+	if _, err := store.Update(ctx, w.ID, UpdateInput{Title: w.Title, Status: StatusDraft, StartsAt: &start, EndsAt: &end}); err != nil {
+		t.Errorf("valid times: %v", err)
+	}
+	if _, err := store.Update(ctx, w.ID, UpdateInput{Title: w.Title, Status: StatusDraft, StartsAt: &start}); err != nil {
+		t.Errorf("start without end: %v", err)
+	}
+}

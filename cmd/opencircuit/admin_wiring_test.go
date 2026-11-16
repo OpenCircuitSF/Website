@@ -138,11 +138,6 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// (mounted through adminOutreachH below) and the v1 guide-post ops.
 	guideStore := guideposts.NewStore(pool, outbox.NewStore(pool))
 	adminGuidePostsH := handlers.NewAdminGuidePostsHandler(guideStore, guideposts.NewLinker(guideStore, nil), (*shortlinks.Client)(nil), auditLogger, cfg.BaseURL, (*guideposts.Publisher)(nil))
-	// #0653, #0675: the v1 operation registry, built as main.go builds it.
-	apiTokensH.SetV1(handlers.BuildV1Registry(
-		api.Config{Version: "wiring-version", Idempotency: api.NewIdempotencyStore(pool)},
-		handlers.V1Deps{Engagement: outreach.NewStore(pool), BaseURL: cfg.BaseURL, GuidePosts: adminGuidePostsH},
-	))
 	settingsH.SetAPITokens(apiTokensH)
 	adminUsersH := handlers.NewAdminUsersHandler(store, auditLogger)
 	adminAuditH := handlers.NewAdminAuditHandler(audit.NewReader(pool))
@@ -225,6 +220,15 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// the handler ever calls it.
 	workshopsStore := workshops.NewStore(pool)
 	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, nil, campaignsStore, auditLogger, cfg.BaseURL)
+	// #0653, #0675: the v1 operation registry, built as main.go builds it
+	// (#0677 moved it here, below the stores its event ops share).
+	apiTokensH.SetV1(handlers.BuildV1Registry(
+		api.Config{Version: "wiring-version", Idempotency: api.NewIdempotencyStore(pool)},
+		handlers.V1Deps{
+			Engagement: outreach.NewStore(pool), BaseURL: cfg.BaseURL, GuidePosts: adminGuidePostsH,
+			Workshops: adminWorkshopsH, Venues: venuesStore, EventTypes: eventTypesStore, Interests: interestsStore,
+		},
+	))
 	// #0433: exercised the same way as adminWorkshopsH above — a real
 	// handler over a real (if unused by this test) directory, so this
 	// test's route table proof covers POST /admin/media/upload too.
