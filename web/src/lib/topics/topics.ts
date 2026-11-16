@@ -359,7 +359,7 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
       {
         title: 'GPIO 9 low means "wait for new code"',
-        body: 'GPIO 9 has an internal pull-up and the BOOT button, which connects it to ground. Held low at reset, the chip skips your program and waits in download mode. Download mode also needs GPIO 8 high; on the SuperMini the onboard LED on GPIO 8 keeps it there. Espressif also recommends keeping GPIO 2 high or floating at reset.',
+        body: 'GPIO 9 has an internal pull-up and the BOOT button, which connects it to ground. Held low at reset, the chip skips your program and waits in download mode. Download mode also needs GPIO 8 high, so nothing should hold it low at reset either. Espressif also recommends keeping GPIO 2 high or floating at reset.',
       },
       {
         title: 'Keep low-pulling parts off them',
@@ -416,14 +416,14 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
       {
         title: 'Any output pin, two ways to code it',
-        body: 'Any output GPIO can do PWM. analogWrite(pin, 0–255) is the simple way. For control, arduino-esp32 3.x uses ledcAttach(pin, frequency, bits) and then ledcWrite(pin, duty). Older 2.x code used ledcSetup and ledcAttachPin instead. The C3 has six PWM channels.',
+        body: 'Any output GPIO can do PWM. analogWrite(pin, 0–255) is the simple way, and it works on every arduino-esp32 version. For more control, arduino-esp32 3.x uses ledcAttach(pin, frequency, bits), then ledcWrite(pin, duty). Version 2.x, which PlatformIO still installs by default, uses a channel number instead: ledcSetup(0, frequency, bits), ledcAttachPin(pin, 0), then ledcWrite(0, duty). The C3 has six PWM channels.',
       },
       {
         title: 'Frequency costs resolution',
         body: 'The timer counts on an 80 MHz clock, so faster PWM leaves fewer steps per cycle: up to 14 bits at 1 kHz, but 6 bits at 1 MHz. For LEDs, 1 to 5 kHz at 8 bits is plenty. Our eyes see 50% duty as much more than half as bright, so a gamma curve makes fades look even.',
       },
     ],
-    takeaway: 'Duty cycle sets brightness. ledcAttach(pin, 5000, 8), then ledcWrite(pin, 0–255).',
+    takeaway: 'Duty cycle sets brightness. analogWrite(pin, 0–255) works everywhere; ledcAttach and ledcWrite give you control on arduino-esp32 3.x.',
   },
   'esp32-c3-power': {
     demo: C3PowerDemo,

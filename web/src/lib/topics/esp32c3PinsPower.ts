@@ -42,8 +42,10 @@ export type BootPin = (typeof BOOT_DEMO_PINS)[number];
 export type Level = 'high' | 'low' | 'floating' | 'unsure';
 
 export function levelAtReset(pin: BootPin, part: BootPart, held: boolean): Level {
-  // GPIO9 has a weak internal pull-up at reset (datasheet Table 3-1);
-  // the onboard LED on GPIO8 runs to 3.3 V, so it also idles high.
+  // GPIO9 has a weak internal pull-up at reset (datasheet Table 3-1).
+  // GPIO8 has no internal pull; on many SuperMinis the onboard LED runs from
+  // 3.3 V to it, and in practice BOOT + RESET reaches download mode, so the
+  // demo treats it as high. Not checked against a schematic (#0671).
   const idle: Level = pin === 'gpio9' || pin === 'gpio8' ? 'high' : 'floating';
   switch (part) {
     case 'nothing':
@@ -117,7 +119,7 @@ export function bootResult(pin: BootPin, part: BootPart, held: boolean): BootRes
     return {
       outcome: 'runs',
       title: 'Your program runs',
-      body: 'GPIO 8 is high at reset (the onboard LED is wired to 3.3 V and holds it up), so both a normal boot and download mode work.',
+      body: 'Nothing pulls GPIO 8 low at reset, so both a normal boot and download mode work. (On many SuperMinis the onboard LED runs from 3.3 V to this pin, which helps keep it high.)',
     };
   }
   // gpio2
@@ -176,7 +178,7 @@ export function pinAdvice(job: Job, pinId: string): PinAdvice {
     return { verdict: 'care', reason: 'Works once running, but pressing the BOOT button pulls this pin low and the chip reads it at every reset. Keep it free.' };
   }
   if (n === 8) {
-    if (job === 'button') return { verdict: 'avoid', reason: 'A strapping pin with the onboard LED on it. A button to ground here fights the LED and breaks download mode if held at reset.' };
+    if (job === 'button') return { verdict: 'avoid', reason: 'A strapping pin with the onboard LED on it. Every press also lights the LED, and holding the button at reset breaks download mode.' };
     if (job === 'led') return { verdict: 'care', reason: 'The onboard blue LED is already here, wired to light when the pin is LOW. Use it, or pick another pin for your own LED.' };
     return { verdict: 'care', reason: 'Strapping pin with the onboard LED on it: the LED flickers along with your data. Pick a plain pin if you can.' };
   }
@@ -361,7 +363,7 @@ export function powerResult(src: Source, entry: Entry, usbToo: boolean): PowerRe
       case 'nine':
         return { verdict: 'damage', title: 'Can damage the board', body: '9 V is far more than the small onboard regulator can take. Use a 5 V buck converter in between.' };
       case 'reg33':
-        return { verdict: 'wont', title: 'Too low for this pin', body: 'The regulator needs more than 3.3 V in to make 3.3 V out. Feed a 3.3 V supply into the 3.3 pin instead.' };
+        return { verdict: 'wont', title: 'Too low for this pin', body: 'The regulator needs a little more than 3.3 V in to make 3.3 V out, so the chip gets less than it should and may reset or not start. Feed a 3.3 V supply into the 3.3 pin instead.' };
       case 'aa2':
         return { verdict: 'wont', title: 'Too low', body: 'About 3 V into the regulator comes out below what the chip needs. The board may not start at all.' };
     }

@@ -64,8 +64,14 @@
     At {freqLabel(freq)} the timer has room for up to <strong>{maxBits}-bit</strong> duty ({2 ** maxBits} steps).
     {#if freq < 100}Too slow for an LED: you’ll see it flicker.{:else if maxBits < 8}Too fast for smooth fading: only a few brightness steps.{:else}Fine for an LED.{/if}
   </p>
-  <pre class="code"><code>ledcAttach(LED_PIN, {freq}, {bits});   // pin, frequency, bits
-ledcWrite(LED_PIN, {value});          // 0–{2 ** bits - 1}</code></pre>
+  <pre class="code"><code>// arduino-esp32 3.x (Arduino IDE today)
+ledcAttach(LED_PIN, {freq}, {bits});   // pin, frequency, bits
+ledcWrite(LED_PIN, {value});          // 0–{2 ** bits - 1}
+
+// arduino-esp32 2.x (PlatformIO's default)
+ledcSetup(0, {freq}, {bits});          // channel 0, frequency, bits
+ledcAttachPin(LED_PIN, 0);
+ledcWrite(0, {value});                // writes to the channel, not the pin</code></pre>
 </div>
 
 <style>
