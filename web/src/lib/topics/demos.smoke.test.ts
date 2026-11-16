@@ -31,6 +31,12 @@ import BleWifiPicker from './BleWifiPicker.svelte';
 import BleBasicsDemo from './BleBasicsDemo.svelte';
 import BrownoutDemo from './BrownoutDemo.svelte';
 import DeepSleepDemo from './DeepSleepDemo.svelte';
+// ESP32-C3: pins and power (#0671)
+import C3BootPinsDemo from './C3BootPinsDemo.svelte';
+import C3PinChooserDemo from './C3PinChooserDemo.svelte';
+import C3AnalogDemo from './C3AnalogDemo.svelte';
+import C3PwmDemo from './C3PwmDemo.svelte';
+import C3PowerDemo from './C3PowerDemo.svelte';
 
 afterEach(cleanup);
 
@@ -347,5 +353,44 @@ describe('guide demos', () => {
     expect(before).toMatch(/days/);
     expect(after).toMatch(/days|years/);
     expect(after).not.toBe(before);
+  });
+
+  // ESP32-C3: pins and power (#0671)
+  it('boot pins: holding a button on GPIO 9 through RESET lands in download mode', async () => {
+    const r = render(C3BootPinsDemo);
+    await fireEvent.click(r.getByRole('checkbox'));
+    await fireEvent.click(r.getByText('Press RESET'));
+    expect(r.getByRole('heading', { name: 'Download mode: your program does not start' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('button', { name: 'GPIO 4' }));
+    await fireEvent.click(r.getByText('Press RESET'));
+    expect(r.getByRole('heading', { name: 'Your program runs' })).toBeTruthy();
+  });
+
+  it('pin chooser: analog sensor marks GPIO 5 as one to avoid', async () => {
+    const r = render(C3PinChooserDemo);
+    await fireEvent.click(r.getByRole('radio', { name: 'Analog sensor' }));
+    await fireEvent.click(r.getByRole('button', { name: 'GPIO 5: avoid' }));
+    expect(r.getByText('GPIO 5: Avoid')).toBeTruthy();
+    expect(r.container.textContent).toContain('Best pins for this: 0, 1, 3, 4');
+  });
+
+  it('analog input: 4 V on the pin warns about damage', async () => {
+    const r = render(C3AnalogDemo);
+    await fireEvent.input(r.getByRole('slider'), { target: { value: '4' } });
+    expect(r.getByText('More than 3.3 V on a GPIO can damage the chip.')).toBeTruthy();
+  });
+
+  it('pwm: 50% duty looks about 73% bright, and 1 MHz leaves 6 bits', async () => {
+    const r = render(C3PwmDemo);
+    expect(r.container.textContent).toContain('It looks about 73% bright');
+    await fireEvent.click(r.getByRole('radio', { name: '1 MHz' }));
+    expect(r.container.textContent).toContain('up to 6-bit duty');
+  });
+
+  it('power: a LiPo on the 3.3 pin is a damage risk', async () => {
+    const r = render(C3PowerDemo);
+    await fireEvent.click(r.getByRole('radio', { name: /One LiPo cell/ }));
+    await fireEvent.click(r.getByRole('radio', { name: '3.3 pin' }));
+    expect(r.getByText('Damage risk')).toBeTruthy();
   });
 });

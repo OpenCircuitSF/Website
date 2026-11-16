@@ -277,15 +277,63 @@
       "set": "esp32"
     },
     {
-      "slug": "esp32-ota-updates",
-      "title": "Updating your ESP32 over WiFi",
-      "hook": "Once the first upload is done by cable, the next ones can go over WiFi. The board keeps two copies, so a dropped update leaves the old code running.",
-      "minutes": 4,
+      "slug": "esp32-c3-boot-pins",
+      "title": "The pins that can stop your ESP32-C3 from booting",
+      "hook": "Wire a button to the wrong pin and your board sits waiting for new code instead of running yours.",
+      "minutes": 3,
       "tags": [
         "ESP32",
-        "WiFi"
+        "pins"
       ],
-      "post": "Update an ESP32 without plugging it in. See how over-the-air updates write into a second slot, so a dropped update leaves the old code running.",
+      "post": "Wire a button to the wrong pin and your ESP32-C3 never runs your program. Meet the three strapping pins, 2, 8 and 9, and test what boots.",
+      "set": "esp32"
+    },
+    {
+      "slug": "esp32-c3-reserved-pins",
+      "title": "Which ESP32-C3 pins are safe to use?",
+      "hook": "Some pins already have a second job: USB, serial, the flash chip. Pick a job and see which pins are free.",
+      "minutes": 3,
+      "tags": [
+        "ESP32",
+        "pins"
+      ],
+      "post": "Some ESP32-C3 pins already have a second job: USB, serial, the flash chip, booting. Pick a job, like a button or an analog sensor, and see which SuperMini pins are safe.",
+      "set": "esp32"
+    },
+    {
+      "slug": "esp32-c3-analog-input",
+      "title": "Reading analog voltages on the ESP32-C3",
+      "hook": "analogRead() gives a number from 0 to 4095, but it’s noisy and stops being accurate above about 2.5 V.",
+      "minutes": 3,
+      "tags": [
+        "ESP32",
+        "sensors"
+      ],
+      "post": "The ESP32-C3 reads voltages from 0 to 4095, but the numbers are noisy and top out around 2.5 V. Slide the voltage, average the noise, and size a divider for a battery.",
+      "set": "esp32"
+    },
+    {
+      "slug": "esp32-c3-pwm",
+      "title": "Fading an LED with PWM on the ESP32-C3",
+      "hook": "The pin is only ever on or off. Switch it fast enough and the LED looks dimmed.",
+      "minutes": 3,
+      "tags": [
+        "ESP32",
+        "LEDs"
+      ],
+      "post": "An ESP32-C3 pin is only ever on or off, yet it can fade an LED. Drag the duty cycle, watch the wave, and see why half duty doesn’t look half as bright.",
+      "set": "esp32"
+    },
+    {
+      "slug": "esp32-c3-power",
+      "title": "Powering the ESP32-C3 without USB",
+      "hook": "Batteries, power banks, the 5V pin or the 3.3 pin: which ones are safe, and which one fries the chip?",
+      "minutes": 3,
+      "tags": [
+        "ESP32",
+        "power"
+      ],
+      "post": "Batteries, power banks, the 5V pin or the 3.3 pin? Pick a power source and where it connects, and see what’s safe for an ESP32-C3 SuperMini and what fries it.",
       "set": "esp32"
     },
     {
@@ -347,6 +395,18 @@
         "power"
       ],
       "post": "Make an ESP32-C3 run for months on a battery: deep sleep, timer and button wake, and a calculator showing what WiFi and the power LED cost you.",
+      "set": "esp32"
+    },
+    {
+      "slug": "esp32-ota-updates",
+      "title": "Updating your ESP32 over WiFi",
+      "hook": "Once the first upload is done by cable, the next ones can go over WiFi. The board keeps two copies, so a dropped update leaves the old code running.",
+      "minutes": 4,
+      "tags": [
+        "ESP32",
+        "WiFi"
+      ],
+      "post": "Update an ESP32 without plugging it in. See how over-the-air updates write into a second slot, so a dropped update leaves the old code running.",
       "set": "esp32"
     }
   ]
