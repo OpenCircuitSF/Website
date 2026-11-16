@@ -443,6 +443,13 @@ func servePostgres(cfg *config.Config) error {
 	// routes. Postgres-only, so dev mode attaches nothing and both 404.
 	apiTokensH := handlers.NewAPITokensHandler(apitokens.NewStore(pool), auditLogger)
 	settingsH.SetAPITokens(apiTokensH)
+	// #0684: expired Idempotency-Keys are swept once at startup as well as
+	// by every idempotent request, so the table does not wait on traffic.
+	if n, err := api.SweepIdempotencyKeys(ctx, pool, time.Now()); err != nil {
+		slog.Warn("api: startup idempotency sweep failed", "err", err)
+	} else if n > 0 {
+		slog.Info("api: swept expired idempotency keys", "count", n)
+	}
 	// #0675: the /api/v1 operation registry (whoami, the #0652 probe, and
 	// #0653's engagement check, and #0676's guides and guide posts, which
 	// share adminGuidePostsH). BuildV1Registry is the one list of v1
