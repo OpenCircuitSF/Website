@@ -19,6 +19,12 @@ import TinningDemo from './TinningDemo.svelte';
 import JointQuiz from './JointQuiz.svelte';
 import TipCareDemo from './TipCareDemo.svelte';
 import HeaderPinsDemo from './HeaderPinsDemo.svelte';
+// ESP32-C3: code on the board (#0670)
+import BootButtonsDemo from './BootButtonsDemo.svelte';
+import UploadDoctor from './UploadDoctor.svelte';
+import SerialOutputDemo from './SerialOutputDemo.svelte';
+import IniBuilderDemo from './IniBuilderDemo.svelte';
+import OtaDemo from './OtaDemo.svelte';
 
 afterEach(cleanup);
 
@@ -212,5 +218,72 @@ describe('guide demos', () => {
     await fireEvent.click(again);
     await tick();
     expect(document.activeElement?.textContent).toBe('Good joint');
+  });
+
+  // ESP32-C3: code on the board (#0670)
+  it('boot buttons: hold BOOT, tap RST, let go, upload, RST runs it', async () => {
+    const r = render(BootButtonsDemo);
+    expect(r.getByText('Deep sleep')).toBeTruthy();
+    const boot = r.getByRole('button', { name: 'BOOT button' });
+    const rst = r.getByRole('button', { name: 'RST button' });
+    await fireEvent.click(boot);
+    await fireEvent.click(rst);
+    expect(r.getByText('Held in reset')).toBeTruthy();
+    await fireEvent.click(rst);
+    await fireEvent.click(boot);
+    expect(r.getByText('Download mode')).toBeTruthy();
+    expect(r.getByText('/dev/cu.usbmodem101')).toBeTruthy();
+    await fireEvent.click(r.getByText('Upload'));
+    expect(r.container.textContent).toContain('Press RST to run the new code');
+    await fireEvent.click(rst);
+    await fireEvent.click(rst);
+    expect(r.getByText('Running your program')).toBeTruthy();
+  });
+
+  it('upload doctor: no port and an unknown cable ends at swapping the cable', async () => {
+    const r = render(UploadDoctor);
+    await fireEvent.click(r.getByRole('button', { name: 'No' }));
+    await fireEvent.click(r.getByRole('button', { name: 'No' }));
+    await tick();
+    const h = r.getByRole('heading', { name: 'Swap the cable' });
+    expect(document.activeElement).toBe(h);
+    await fireEvent.click(r.getByRole('button', { name: 'Start over' }));
+    expect(r.getByRole('heading', { name: /Does a new port show up/ })).toBeTruthy();
+  });
+
+  it('serial output: blank monitor until the USB flags are added', async () => {
+    const r = render(SerialOutputDemo);
+    const run = r.getByText('Upload, then watch the monitor');
+    await fireEvent.click(run);
+    const screens = r.container.querySelectorAll('.screen');
+    expect(screens[0].textContent).toBe('(nothing)');
+    expect(screens[1].textContent).toContain('Hello from setup()');
+    await fireEvent.click(r.getByRole('checkbox', { name: 'Add the USB build flags' }));
+    await fireEvent.click(run);
+    expect(screens[0].textContent).toContain('loop 1');
+    expect(screens[0].textContent).not.toContain('Hello from setup()');
+    await fireEvent.click(r.getByRole('checkbox', { name: 'Wait for the monitor in setup()' }));
+    await fireEvent.click(run);
+    expect(screens[0].textContent).toContain('Hello from setup()');
+  });
+
+  it('platformio.ini builder: esp32dev is flagged as the wrong chip', async () => {
+    const r = render(IniBuilderDemo);
+    expect(r.getAllByText('Looks good. This builds and uploads to a SuperMini.').length).toBeGreaterThan(0);
+    await fireEvent.change(r.getByRole('combobox', { name: 'board' }), { target: { value: 'esp32dev' } });
+    expect(r.getByText('Won’t work')).toBeTruthy();
+    expect(r.getByText('board = esp32dev')).toBeTruthy();
+    await fireEvent.click(r.getByText('framework = arduino'));
+    expect(r.container.textContent).toContain('arduino gives you setup(), loop()');
+  });
+
+  it('OTA: WiFi fails on a new board, works after a cable upload', async () => {
+    const r = render(OtaDemo);
+    await fireEvent.click(r.getByText('Upload over WiFi'));
+    expect(r.container.textContent).toContain('the first upload must go by cable');
+    await fireEvent.click(r.getByText('Upload by cable'));
+    await fireEvent.click(r.getByText('Upload over WiFi'));
+    expect(r.getByText('app1 · running')).toBeTruthy();
+    expect(r.getByText('v2')).toBeTruthy();
   });
 });

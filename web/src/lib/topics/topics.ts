@@ -22,6 +22,12 @@ import TinningDemo from './TinningDemo.svelte';
 import JointQuiz from './JointQuiz.svelte';
 import TipCareDemo from './TipCareDemo.svelte';
 import HeaderPinsDemo from './HeaderPinsDemo.svelte';
+// ESP32-C3: code on the board (#0670)
+import BootButtonsDemo from './BootButtonsDemo.svelte';
+import UploadDoctor from './UploadDoctor.svelte';
+import SerialOutputDemo from './SerialOutputDemo.svelte';
+import IniBuilderDemo from './IniBuilderDemo.svelte';
+import OtaDemo from './OtaDemo.svelte';
 
 /** The page body of one topic guide; its metadata comes from the catalog. */
 export interface TopicBody {
@@ -341,6 +347,102 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
     ],
     takeaway: 'Breadboard as a jig, two opposite corners, check it’s flat, then the rest.',
+  },
+  // ESP32-C3: code on the board (#0670)
+  'esp32-c3-boot-reset-buttons': {
+    demo: BootButtonsDemo,
+    tryIt: 'The code on this board went straight to sleep, so there is no port. Hold BOOT, tap RST, let go of BOOT, then upload.',
+    ideas: [
+      {
+        title: 'RST restarts',
+        body: 'RST is wired to the chip’s enable pin. While you hold it, the chip is off. When you let go, it starts from the beginning, just like unplugging it. Your code stays in flash and runs again.',
+      },
+      {
+        title: 'BOOT is GPIO9',
+        body: 'The chip checks GPIO9 at the moment it starts. Normally the pin is high and your program runs. If BOOT is held down, the pin is low and the chip goes into download mode instead: it runs nothing and just waits for new code. Pressing BOOT on its own does nothing until the next restart.',
+      },
+      {
+        title: 'When you need it',
+        body: 'Usually never: the upload tool restarts the board into download mode by itself. You need the buttons when that fails, often because the code on the board crashes, restarts or sleeps so fast that the USB port keeps vanishing. After uploading in download mode, press RST to run the new code.',
+      },
+    ],
+    takeaway: 'Hold BOOT, press and release RST, let go of BOOT, upload, then press RST.',
+  },
+  'esp32-c3-wont-upload': {
+    demo: UploadDoctor,
+    tryIt: 'Answer each question about your board. Every path ends at something to try.',
+    ideas: [
+      {
+        title: 'No port: cable first',
+        body: 'If no new port appears when you plug in, the cable is the usual suspect. Many cables carry power but no data. See “The USB cable that looks fine and isn’t”.',
+      },
+      {
+        title: 'A port, but the wrong one or a busy one',
+        body: 'Only one program can use a serial port at a time, so an open serial monitor blocks the upload. With several boards or Bluetooth ports around, check that the upload is using the port that appears when you plug this board in.',
+      },
+      {
+        title: 'A board too busy to listen',
+        body: 'If the code on the board crashes, restarts or deep sleeps right away, the USB port comes and goes and the upload can’t connect. Download mode fixes it: hold BOOT, tap RST, let go of BOOT, upload.',
+      },
+    ],
+    takeaway: 'Cable, port, monitor, then download mode. You don’t need a driver for the C3.',
+  },
+  'esp32-c3-serial-output': {
+    demo: SerialOutputDemo,
+    tryIt: 'Upload with the defaults and look at the monitor. Then add the build flags, and finally make setup() wait.',
+    ideas: [
+      {
+        title: 'Two serial ports',
+        body: 'The ESP32-C3 has a USB serial port built into the chip, on the USB-C connector, and a separate hardware serial port on GPIO21 (TX) and GPIO20 (RX). In Arduino code, Serial means the pins unless you add build_flags = -D ARDUINO_USB_MODE=1 -D ARDUINO_USB_CDC_ON_BOOT=1 to platformio.ini.',
+      },
+      {
+        title: 'Early prints get lost',
+        body: 'Every upload or reset restarts the chip, and its USB port disappears and comes back. The serial monitor takes a moment to reconnect, so anything printed in the first second can vanish. Wait for the monitor in setup(), or add delay(2000) before your first print.',
+      },
+      {
+        title: 'The baud rate doesn’t matter here',
+        body: 'Over the C3’s own USB port, data moves at USB speed whatever number you pass to Serial.begin(). Baud rate only matters on the TX and RX pins. See “Baud rate: why your serial monitor shows garbage”.',
+      },
+    ],
+    takeaway: 'Blank monitor on a C3? Add the two USB build flags and wait for the monitor in setup().',
+  },
+  'platformio-first-project': {
+    demo: IniBuilderDemo,
+    tryIt: 'Tap any line to see what it does. Then change a setting and see what breaks.',
+    ideas: [
+      {
+        title: 'One file describes the board',
+        body: 'Every PlatformIO project has a platformio.ini at the top. It says which chip, which board and which framework, so PlatformIO can download the right compiler and upload tool for you.',
+      },
+      {
+        title: 'Use the C3 DevKitM-1 entry',
+        body: 'There is no SuperMini entry in PlatformIO’s board list. board = esp32-c3-devkitm-1 is the same chip and works. Picking esp32dev, the original ESP32, builds fine and then fails to upload with “This chip is ESP32-C3 not ESP32”.',
+      },
+      {
+        title: 'Build, Upload, Monitor',
+        body: 'Your code lives in src/main.cpp. The PlatformIO toolbar has Build (✓) to compile, Upload (→) to compile and send it to the board, and Serial Monitor (the plug) to see what it prints. Libraries listed in lib_deps download on the next build.',
+      },
+    ],
+    takeaway: 'platform espressif32, board esp32-c3-devkitm-1, framework arduino, plus the two USB flags.',
+  },
+  'esp32-ota-updates': {
+    demo: OtaDemo,
+    tryIt: 'Try WiFi first. Then upload by cable, and send a few updates over WiFi. Break one with the checkboxes.',
+    ideas: [
+      {
+        title: 'Two slots',
+        body: 'The ESP32’s flash has two places for a program, app0 and app1. The default 4 MB layout already has both. The board keeps running from one while the update is written into the other. Only when the new copy arrives complete and checks out does the board switch to it and restart. If it doesn’t, nothing changes.',
+      },
+      {
+        title: 'The first upload is by cable',
+        body: 'OTA is code in your sketch: ArduinoOTA.begin() in setup() and ArduinoOTA.handle() in loop(). Set a password with ArduinoOTA.setPassword(). In platformio.ini, add upload_protocol = espota, upload_port = the board’s IP address or its name.local, and the same password as upload_flags = --auth=yourpassword. Your computer must be on the same network.',
+      },
+      {
+        title: 'Keep it listening',
+        body: 'Each new version must still call ArduinoOTA.handle() in loop(). Upload code that forgets it, hangs, or sleeps all the time, and nothing is listening for the next update. Then it’s back to the cable.',
+      },
+    ],
+    takeaway: 'First upload by cable, same network, a password, and every version keeps calling ArduinoOTA.handle().',
   },
 };
 
