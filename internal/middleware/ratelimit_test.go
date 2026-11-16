@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -65,6 +66,11 @@ func TestRateLimiterBurstThenReject(t *testing.T) {
 	}
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json; charset=utf-8" {
 		t.Fatalf("request 3: Content-Type = %q, want JSON", ct)
+	}
+	// #0674: every 429 carries Retry-After; one token per minute means the
+	// next is due in (0, 60] seconds.
+	if ra, err := strconv.Atoi(rec.Header().Get("Retry-After")); err != nil || ra < 1 || ra > 60 {
+		t.Fatalf("request 3: Retry-After = %q, want 1..60", rec.Header().Get("Retry-After"))
 	}
 }
 
