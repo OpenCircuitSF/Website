@@ -150,6 +150,12 @@ describe('audit rendering', () => {
     expect(actorLabel(auditEntry({ actor_id: 7 }))).toBe('user #7');
   });
 
+  it('labels a write made with an API key as via API key «name» (#0674)', () => {
+    const metadata = { actor: 'token:9', api_token: { id: 9, name: 'Claude Code', prefix: 'ocsf_abcdefg', created_by: 1 } };
+    expect(actorLabel(auditEntry({ actor_id: null, metadata }))).toBe('via API key «Claude Code»');
+    expect(actorLabel(auditEntry({ actor_id: null, metadata: { api_token: 'x' } }))).toBe('system');
+  });
+
   it('labels the target with type and optional id', () => {
     expect(targetLabel(auditEntry({ target_type: null }))).toBe('—');
     expect(targetLabel(auditEntry({ target_type: 'settings', target_id: null }))).toBe('settings');

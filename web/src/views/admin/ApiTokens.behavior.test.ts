@@ -8,11 +8,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ApiToken, ApiTokenList, CreatedApiToken } from '../../lib/types';
 
 const listApiTokens = vi.fn<() => Promise<ApiTokenList>>();
-const createApiToken = vi.fn<(name: string, scopes: string[]) => Promise<CreatedApiToken>>();
+const createApiToken = vi.fn<(name: string, scopes: string[], expiresAt: string | null) => Promise<CreatedApiToken>>();
 const revokeApiToken = vi.fn<(id: number) => Promise<{ token: ApiToken }>>();
 vi.mock('../../lib/api', () => ({
   listApiTokens: () => listApiTokens(),
-  createApiToken: (name: string, scopes: string[]) => createApiToken(name, scopes),
+  createApiToken: (name: string, scopes: string[], expiresAt: string | null) => createApiToken(name, scopes, expiresAt),
   revokeApiToken: (id: number) => revokeApiToken(id),
   ApiError: class ApiError extends Error {
     status: number;
@@ -37,6 +37,7 @@ function tok(over: Partial<ApiToken> = {}): ApiToken {
     created_at: '2026-11-08T20:00:00Z',
     last_used_at: null,
     revoked_at: null,
+    expires_at: null,
     ...over,
   };
 }
@@ -64,10 +65,12 @@ describe('ApiTokens (#0652)', () => {
     expect(screen.getAllByRole('button', { name: 'Revoke' })).toHaveLength(1);
   });
 
-  it('shows Never when a token has not been used', async () => {
+  it('shows Never when a token has not been used (and, #0674, never expires)', async () => {
     listApiTokens.mockResolvedValue({ tokens: [tok()] });
     render(ApiTokensView);
-    await screen.findByText('Never');
+    await screen.findByText('Home Assistant');
+    // Last used and Expires both read Never for this token.
+    expect(screen.getAllByRole('cell', { name: 'Never' })).toHaveLength(2);
   });
 
   it('creates a token, shows the secret once, and hides it after Done', async () => {
@@ -76,6 +79,7 @@ describe('ApiTokens (#0652)', () => {
     render(ApiTokensView);
     await screen.findByText('No API tokens yet.');
     await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'Home Assistant' } });
+    await fireEvent.click(screen.getByLabelText(/Read engagement/));
     await fireEvent.click(screen.getByRole('button', { name: 'Create token' }));
     await screen.findByText(SECRET);
     expect(document.body.textContent).toContain('Copy this token now. It will not be shown again.');
@@ -84,14 +88,86 @@ describe('ApiTokens (#0652)', () => {
     await waitFor(() => expect(document.body.textContent).not.toContain(SECRET));
   });
 
-  it('sends engagement:read as the only scope', async () => {
+  it('sends the ticked scope and a 90-day expiry by default (#0674)', async () => {
     listApiTokens.mockResolvedValue({ tokens: [] });
     createApiToken.mockResolvedValue({ token: tok(), secret: SECRET });
     render(ApiTokensView);
     await screen.findByText('No API tokens yet.');
+    expect((screen.getByLabelText('Expires') as HTMLSelectElement).value).toBe('90');
     await fireEvent.input(screen.getByLabelText('Name'), { target: { value: '  HA ' } });
+    await fireEvent.click(screen.getByLabelText(/Read engagement/));
+    const before = Date.now();
     await fireEvent.click(screen.getByRole('button', { name: 'Create token' }));
-    await waitFor(() => expect(createApiToken).toHaveBeenCalledWith('HA', ['engagement:read']));
+    await waitFor(() => expect(createApiToken).toHaveBeenCalled());
+    const [name, scopes, expiresAt] = createApiToken.mock.calls[0];
+    expect(name).toBe('HA');
+    expect(scopes).toEqual(['engagement:read']);
+    const days = (new Date(expiresAt as string).getTime() - before) / 86_400_000;
+    expect(days).toBeGreaterThan(89.99);
+    expect(days).toBeLessThan(90.01);
+  });
+
+  it('the Agent preset ticks every guide and event scope and Never sends null', async () => {
+    listApiTokens.mockResolvedValue({ tokens: [] });
+    createApiToken.mockResolvedValue({ token: tok(), secret: SECRET });
+    render(ApiTokensView);
+    await screen.findByText('No API tokens yet.');
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'Claude Code' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Agent (all guide and event scopes)' }));
+    expect((screen.getByLabelText(/Write events/) as HTMLInputElement).checked).toBe(true);
+    expect((screen.getByLabelText(/Read engagement/) as HTMLInputElement).checked).toBe(false);
+    await fireEvent.change(screen.getByLabelText('Expires'), { target: { value: 'never' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Create token' }));
+    await waitFor(() =>
+      expect(createApiToken).toHaveBeenCalledWith(
+        'Claude Code',
+        ['guides:read', 'guide_posts:read', 'guide_posts:write', 'events:read', 'events:write', 'venues:read'],
+        null,
+      ),
+    );
+  });
+
+  it('a custom date expires at the end of that day; a missing date is refused', async () => {
+    listApiTokens.mockResolvedValue({ tokens: [] });
+    createApiToken.mockResolvedValue({ token: tok(), secret: SECRET });
+    render(ApiTokensView);
+    await screen.findByText('No API tokens yet.');
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'HA' } });
+    await fireEvent.click(screen.getByLabelText(/Read events/));
+    await fireEvent.change(screen.getByLabelText('Expires'), { target: { value: 'custom' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Create token' }));
+    expect((await screen.findByRole('alert')).textContent).toBe('Pick an expiry date.');
+    expect(createApiToken).not.toHaveBeenCalled();
+    await fireEvent.input(screen.getByLabelText('Expiry date'), { target: { value: '2099-03-04' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Create token' }));
+    await waitFor(() =>
+      expect(createApiToken).toHaveBeenCalledWith('HA', ['events:read'], new Date(2099, 2, 4, 23, 59, 59).toISOString()),
+    );
+  });
+
+  it('refuses to create a token with no scope', async () => {
+    listApiTokens.mockResolvedValue({ tokens: [] });
+    render(ApiTokensView);
+    await screen.findByText('No API tokens yet.');
+    await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'HA' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Create token' }));
+    expect((await screen.findByRole('alert')).textContent).toBe('Choose at least one scope.');
+    expect(createApiToken).not.toHaveBeenCalled();
+  });
+
+  it('lists the expiry and marks an expired key', async () => {
+    listApiTokens.mockResolvedValue({
+      tokens: [
+        tok({ id: 1, name: 'Fresh', expires_at: '2099-01-01T00:00:00Z' }),
+        tok({ id: 2, name: 'Stale', expires_at: '2020-01-01T00:00:00Z' }),
+      ],
+    });
+    render(ApiTokensView);
+    await screen.findByText('Stale');
+    const text = document.body.textContent ?? '';
+    expect(text).toContain('Expires');
+    expect(text).toContain('Expired ');
+    expect(text).toContain('Active');
   });
 
   it('shows the name error without calling the API', async () => {

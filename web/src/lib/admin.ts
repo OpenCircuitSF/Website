@@ -100,12 +100,24 @@ export function campaignAuditFilter(campaignId: number): { targetType: string; t
 }
 
 /**
- * Render an audit entry's actor for display. A NULL actor_id means a
- * system/anonymous action (e.g. account.registration_started); otherwise show
- * the numeric user id.
+ * Render an audit entry's actor for display. A write made with an API key
+ * (#0674) carries metadata.api_token and shows "via API key «name»". Otherwise
+ * a NULL actor_id means a system/anonymous action (e.g.
+ * account.registration_started), and a set one shows the numeric user id.
  */
 export function actorLabel(entry: AuditEntry): string {
+  const name = apiTokenName(entry.metadata);
+  if (name !== null) return `via API key «${name}»`;
   return entry.actor_id === null ? 'system' : `user #${entry.actor_id}`;
+}
+
+/** The API key name in an audit row's metadata.api_token, or null. */
+function apiTokenName(metadata: unknown): string | null {
+  if (metadata === null || typeof metadata !== 'object') return null;
+  const tok = (metadata as Record<string, unknown>).api_token;
+  if (tok === null || typeof tok !== 'object') return null;
+  const name = (tok as Record<string, unknown>).name;
+  return typeof name === 'string' ? name : null;
 }
 
 /**

@@ -1,6 +1,7 @@
-// Package apitokens owns the api_tokens table (#0652): admin-created, scoped,
-// read-only bearer tokens that let a machine such as Home Assistant read the
-// /api/v1/ routes. Only the SHA-256 of a token is ever stored.
+// Package apitokens owns the api_tokens table (#0652): admin-created, scoped
+// bearer tokens that let a machine such as Home Assistant or an MCP client
+// call the /api/v1/ routes. #0674 added an optional expiry and write scopes.
+// Only the SHA-256 of a token is ever stored.
 package apitokens
 
 import (
@@ -23,18 +24,45 @@ const (
 	// DisplayPrefixLength is how many leading characters are kept as the
 	// non-secret prefix shown in the admin list.
 	DisplayPrefixLength = 12
-	// ScopeEngagementRead lets a token read the engagement endpoint (#0653).
-	ScopeEngagementRead = "engagement:read"
 	// LastUsedInterval is the minimum gap between last_used_at writes for
 	// one token, so polling never becomes a write per request.
 	LastUsedInterval = time.Minute
 )
 
-// KnownScopes is every scope a token may carry; the migration's CHECK must match.
-var KnownScopes = []string{ScopeEngagementRead}
+// Scopes (#0674). Each names one resource and one access level; a write
+// scope also satisfies the read scope of the same resource (ScopeSatisfies).
+const (
+	// ScopeEngagementRead lets a token read the engagement endpoint (#0653).
+	ScopeEngagementRead = "engagement:read"
+	// ScopeGuidesRead lets a token read guides.
+	ScopeGuidesRead = "guides:read"
+	// ScopeGuidePostsRead lets a token read guide posts.
+	ScopeGuidePostsRead = "guide_posts:read"
+	// ScopeGuidePostsWrite lets a token create, schedule and change guide posts.
+	ScopeGuidePostsWrite = "guide_posts:write"
+	// ScopeEventsRead lets a token read events.
+	ScopeEventsRead = "events:read"
+	// ScopeEventsWrite lets a token create and update events.
+	ScopeEventsWrite = "events:write"
+	// ScopeVenuesRead lets a token read venues.
+	ScopeVenuesRead = "venues:read"
+)
+
+// KnownScopes is every scope a token may carry. migrations/000053's
+// api_tokens_scopes_check array must hold exactly this set (internal/db's
+// TestAPITokenScopesMatchMigration).
+var KnownScopes = []string{
+	ScopeEngagementRead,
+	ScopeGuidesRead,
+	ScopeGuidePostsRead,
+	ScopeGuidePostsWrite,
+	ScopeEventsRead,
+	ScopeEventsWrite,
+	ScopeVenuesRead,
+}
 
 var (
-	// ErrNotFound covers an unknown, malformed or revoked token alike.
+	// ErrNotFound covers an unknown, malformed, revoked or expired token alike.
 	ErrNotFound = errors.New("apitokens: token not found")
 	// ErrAlreadyRevoked is returned when revoking a token twice.
 	ErrAlreadyRevoked = errors.New("apitokens: token already revoked")
@@ -66,4 +94,16 @@ func LooksLikeToken(s string) bool {
 // IsKnownScope reports whether s is in KnownScopes.
 func IsKnownScope(s string) bool {
 	return slices.Contains(KnownScopes, s)
+}
+
+// ScopeSatisfies reports whether a token granted these scopes may use a route
+// requiring required. A scope satisfies itself, and "R:write" satisfies
+// "R:read" for the same resource R. An empty required scope is satisfied by
+// any token.
+func ScopeSatisfies(granted []string, required string) bool {
+	if required == "" || slices.Contains(granted, required) {
+		return true
+	}
+	resource, ok := strings.CutSuffix(required, ":read")
+	return ok && resource != "" && slices.Contains(granted, resource+":write")
 }

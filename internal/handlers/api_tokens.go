@@ -17,7 +17,7 @@ import (
 // apiTokenStore is the narrow store APITokensHandler needs (#0652);
 // *apitokens.Store satisfies it.
 type apiTokenStore interface {
-	Create(ctx context.Context, name string, scopes []string, createdBy *int64, now time.Time) (apitokens.Token, string, error)
+	Create(ctx context.Context, name string, scopes []string, createdBy *int64, expiresAt *time.Time, now time.Time) (apitokens.Token, string, error)
 	List(ctx context.Context) ([]apitokens.Token, error)
 	Revoke(ctx context.Context, id int64, now time.Time) (apitokens.Token, error)
 	Resolve(ctx context.Context, secret string, now time.Time) (apitokens.Token, error)
@@ -75,6 +75,7 @@ type apiTokenView struct {
 	CreatedAt  time.Time  `json:"created_at"`
 	LastUsedAt *time.Time `json:"last_used_at"`
 	RevokedAt  *time.Time `json:"revoked_at"`
+	ExpiresAt  *time.Time `json:"expires_at"`
 }
 
 func toAPITokenView(t apitokens.Token) apiTokenView {
@@ -83,7 +84,7 @@ func toAPITokenView(t apitokens.Token) apiTokenView {
 		scopes = []string{}
 	}
 	return apiTokenView{ID: t.ID, Name: t.Name, Prefix: t.Prefix, Scopes: scopes,
-		CreatedAt: t.CreatedAt, LastUsedAt: t.LastUsedAt, RevokedAt: t.RevokedAt}
+		CreatedAt: t.CreatedAt, LastUsedAt: t.LastUsedAt, RevokedAt: t.RevokedAt, ExpiresAt: t.ExpiresAt}
 }
 
 // List handles GET /admin/api-tokens.
@@ -100,9 +101,12 @@ func (h *APITokensHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"tokens": views})
 }
 
+// createAPITokenRequest is POST /admin/api-tokens's body. ExpiresAt is RFC
+// 3339 and optional (#0674): null or absent makes a token that never expires.
 type createAPITokenRequest struct {
-	Name   string   `json:"name"`
-	Scopes []string `json:"scopes"`
+	Name      string     `json:"name"`
+	Scopes    []string   `json:"scopes"`
+	ExpiresAt *time.Time `json:"expires_at"`
 }
 
 // Create handles POST /admin/api-tokens. The secret is in this response only.
@@ -147,7 +151,12 @@ func (h *APITokensHandler) Create(w http.ResponseWriter, r *http.Request) {
 			scopes = append(scopes, s)
 		}
 	}
-	tok, secret, err := h.store.Create(r.Context(), name, scopes, &u.ID, h.now())
+	now := h.now()
+	if req.ExpiresAt != nil && !req.ExpiresAt.After(now) {
+		writeError(w, http.StatusBadRequest, "expiry must be in the future")
+		return
+	}
+	tok, secret, err := h.store.Create(r.Context(), name, scopes, &u.ID, req.ExpiresAt, now)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
@@ -158,7 +167,7 @@ func (h *APITokensHandler) Create(w http.ResponseWriter, r *http.Request) {
 			Action:     audit.ActionAPITokenCreated,
 			TargetType: audit.TargetAPIToken,
 			TargetID:   &tok.ID,
-			Metadata:   map[string]any{"name": tok.Name, "prefix": tok.Prefix, "scopes": tok.Scopes},
+			Metadata:   map[string]any{"name": tok.Name, "prefix": tok.Prefix, "scopes": tok.Scopes, "expires_at": tok.ExpiresAt},
 			IP:         clientIP(r),
 		})
 	}

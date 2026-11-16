@@ -207,7 +207,7 @@ func TestEngagementAPI_WithTokenThroughMiddleware(t *testing.T) {
 	clean := func() { pool.Exec(context.Background(), `DELETE FROM api_tokens`) }
 	t.Cleanup(clean)
 	clean()
-	_, secret, err := apitokens.NewStore(pool).Create(context.Background(), "HA", []string{apitokens.ScopeEngagementRead}, nil, time.Now())
+	_, secret, err := apitokens.NewStore(pool).Create(context.Background(), "HA", []string{apitokens.ScopeEngagementRead}, nil, nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

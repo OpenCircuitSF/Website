@@ -1,8 +1,11 @@
 package middleware
 
 import (
+	"math"
 	"net/http"
+	"strconv"
 	"sync"
+	"time"
 
 	"golang.org/x/time/rate"
 )
@@ -60,20 +63,53 @@ func (rl *RateLimiter) limiterFor(ip string) *rate.Limiter {
 
 // Middleware returns an http middleware that rejects requests from a client IP
 // once that IP exceeds the configured rate, responding 429 Too Many Requests
-// with a {"error":"rate_limit_exceeded"} JSON body. Requests within the limit
-// are passed to next unchanged.
+// with a {"error":"rate_limit_exceeded"} JSON body and a Retry-After header.
+// Requests within the limit are passed to next unchanged.
 //
 // The client IP is derived by ClientIP (this package, clientip.go) — the
 // single security-relevant X-Forwarded-For parse shared with
 // internal/handlers.clientIP, so every component buckets/attributes clients
 // identically. See ClientIP's doc comment for the trust model (#0077).
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := ClientIP(r)
-		if !rl.limiterFor(ip).Allow() {
-			writeJSONError(w, http.StatusTooManyRequests, "rate_limit_exceeded")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+	return rl.MiddlewareByKey(ClientIP)(next)
+}
+
+// MiddlewareByKey is Middleware with the bucket chosen by key instead of the
+// client IP (#0674 buckets /api/v1 by API token). A request over the limit
+// gets 429 with Retry-After: the whole seconds, rounded up, until one more
+// request would be allowed.
+func (rl *RateLimiter) MiddlewareByKey(key func(*http.Request) string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if wait, ok := rl.allow(key(r), time.Now()); !ok {
+				w.Header().Set("Retry-After", strconv.Itoa(retryAfterSeconds(wait)))
+				writeJSONError(w, http.StatusTooManyRequests, "rate_limit_exceeded")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// allow spends one token from key's bucket. When the bucket is empty it spends
+// nothing and returns how long until a token is available.
+func (rl *RateLimiter) allow(key string, now time.Time) (time.Duration, bool) {
+	res := rl.limiterFor(key).ReserveN(now, 1)
+	if !res.OK() {
+		return time.Minute, false
+	}
+	if d := res.DelayFrom(now); d > 0 {
+		res.CancelAt(now)
+		return d, false
+	}
+	return 0, true
+}
+
+// retryAfterSeconds rounds d up to whole seconds, at least 1.
+func retryAfterSeconds(d time.Duration) int {
+	n := int(math.Ceil(d.Seconds()))
+	if n < 1 {
+		n = 1
+	}
+	return n
 }

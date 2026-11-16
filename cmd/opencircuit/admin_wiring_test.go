@@ -298,11 +298,11 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// every admin route and must be refused (criterion 4); the second is the
 	// {id} target the admin case's revoke consumes.
 	apiTokenStore := apitokens.NewStore(pool)
-	bearerTok, bearerSecret, err := apiTokenStore.Create(context.Background(), "wiring bearer", []string{apitokens.ScopeEngagementRead}, nil, time.Now())
+	bearerTok, bearerSecret, err := apiTokenStore.Create(context.Background(), "wiring bearer", []string{apitokens.ScopeEngagementRead}, nil, nil, time.Now())
 	if err != nil {
 		t.Fatalf("seed bearer api token: %v", err)
 	}
-	targetAPIToken, _, err := apiTokenStore.Create(context.Background(), "wiring target", []string{apitokens.ScopeEngagementRead}, nil, time.Now())
+	targetAPIToken, _, err := apiTokenStore.Create(context.Background(), "wiring target", []string{apitokens.ScopeEngagementRead}, nil, nil, time.Now())
 	if err != nil {
 		t.Fatalf("seed target api token: %v", err)
 	}
@@ -531,6 +531,30 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	}
 	if got := v1(http.MethodGet, engURL, "", "wiring-admin-token"); got != http.StatusUnauthorized {
 		t.Errorf("GET /api/v1/engagement with admin session cookie = %d, want 401", got)
+	}
+	// #0674: the real mux rate-limits /api/v1 per token. A fresh token gets
+	// at least its full minute's budget, then a 429; the bucket refills
+	// during the loop, so the count is a floor, not exact.
+	_, rateSecret, err := apiTokenStore.Create(context.Background(), "wiring rate", []string{apitokens.ScopeEngagementRead}, nil, nil, time.Now())
+	if err != nil {
+		t.Fatalf("seed rate api token: %v", err)
+	}
+	okCount, limited := 0, false
+	for i := 0; i < 2*middleware.APIv1RequestsPerMinute && !limited; i++ {
+		switch got := v1(http.MethodGet, v1URL, rateSecret, ""); got {
+		case http.StatusOK:
+			okCount++
+		case http.StatusTooManyRequests:
+			limited = true
+		default:
+			t.Fatalf("rate loop request %d = %d", i, got)
+		}
+	}
+	if !limited || okCount < middleware.APIv1RequestsPerMinute {
+		t.Errorf("rate limit: %d OK before 429 (limited=%v), want >= %d then 429", okCount, limited, middleware.APIv1RequestsPerMinute)
+	}
+	if got := v1(http.MethodGet, v1URL, bearerSecret, ""); got != http.StatusOK {
+		t.Errorf("another token after one was throttled = %d, want 200", got)
 	}
 	if _, err := apiTokenStore.Revoke(context.Background(), bearerTok.ID, time.Now()); err != nil {
 		t.Fatalf("revoke bearer token: %v", err)

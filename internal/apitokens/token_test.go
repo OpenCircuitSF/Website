@@ -63,3 +63,45 @@ func TestLooksLikeToken(t *testing.T) {
 		}
 	}
 }
+
+func TestScopeSatisfies(t *testing.T) {
+	cases := []struct {
+		granted  []string
+		required string
+		want     bool
+	}{
+		{[]string{ScopeEventsRead}, ScopeEventsRead, true},
+		{[]string{ScopeEventsWrite}, ScopeEventsRead, true},      // write implies read
+		{[]string{ScopeEventsRead}, ScopeEventsWrite, false},     // read never implies write
+		{[]string{ScopeGuidePostsWrite}, ScopeGuidesRead, false}, // a different resource
+		{[]string{ScopeGuidePostsWrite}, ScopeGuidePostsRead, true},
+		{[]string{ScopeEventsWrite}, ScopeVenuesRead, false},
+		{nil, ScopeEngagementRead, false},
+		{nil, "", true},
+		{[]string{":write"}, ":read", false}, // an empty resource never matches
+	}
+	for _, c := range cases {
+		if got := ScopeSatisfies(c.granted, c.required); got != c.want {
+			t.Errorf("ScopeSatisfies(%v, %q) = %v, want %v", c.granted, c.required, got, c.want)
+		}
+	}
+}
+
+func TestKnownScopes_ShapeAndUnique(t *testing.T) {
+	seen := map[string]bool{}
+	for _, s := range KnownScopes {
+		if seen[s] {
+			t.Errorf("duplicate scope %q", s)
+		}
+		seen[s] = true
+		if !strings.HasSuffix(s, ":read") && !strings.HasSuffix(s, ":write") {
+			t.Errorf("scope %q is not resource:read or resource:write", s)
+		}
+		if !IsKnownScope(s) {
+			t.Errorf("IsKnownScope(%q) = false", s)
+		}
+	}
+	if IsKnownScope("admin:write") {
+		t.Error("IsKnownScope(admin:write) = true")
+	}
+}

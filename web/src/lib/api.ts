@@ -1607,9 +1607,9 @@ export function listApiTokens(): Promise<ApiTokenList> {
   return apiGet<ApiTokenList>('/admin/api-tokens');
 }
 
-/** Creates an API token; the response's secret is shown once. */
-export function createApiToken(name: string, scopes: string[]): Promise<CreatedApiToken> {
-  return apiPost<CreatedApiToken>('/admin/api-tokens', { name, scopes });
+/** Creates an API token; the response's secret is shown once. A null expiresAt never expires. */
+export function createApiToken(name: string, scopes: string[], expiresAt: string | null): Promise<CreatedApiToken> {
+  return apiPost<CreatedApiToken>('/admin/api-tokens', { name, scopes, expires_at: expiresAt });
 }
 
 /** Revokes an API token; it stops working on its next request. */

@@ -14,7 +14,7 @@ func TestStore_CreateStoresOnlyHash(t *testing.T) {
 	pool := testPool(t)
 	s := NewStore(pool)
 	ctx := context.Background()
-	tok, secret, err := s.Create(ctx, "Home Assistant", []string{ScopeEngagementRead}, nil, t0)
+	tok, secret, err := s.Create(ctx, "Home Assistant", []string{ScopeEngagementRead}, nil, nil, t0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +41,7 @@ func TestStore_CreateStoresOnlyHash(t *testing.T) {
 func TestStore_ResolveValid(t *testing.T) {
 	s := NewStore(testPool(t))
 	ctx := context.Background()
-	tok, secret, err := s.Create(ctx, "HA", []string{ScopeEngagementRead}, nil, t0)
+	tok, secret, err := s.Create(ctx, "HA", []string{ScopeEngagementRead}, nil, nil, t0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestStore_ResolveUnknownAndMalformed(t *testing.T) {
 func TestStore_RevokeStopsResolve(t *testing.T) {
 	s := NewStore(testPool(t))
 	ctx := context.Background()
-	tok, secret, _ := s.Create(ctx, "HA", []string{ScopeEngagementRead}, nil, t0)
+	tok, secret, _ := s.Create(ctx, "HA", []string{ScopeEngagementRead}, nil, nil, t0)
 	r, err := s.Revoke(ctx, tok.ID, t0)
 	if err != nil || r.RevokedAt == nil {
 		t.Fatalf("revoke: %v %+v", err, r)
@@ -81,7 +81,7 @@ func TestStore_RevokeStopsResolve(t *testing.T) {
 func TestStore_RevokeTwiceAndUnknown(t *testing.T) {
 	s := NewStore(testPool(t))
 	ctx := context.Background()
-	tok, _, _ := s.Create(ctx, "HA", []string{ScopeEngagementRead}, nil, t0)
+	tok, _, _ := s.Create(ctx, "HA", []string{ScopeEngagementRead}, nil, nil, t0)
 	if _, err := s.Revoke(ctx, tok.ID, t0); err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestStore_LastUsedThrottle(t *testing.T) {
 	pool := testPool(t)
 	s := NewStore(pool)
 	ctx := context.Background()
-	tok, secret, _ := s.Create(ctx, "HA", []string{ScopeEngagementRead}, nil, t0)
+	tok, secret, _ := s.Create(ctx, "HA", []string{ScopeEngagementRead}, nil, nil, t0)
 	read := func() time.Time {
 		var v time.Time
 		if err := pool.QueryRow(ctx, `SELECT last_used_at FROM api_tokens WHERE id=$1`, tok.ID).Scan(&v); err != nil {
@@ -124,9 +124,9 @@ func TestStore_LastUsedThrottle(t *testing.T) {
 func TestStore_ListOrder(t *testing.T) {
 	s := NewStore(testPool(t))
 	ctx := context.Background()
-	a, _, _ := s.Create(ctx, "old", []string{ScopeEngagementRead}, nil, t0)
-	b, _, _ := s.Create(ctx, "new", []string{ScopeEngagementRead}, nil, t0.Add(time.Hour))
-	c, _, _ := s.Create(ctx, "revoked-newest", []string{ScopeEngagementRead}, nil, t0.Add(2*time.Hour))
+	a, _, _ := s.Create(ctx, "old", []string{ScopeEngagementRead}, nil, nil, t0)
+	b, _, _ := s.Create(ctx, "new", []string{ScopeEngagementRead}, nil, nil, t0.Add(time.Hour))
+	c, _, _ := s.Create(ctx, "revoked-newest", []string{ScopeEngagementRead}, nil, nil, t0.Add(2*time.Hour))
 	if _, err := s.Revoke(ctx, c.ID, t0.Add(3*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,76 @@ func TestStore_ListOrder(t *testing.T) {
 
 func TestStore_CreateRejectsUnknownScope(t *testing.T) {
 	s := NewStore(testPool(t))
-	if _, _, err := s.Create(context.Background(), "HA", []string{"admin:write"}, nil, t0); err == nil {
+	if _, _, err := s.Create(context.Background(), "HA", []string{"admin:write"}, nil, nil, t0); err == nil {
 		t.Fatal("insert with admin:write succeeded")
+	}
+}
+
+// TestStore_ResolveExpiry (#0674): a token resolves before expires_at and is
+// ErrNotFound — the same error as a revoked token — from expires_at on.
+func TestStore_ResolveExpiry(t *testing.T) {
+	s := NewStore(testPool(t))
+	ctx := context.Background()
+	exp := t0.Add(24 * time.Hour)
+	tok, secret, err := s.Create(ctx, "agent", []string{ScopeEventsWrite}, nil, &exp, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok.ExpiresAt == nil || !tok.ExpiresAt.Equal(exp) {
+		t.Fatalf("created ExpiresAt %v", tok.ExpiresAt)
+	}
+	got, err := s.Resolve(ctx, secret, exp.Add(-time.Second))
+	if err != nil {
+		t.Fatalf("before expiry: %v", err)
+	}
+	if got.ExpiresAt == nil || !got.ExpiresAt.Equal(exp) {
+		t.Fatalf("resolved ExpiresAt %v", got.ExpiresAt)
+	}
+	for _, at := range []time.Time{exp, exp.Add(time.Hour)} {
+		if _, err := s.Resolve(ctx, secret, at); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("Resolve at %v: err %v, want ErrNotFound", at, err)
+		}
+	}
+	list, err := s.List(ctx)
+	if err != nil || len(list) != 1 || list[0].ExpiresAt == nil || !list[0].ExpiresAt.Equal(exp) {
+		t.Fatalf("List %+v err %v", list, err)
+	}
+}
+
+// TestStore_NoExpiryNeverExpires: a nil expiry resolves far in the future.
+func TestStore_NoExpiryNeverExpires(t *testing.T) {
+	s := NewStore(testPool(t))
+	ctx := context.Background()
+	tok, secret, err := s.Create(ctx, "HA", []string{ScopeEngagementRead}, nil, nil, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok.ExpiresAt != nil {
+		t.Fatalf("ExpiresAt %v", tok.ExpiresAt)
+	}
+	if _, err := s.Resolve(ctx, secret, t0.AddDate(50, 0, 0)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestStore_CreateRejectsPastExpiry: api_tokens_expires_after_created.
+func TestStore_CreateRejectsPastExpiry(t *testing.T) {
+	s := NewStore(testPool(t))
+	past := t0.Add(-time.Minute)
+	if _, _, err := s.Create(context.Background(), "HA", []string{ScopeEngagementRead}, nil, &past, t0); err == nil {
+		t.Fatal("insert with an expiry before created_at succeeded")
+	}
+}
+
+// TestStore_CreateAcceptsEveryKnownScope proves the live CHECK admits the
+// whole Go set (internal/db's guard compares the migration text).
+func TestStore_CreateAcceptsEveryKnownScope(t *testing.T) {
+	s := NewStore(testPool(t))
+	tok, _, err := s.Create(context.Background(), "agent", KnownScopes, nil, nil, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tok.Scopes) != len(KnownScopes) {
+		t.Fatalf("scopes %v", tok.Scopes)
 	}
 }

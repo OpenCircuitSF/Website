@@ -60,14 +60,15 @@ When nothing changed, `summary` reads exactly:
 2. Open **Settings**, then the **API tokens** section. The direct link is
    `https://www.opencircuitsf.com/admin#/settings?section=api`.
 3. Under **Name**, type `Home Assistant`.
-4. The form shows **Access: Read engagement (engagement:read)**. That is the
-   only scope today, and it is applied automatically.
+4. Under **Expires**, keep **90 days** or pick another length. **Never**
+   makes a token that does not expire. Under **Scopes**, tick only
+   **Read engagement** (`engagement:read`).
 5. Click **Create token**.
 6. A box appears: **Copy this token now. It will not be shown again.** Click
    **Copy**, then **Done**.
 7. The new row shows **Name**, **Access**, **Prefix** (the first 12
    characters, `ocsf_…`), **Created**, **Last used** (`Never` until the token
-   is first used, then updated at most about once a minute) and **Status**
+   is first used, then updated at most about once a minute), **Expires** and **Status**
    (`Active`).
 
 Tokens start with `ocsf_` and are 48 characters long.
@@ -194,8 +195,9 @@ unset OCSF_TOKEN
 
 | What you see | Body | Cause | Do this |
 |---|---|---|---|
-| `401` | `{"error":"unauthenticated"}`, with `WWW-Authenticate: Bearer realm="opencircuitsf"` | Any of these: no `Authorization` header, a missing `Bearer ` prefix, a mistyped or truncated token, an unknown token, a revoked token. The response never says which. | Check that `secrets.yaml` has `Bearer ` and the whole 48-character `ocsf_…` value. Run the probe with curl. In Settings → API tokens, check that the row's Status is `Active`. If the token is lost or revoked, create a new one (section 8). |
-| `403` | `{"error":"forbidden"}` | The token is valid but lacks `engagement:read`. | The probe's `scopes` shows what the token has. Create a new one. Every token the Settings form makes has this scope. |
+| `401` | `{"error":"unauthenticated"}`, with `WWW-Authenticate: Bearer realm="opencircuitsf"` | Any of these: no `Authorization` header, a missing `Bearer ` prefix, a mistyped or truncated token, an unknown token, a revoked token, an expired token. The response never says which. | Check that `secrets.yaml` has `Bearer ` and the whole 48-character `ocsf_…` value. Run the probe with curl. In Settings → API tokens, check that the row's Status is `Active`. If the token is lost or revoked, create a new one (section 8). |
+| `403` | `{"error":"forbidden"}` | The token is valid but lacks `engagement:read`. | The probe's `scopes` shows what the token has. Create a new one. Tick **Read engagement** when you create it. |
+| `429` | `{"error":"rate_limit_exceeded"}`, with `Retry-After` | The token made more than 120 requests in a minute. The sensor's polling never comes close. | Wait the number of seconds `Retry-After` gives. Check that nothing else is using the same token. |
 | `400` | `{"error":"<message>"}` | Only the optional `hours` and `since` parameters cause this. The messages are listed below. | Remove the parameter, or fix it as the message says. The sensor above sends neither. |
 | `400` with `since must be an RFC 3339 time` for a time that looks right | `{"error":"since must be an RFC 3339 time"}` | The time has an offset like `+00:00` with an unencoded `+`. The `+` is read as a space. | Write the offset as `%2B00:00`, or use a `Z` time (section 1). |
 | `404` | — | The URL is mistyped, or the server predates this feature. | Check `resource:`. Make sure the site has been deployed with `#0653`. |
@@ -235,8 +237,9 @@ To rotate without a gap:
 5. Revoke the old row.
 
 Rotate whenever the token may have leaked: pasted somewhere, in a backup, or
-in a shared config repo. Tokens don't expire, so otherwise rotate as often as
-you like.
+in a shared config repo. A token with an expiry stops working at that moment
+with the same `401` as a revoked one, so create its replacement before then. A
+token created with **Never** never expires.
 
 ## 9. References
 

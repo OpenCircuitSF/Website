@@ -20,6 +20,7 @@ type Token struct {
 	CreatedAt  time.Time
 	LastUsedAt *time.Time
 	RevokedAt  *time.Time
+	ExpiresAt  *time.Time // nil = never expires (#0674)
 }
 
 // Store is the Postgres store for api_tokens.
@@ -28,17 +29,19 @@ type Store struct{ pool *pgxpool.Pool }
 // NewStore returns a Store over pool.
 func NewStore(pool *pgxpool.Pool) *Store { return &Store{pool: pool} }
 
-const tokenColumns = `id, name, display_prefix, scopes, created_by, created_at, last_used_at, revoked_at`
+const tokenColumns = `id, name, display_prefix, scopes, created_by, created_at, last_used_at, revoked_at, expires_at`
 
 func scanToken(row pgx.Row) (Token, error) {
 	var t Token
-	err := row.Scan(&t.ID, &t.Name, &t.Prefix, &t.Scopes, &t.CreatedBy, &t.CreatedAt, &t.LastUsedAt, &t.RevokedAt)
+	err := row.Scan(&t.ID, &t.Name, &t.Prefix, &t.Scopes, &t.CreatedBy, &t.CreatedAt, &t.LastUsedAt, &t.RevokedAt, &t.ExpiresAt)
 	return t, err
 }
 
 // Create generates a token, stores its hash and display prefix, and returns
-// the row and the secret. The secret is returned once and never stored.
-func (s *Store) Create(ctx context.Context, name string, scopes []string, createdBy *int64, now time.Time) (Token, string, error) {
+// the row and the secret. The secret is returned once and never stored. A nil
+// expiresAt makes a token that never expires; a non-nil one must be after now
+// (api_tokens_expires_after_created).
+func (s *Store) Create(ctx context.Context, name string, scopes []string, createdBy *int64, expiresAt *time.Time, now time.Time) (Token, string, error) {
 	secret, err := Generate()
 	if err != nil {
 		return Token{}, "", fmt.Errorf("apitokens: generate: %w", err)
@@ -49,11 +52,12 @@ func (s *Store) Create(ctx context.Context, name string, scopes []string, create
 		Scopes:    scopes,
 		CreatedBy: createdBy,
 		CreatedAt: now,
+		ExpiresAt: expiresAt,
 	}
 	err = s.pool.QueryRow(ctx,
-		`INSERT INTO api_tokens (name, token_hash, display_prefix, scopes, created_by, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-		name, Hash(secret), t.Prefix, scopes, createdBy, now).Scan(&t.ID)
+		`INSERT INTO api_tokens (name, token_hash, display_prefix, scopes, created_by, created_at, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+		name, Hash(secret), t.Prefix, scopes, createdBy, now, expiresAt).Scan(&t.ID)
 	if err != nil {
 		return Token{}, "", fmt.Errorf("apitokens: create: %w", err)
 	}
@@ -102,15 +106,17 @@ func (s *Store) Revoke(ctx context.Context, id int64, now time.Time) (Token, err
 }
 
 // Resolve looks up an active token by the hash of secret. A malformed,
-// unknown or revoked token gives ErrNotFound. last_used_at is written at most
+// unknown, revoked or expired (now >= expires_at) token gives ErrNotFound, so
+// callers cannot tell the cases apart. last_used_at is written at most
 // once per LastUsedInterval.
 func (s *Store) Resolve(ctx context.Context, secret string, now time.Time) (Token, error) {
 	if !LooksLikeToken(secret) {
 		return Token{}, ErrNotFound
 	}
 	t, err := scanToken(s.pool.QueryRow(ctx,
-		`SELECT `+tokenColumns+` FROM api_tokens WHERE token_hash = $1 AND revoked_at IS NULL`,
-		Hash(secret)))
+		`SELECT `+tokenColumns+` FROM api_tokens WHERE token_hash = $1 AND revoked_at IS NULL
+		   AND (expires_at IS NULL OR expires_at > $2)`,
+		Hash(secret), now))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Token{}, ErrNotFound
 	}

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -166,7 +167,7 @@ func TestAPITokens_CreateAndRevokeAudited(t *testing.T) {
 		t.Fatalf("revoke: %d %s", code, b)
 	}
 	for _, want := range []struct{ action, keys string }{
-		{audit.ActionAPITokenCreated, "name,prefix,scopes"},
+		{audit.ActionAPITokenCreated, "expires_at,name,prefix,scopes"},
 		{audit.ActionAPITokenRevoked, "name,prefix"},
 	} {
 		tt, id, m, raw := e.auditRow(t, want.action)
@@ -263,5 +264,73 @@ func TestAPITokens_AddV1RoutePanicsOutsidePrefix(t *testing.T) {
 			}()
 			h.AddV1Route(c.path, c.scope, http.NotFoundHandler())
 		}()
+	}
+}
+
+// TestAPITokens_CreateWithExpiryAndWriteScopes (#0674): expires_at round-trips
+// through create and list; agent scopes are accepted.
+func TestAPITokens_CreateWithExpiryAndWriteScopes(t *testing.T) {
+	e := newAPITokEnv(t)
+	exp := time.Now().Add(90 * 24 * time.Hour).UTC().Truncate(time.Second)
+	body := `{"name":"Agent","scopes":["guide_posts:write","events:write","guides:read"],"expires_at":"` + exp.Format(time.RFC3339) + `"}`
+	code, b := e.admin(t, "POST", "/admin/api-tokens", body)
+	if code != http.StatusCreated {
+		t.Fatalf("create: %d %s", code, b)
+	}
+	var c struct {
+		Token struct {
+			Scopes    []string   `json:"scopes"`
+			ExpiresAt *time.Time `json:"expires_at"`
+		} `json:"token"`
+	}
+	if err := json.Unmarshal(b, &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.Token.ExpiresAt == nil || !c.Token.ExpiresAt.Equal(exp) || len(c.Token.Scopes) != 3 {
+		t.Fatalf("created %+v", c.Token)
+	}
+	_, list := e.admin(t, "GET", "/admin/api-tokens", "")
+	var l struct {
+		Tokens []struct {
+			ExpiresAt *time.Time `json:"expires_at"`
+		} `json:"tokens"`
+	}
+	if err := json.Unmarshal(list, &l); err != nil || len(l.Tokens) != 1 || l.Tokens[0].ExpiresAt == nil || !l.Tokens[0].ExpiresAt.Equal(exp) {
+		t.Fatalf("list expires_at: %s (err %v)", list, err)
+	}
+	// A token with no expiry lists expires_at as null.
+	e.create(t, "Forever")
+	if _, list := e.admin(t, "GET", "/admin/api-tokens", ""); !bytes.Contains(list, []byte(`"expires_at":null`)) {
+		t.Fatalf("list missing null expires_at: %s", list)
+	}
+}
+
+func TestAPITokens_CreateRejectsPastExpiry(t *testing.T) {
+	e := newAPITokEnv(t)
+	past := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	code, b := e.admin(t, "POST", "/admin/api-tokens", `{"name":"HA","scopes":["engagement:read"],"expires_at":"`+past+`"}`)
+	if code != http.StatusBadRequest || !bytes.Contains(b, []byte("expiry must be in the future")) {
+		t.Fatalf("%d %s", code, b)
+	}
+	code, _ = e.admin(t, "POST", "/admin/api-tokens", `{"name":"HA","scopes":["engagement:read"],"expires_at":"not a date"}`)
+	if code != http.StatusBadRequest {
+		t.Fatalf("malformed expiry: %d", code)
+	}
+}
+
+// TestAPITokens_ExpiredTokenGets401 runs the real store and middleware: once
+// a token's expires_at passes, /api/v1/token answers 401.
+func TestAPITokens_ExpiredTokenGets401(t *testing.T) {
+	e := newAPITokEnv(t)
+	c := e.create(t, "HA")
+	if code := e.bearer(t, c.Secret); code != http.StatusOK {
+		t.Fatalf("fresh token: %d", code)
+	}
+	if _, err := e.pool.Exec(context.Background(),
+		`UPDATE api_tokens SET created_at = now() - interval '2 days', expires_at = now() - interval '1 day' WHERE id = $1`, c.Token.ID); err != nil {
+		t.Fatal(err)
+	}
+	if code := e.bearer(t, c.Secret); code != http.StatusUnauthorized {
+		t.Fatalf("expired token: %d", code)
 	}
 }

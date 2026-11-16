@@ -1266,6 +1266,8 @@ export interface ApiToken {
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
+  /** #0674: null means the token never expires. */
+  expires_at: string | null;
 }
 
 export interface ApiTokenList {

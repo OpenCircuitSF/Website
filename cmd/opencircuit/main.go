@@ -1849,10 +1849,13 @@ func mountAndServe(
 
 	// Token-authenticated /api/v1/ routes (#0652): GET only, token only,
 	// never a session. The method is fixed here so a token route can never
-	// write; #0653 adds its route with AddV1Route.
+	// write; #0653 adds its route with AddV1Route. #0674: one limiter shared
+	// by every v1 route gives each token one budget (429 + Retry-After past
+	// it); it sits inside RequireAPIToken, which puts the token in context.
 	if t := settingsH.APITokens(); t != nil {
+		v1Limit := middleware.APITokenRateLimit(middleware.NewAPITokenRateLimiter())
 		for _, r := range t.V1Routes() {
-			mux.Handle("GET "+r.Path, middleware.RequireAPIToken(t.Resolver(), r.Scope)(r.Handler))
+			mux.Handle("GET "+r.Path, middleware.RequireAPIToken(t.Resolver(), r.Scope)(v1Limit(r.Handler)))
 		}
 	}
 
