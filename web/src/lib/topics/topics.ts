@@ -378,11 +378,11 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     ideas: [
       {
         title: 'WiFi: your network and the internet',
-        body: 'WiFi joins your home network, so the board can reach the internet, a server or Home Assistant, and move a lot of data. It needs a router and uses more power: the radio draws close to 100 mA receiving and short peaks over 300 mA when it transmits.',
+        body: 'WiFi joins your home network, so the board can reach the internet, a server or Home Assistant, and move a lot of data. It needs a router and uses more power: the radio draws about 85 mA receiving and short peaks over 300 mA when it transmits.',
       },
       {
         title: 'BLE: a phone nearby, on a battery',
-        body: 'Bluetooth Low Energy talks straight to a phone or another board, with no router. It sends small amounts of data, like a reading or an on/off, and uses far less power, which is why it suits battery projects. Indoors both reach about the same: tens of metres, less through walls.',
+        body: 'Bluetooth Low Energy talks straight to a phone or another board, with no router. It sends small amounts of data, like a reading or an on/off, and uses far less power, which is why it suits battery projects. Indoors both reach roughly the same: a room or two, often 10 to 30 metres, less through walls.',
       },
       {
         title: 'What the C3 doesn’t have',
@@ -397,7 +397,7 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     ideas: [
       {
         title: 'Advertise, then connect',
-        body: 'The board is the peripheral: it advertises its name a few times a second. The phone is the central: it scans, sees the name, and connects. Free apps like nRF Connect and LightBlue let you poke at any BLE device this way.',
+        body: 'The board is the peripheral: it keeps advertising its name, many times a second. The phone is the central: it scans, sees the name, and connects. Free apps like nRF Connect and LightBlue let you poke at any BLE device this way.',
       },
       {
         title: 'Services hold characteristics',
@@ -439,7 +439,7 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
       {
         title: 'Waking up',
-        body: 'esp_sleep_enable_timer_wakeup(60 * 1000000ULL) wakes it after a minute (the time is in microseconds). A button can wake it too, but only on GPIO 0 to 5, the C3’s RTC pins: esp_deep_sleep_enable_gpio_wakeup(1ULL << 2, ESP_GPIO_WAKEUP_GPIO_LOW). Then esp_deep_sleep_start() puts it to sleep.',
+        body: 'esp_sleep_enable_timer_wakeup(60 * 1000000ULL) wakes it after a minute (the time is in microseconds). A button can wake it too, but only on GPIO 0 to 5, the C3’s RTC pins. Wire it from GPIO 3 to GND with a 10 kΩ pull-up resistor to 3.3V, then call esp_deep_sleep_enable_gpio_wakeup(1ULL << 3, ESP_GPIO_WAKEUP_GPIO_LOW). Then esp_deep_sleep_start() puts it to sleep.',
       },
       {
         title: 'Waking is a restart',

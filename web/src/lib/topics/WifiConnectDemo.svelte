@@ -28,7 +28,7 @@
   </div>
 
   <div class="layout">
-    <div class="monitor" aria-label="Serial monitor">
+    <div class="monitor" role="group" aria-label="Serial monitor">
       {#each outcome.log as line, i (i)}
         <div>{line}</div>
       {/each}

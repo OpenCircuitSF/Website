@@ -34,7 +34,7 @@ export type WifiTone = 'good' | 'meh' | 'bad';
 
 export interface WifiOutcome {
   /** The value WiFi.status() ends on. */
-  status: 'WL_CONNECTED' | 'WL_NO_SSID_AVAIL' | 'WL_CONNECT_FAILED' | 'WL_DISCONNECTED';
+  status: 'WL_CONNECTED' | 'WL_NO_SSID_AVAIL' | 'WL_CONNECT_FAILED' | 'WL_CONNECTION_LOST' | 'WL_DISCONNECTED';
   tone: WifiTone;
   /** Serial monitor lines, in order. */
   log: string[];
@@ -89,7 +89,7 @@ export function connectOutcome(id: NetworkId, badAntenna = false, lowTx = false)
         tone: 'bad',
         log: [start, '. . . . . .', gaveUp, 'status: WL_CONNECT_FAILED'],
         title: 'Password rejected',
-        fix: 'The board found the network, but the router refused it. Passwords are case-sensitive: check every letter. Some core versions report WL_DISCONNECTED here instead.',
+        fix: 'The board found the network, but the router refused it. Passwords are case-sensitive: check every letter. Depending on the core version and the router, it may end on WL_DISCONNECTED or WL_CONNECTION_LOST instead.',
       };
     case 'cafe':
       return {
@@ -101,7 +101,7 @@ export function connectOutcome(id: NetworkId, badAntenna = false, lowTx = false)
       };
     case 'far':
       return {
-        status: 'WL_DISCONNECTED',
+        status: 'WL_CONNECTION_LOST',
         tone: 'meh',
         log: [start, '. . . . . . . .', 'Connected!', 'IP address: 192.168.1.42', 'RSSI: -88 dBm', 'WiFi lost. Reconnecting…'],
         title: 'Connects, then keeps dropping',

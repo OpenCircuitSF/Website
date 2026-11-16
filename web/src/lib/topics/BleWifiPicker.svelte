@@ -24,7 +24,7 @@
   </fieldset>
 
   <div class="result {tone}" aria-live="polite">
-    <p class="kicker">Use</p>
+    {#if rec.pick !== 'none' && rec.pick !== 'classic'}<p class="kicker">Use</p>{/if}
     <h3>{rec.title}</h3>
     {#if rec.reasons.length}
       <ul>

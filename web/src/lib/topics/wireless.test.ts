@@ -34,6 +34,8 @@ describe('WiFi connection outcomes', () => {
     const cafe = connectOutcome('cafe');
     expect(cafe.status).toBe('WL_CONNECTED');
     expect(cafe.tone).toBe('meh');
+    // A weak signal connects, then loses the access point's beacons.
+    expect(connectOutcome('far').status).toBe('WL_CONNECTION_LOST');
   });
 
   it('a bad-antenna SuperMini only connects with lowered TX power', () => {

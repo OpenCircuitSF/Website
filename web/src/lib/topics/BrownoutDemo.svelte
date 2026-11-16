@@ -31,7 +31,7 @@
   const body = $derived(
     trace.resets
       ? o.strip
-        ? 'The strip’s current sags the 5V line all the time, and every WiFi burst pushes it under the line. Give the strip its own 5V supply and join the grounds.'
+        ? 'The strip’s current alone sags the 5V line, and each WiFi burst pulls it lower still. Give the strip its own 5V supply and join the grounds.'
         : 'Each WiFi burst drops the voltage across the thin cable for a millisecond. That is enough for the brownout detector. Try a better cable, the capacitor, or lower TX power.'
       : trace.marginal
         ? 'It survives, but a warmer cable or a weaker port could tip it over. Better to fix the supply too.'
@@ -72,6 +72,7 @@
       <p class="serial" class:shown={trace.resets}>
         <code>{trace.resets ? 'Brownout detector was triggered' : `5V pin from USB: ${USB_V} V`}</code>
       </p>
+      <p class="note">A simplified model with typical values, not a measurement of any one board.</p>
     </div>
   </div>
 </div>
@@ -179,5 +180,10 @@
   }
   .serial.shown {
     color: var(--danger);
+  }
+  .note {
+    margin: var(--space-2) 0 0;
+    font-size: var(--fs-sm);
+    color: var(--text-faint);
   }
 </style>

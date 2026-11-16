@@ -23,7 +23,7 @@
 </script>
 
 <div class="ble">
-  <div class="phone" aria-label="Phone app">
+  <div class="phone" role="group" aria-label="Phone app">
     <p class="bar">BLE scanner app</p>
     {#if s.stage === 'idle'}
       <button type="button" class="primary" onclick={scan}>Scan</button>
