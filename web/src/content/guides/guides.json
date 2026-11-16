@@ -19,6 +19,11 @@
       "id": "soldering",
       "title": "Soldering",
       "blurb": "The right solder, the right temperature, and joints that hold."
+    },
+    {
+      "id": "components",
+      "title": "Components",
+      "blurb": "Resistors, capacitors, LEDs, transistors and MOSFETs: what each part does and how to pick the right one."
     }
   ],
   "workshopGuides": [
@@ -408,6 +413,43 @@
       ],
       "post": "Update an ESP32 without plugging it in. See how over-the-air updates write into a second slot, so a dropped update leaves the old code running.",
       "set": "esp32"
+    },
+    {
+      "slug": "capacitor-types",
+      "title": "Capacitor types: ceramic, electrolytic and tantalum",
+      "hook": "What 104 means, which leg is negative, and why the voltage on the can matters.",
+      "minutes": 4,
+      "tags": [
+        "components",
+        "capacitors"
+      ],
+      "post": "What does 104 on a capacitor mean? Decode any marking into pF, nF and µF, then flip an electrolytic and a tantalum to see which way round each one goes.",
+      "set": "components"
+    },
+    {
+      "slug": "capacitor-rc-charging",
+      "title": "How a capacitor charges through a resistor",
+      "hook": "Flip a switch and watch the voltage curve. R times C tells you how long it takes.",
+      "minutes": 3,
+      "tags": [
+        "components",
+        "capacitors"
+      ],
+      "post": "A capacitor charging through a resistor takes about 5 × R × C to fill. Flip the switch, change R and C, and watch the curve draw itself with τ marked.",
+      "set": "components"
+    },
+    {
+      "slug": "decoupling-capacitors",
+      "title": "Why every chip wants a 100 nF capacitor",
+      "hook": "Chips pull current in nanosecond gulps. A small capacitor right at the power pin feeds them.",
+      "minutes": 4,
+      "tags": [
+        "components",
+        "capacitors",
+        "power"
+      ],
+      "post": "Why does every chip have a 100 nF capacitor next to it? Add one, slide it away from the power pin, and watch the supply rail dip on a scope trace.",
+      "set": "components"
     }
   ]
 }

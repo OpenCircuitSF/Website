@@ -5,7 +5,7 @@ import { ALL, countsBySet, groupBySet, hrefForSet, setFromQuery } from './guideS
 describe('guide sets', () => {
   it('every guide belongs to a known set, and every set has a topic', () => {
     const ids = GUIDE_SETS.map((s) => s.id);
-    expect(ids).toEqual(['leds', 'esp32', 'multimeter', 'soldering']);
+    expect(ids).toEqual(['leds', 'esp32', 'multimeter', 'soldering', 'components']);
     for (const g of [...TOPIC_GUIDES, ...WORKSHOP_GUIDES]) expect(ids, g.slug).toContain(g.set);
     for (const id of ids) expect(TOPIC_GUIDES.some((t) => t.set === id), id).toBe(true);
   });
@@ -19,12 +19,12 @@ describe('guide sets', () => {
   });
 
   it('groups in catalog order and filters to one set', () => {
-    expect(groupBySet(TOPIC_GUIDES, ALL).map((g) => g.set.id)).toEqual(['leds', 'esp32', 'multimeter', 'soldering']);
+    expect(groupBySet(TOPIC_GUIDES, ALL).map((g) => g.set.id)).toEqual(['leds', 'esp32', 'multimeter', 'soldering', 'components']);
     const only = groupBySet(TOPIC_GUIDES, 'multimeter');
     expect(only).toHaveLength(1);
     expect(only[0].guides.every((g) => g.slug.startsWith('multimeter-'))).toBe(true);
     const c = countsBySet(TOPIC_GUIDES);
     expect(c[ALL]).toBe(TOPIC_GUIDES.length);
-    expect(c.leds + c.esp32 + c.multimeter + c.soldering).toBe(TOPIC_GUIDES.length);
+    expect(c.leds + c.esp32 + c.multimeter + c.soldering + c.components).toBe(TOPIC_GUIDES.length);
   });
 });

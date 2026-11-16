@@ -37,6 +37,10 @@ import C3PinChooserDemo from './C3PinChooserDemo.svelte';
 import C3AnalogDemo from './C3AnalogDemo.svelte';
 import C3PwmDemo from './C3PwmDemo.svelte';
 import C3PowerDemo from './C3PowerDemo.svelte';
+// Components: capacitors (#0691)
+import CapCodeDemo from './CapCodeDemo.svelte';
+import RcChargeDemo from './RcChargeDemo.svelte';
+import DecouplingDemo from './DecouplingDemo.svelte';
 
 afterEach(cleanup);
 
@@ -392,5 +396,39 @@ describe('guide demos', () => {
     await fireEvent.click(r.getByRole('radio', { name: /One LiPo cell/ }));
     await fireEvent.click(r.getByRole('radio', { name: '3.3 pin' }));
     expect(r.getByText('Damage risk')).toBeTruthy();
+  });
+
+  // Components: capacitors (#0691)
+  it('capacitor types: 472 reads as 4.7 nF; a tantalum flips the polarity rule', async () => {
+    const r = render(CapCodeDemo);
+    await fireEvent.input(r.getByRole('textbox', { name: 'Marking on the capacitor' }), { target: { value: '472' } });
+    expect(r.container.querySelector('.big')?.textContent).toBe('4.7 nF');
+    expect(r.getByRole('img', { name: 'Ceramic capacitor marked 472' })).toBeTruthy();
+    // Electrolytic starts with its stripe on the + rail: reversed.
+    expect(r.getByText('Reversed')).toBeTruthy();
+    await fireEvent.click(r.getByRole('button', { name: 'Flip the capacitor' }));
+    expect(r.getByText('Polarity OK')).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: 'Tantalum' }));
+    expect(r.getByText('Reversed')).toBeTruthy();
+  });
+
+  it('rc charging: 10 kΩ × 100 µF is τ = 1 s, and at 1τ it is at 63%', async () => {
+    const r = render(RcChargeDemo);
+    expect(r.container.textContent).toContain('τ = R × C = 1 s');
+    await fireEvent.click(r.getByRole('button', { name: 'Charge (switch to 3.3 V)' }));
+    await fireEvent.input(r.getByRole('slider', { name: /Time since the switch/ }), { target: { value: '1' } });
+    expect(r.container.querySelector('.big')?.textContent).toBe('2.09 V');
+    expect(r.container.textContent).toContain('63% of the way');
+    await fireEvent.input(r.getByRole('slider', { name: /Resistor R/ }), { target: { value: '0' } });
+    expect(r.container.textContent).toContain('τ = R × C = 100 ms');
+  });
+
+  it('decoupling: no capacitor dips below 3.0 V; a close one holds; a far one does not', async () => {
+    const r = render(DecouplingDemo);
+    expect(r.getByRole('heading', { name: 'Dips below 3.0 V' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('checkbox', { name: /decoupling capacitor/ }));
+    expect(r.getByRole('heading', { name: 'Steady' })).toBeTruthy();
+    await fireEvent.input(r.getByRole('slider', { name: /Distance/ }), { target: { value: '40' } });
+    expect(r.getByRole('heading', { name: 'Dips below 3.0 V' })).toBeTruthy();
   });
 });

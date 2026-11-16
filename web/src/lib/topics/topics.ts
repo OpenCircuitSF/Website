@@ -40,6 +40,10 @@ import C3PinChooserDemo from './C3PinChooserDemo.svelte';
 import C3AnalogDemo from './C3AnalogDemo.svelte';
 import C3PwmDemo from './C3PwmDemo.svelte';
 import C3PowerDemo from './C3PowerDemo.svelte';
+// Components: capacitors (#0691)
+import CapCodeDemo from './CapCodeDemo.svelte';
+import RcChargeDemo from './RcChargeDemo.svelte';
+import DecouplingDemo from './DecouplingDemo.svelte';
 
 /** The page body of one topic guide; its metadata comes from the catalog. */
 export interface TopicBody {
@@ -651,6 +655,64 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
     ],
     takeaway: '5 V goes to the 5V pin, 3.3 V to the 3.3 pin, and only one supply at a time.',
+  },
+  // Components: capacitors (#0691)
+  'capacitor-types': {
+    demo: CapCodeDemo,
+    tryIt: 'Type the marking off a capacitor, or tap one of the examples. Then flip the electrolytic, switch to a tantalum, and flip it again.',
+    ideas: [
+      {
+        title: 'Three kinds you will meet',
+        body: 'Ceramic capacitors are the small tan or orange beads and the tiny surface-mount blocks, from a few pF up to a few µF. They have no polarity. Aluminium electrolytics are the cans, from about 1 µF to thousands of µF, and they have a negative lead. Tantalums are small, often yellow or orange, and also polarised.',
+      },
+      {
+        title: 'Reading 104',
+        body: 'A three-digit code is two digits of value, then the number of zeros, in picofarads. 104 is 10 and four zeros: 100,000 pF, which is 100 nF or 0.1 µF. 472 is 4,700 pF (4.7 nF). A letter after it is the tolerance: J is ±5%, K is ±10%, M is ±20%. Bigger capacitors print the value in full, like 10µF 16V.',
+      },
+      {
+        title: 'Which way round, and how many volts',
+        body: 'On an electrolytic the stripe with minus signs marks the negative lead, and on a new part that lead is shorter. On a tantalum the band or + marks the positive lead: the opposite. Put either in backwards and it can heat up, bulge or burn. The voltage printed on it is the most it can take. On the 5 V rail use a 10 V part or higher; 6.3 V works but has little margin.',
+      },
+    ],
+    takeaway: 'Three digits means two digits plus that many zeros, in pF. Electrolytic stripe is negative, tantalum band is positive. Rate it well above your rail.',
+  },
+  'capacitor-rc-charging': {
+    demo: RcChargeDemo,
+    tryIt: 'Press Charge and watch the curve. Then Discharge. Change R or C and notice τ change, or drag the time slider yourself.',
+    ideas: [
+      {
+        title: 'Fast at first, then slow',
+        body: 'When you connect a capacitor through a resistor, current starts at V ÷ R and falls as the capacitor fills, so the voltage rises quickly and then creeps up. After one time constant, τ, it is 63% of the way there. After 5τ it is over 99%, and we call it full. Discharging is the same curve upside down.',
+      },
+      {
+        title: 'τ = R × C',
+        body: 'Ohms times farads gives seconds. 10 kΩ × 100 µF = 1 second. 1 kΩ × 10 µF = 10 milliseconds. A bigger resistor or a bigger capacitor makes it slower. It doesn’t matter what voltage you charge to: the timing depends only on R and C.',
+      },
+      {
+        title: 'Where you’ll use it',
+        body: 'A 10 kΩ resistor and a 100 nF capacitor (τ = 1 ms) smooth out a bouncy push button. The same idea delays a reset at power-on, sets the speed of a fade, and turns PWM into a steady voltage. Each time, pick R and C so that 5τ is about the delay you want.',
+      },
+    ],
+    takeaway: 'τ = R × C. After 1τ it’s 63% charged, after 5τ it’s full.',
+  },
+  'decoupling-capacitors': {
+    demo: DecouplingDemo,
+    tryIt: 'Watch the rail dip with no capacitor. Fit one, try the three sizes, then slide it away from the chip.',
+    ideas: [
+      {
+        title: 'Chips gulp current',
+        body: 'A digital chip switches millions of times a second, pulling current in spikes that last nanoseconds. The wires back to the regulator have inductance, which resists sudden changes in current. So every spike makes the voltage at the chip’s power pin dip.',
+      },
+      {
+        title: '100 nF, right at the pin',
+        body: 'A small ceramic capacitor next to each power pin is a local store of charge. It feeds the spike, and the regulator refills it at its own pace. The path from the capacitor to the pin must be short, because every millimetre of trace adds inductance. A few centimetres away it barely helps. 100 nF is the usual choice. Boards like the SuperMini already have them; add your own when you put a bare chip or sensor on a breadboard.',
+      },
+      {
+        title: 'A big one for LED strips',
+        body: 'An LED strip pulls amps, and when it jumps from dark to bright white the long power wires can’t keep up. A large electrolytic, around 1000 µF and rated 10 V for a 5 V strip, across + and − where the power wires meet the strip holds the voltage up and soaks up the surge at switch-on. Mind the stripe: it goes to −.',
+      },
+    ],
+    takeaway: 'A 100 nF ceramic at every chip’s power pin, as close as it fits. A big electrolytic where power enters an LED strip.',
   },
 };
 
