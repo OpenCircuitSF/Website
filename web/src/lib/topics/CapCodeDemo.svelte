@@ -18,8 +18,11 @@
   const result = $derived(decodeCapCode(code));
   const units = $derived(result.ok ? capUnits(result.value.pf) : null);
   const printed = $derived(result.ok ? toEiaCode(result.value.pf) : null);
-  // Small values come as ceramic discs; 1 µF and up as electrolytic cans.
-  const asCan = $derived(result.ok && result.value.pf >= 1e6);
+  // Small values come as ceramic discs; 1 µF and up as electrolytic cans. A
+  // three-digit code (105K is 1 µF) is printed on ceramics and film, never on a
+  // can, so a code always draws a disc.
+  const isCode = $derived(/^\d{3}[A-Za-z]?$/.test(code.trim()));
+  const asCan = $derived(result.ok && result.value.pf >= 1e6 && !isCode);
   const label = $derived(code.trim().slice(0, 12));
   // Printed on the part: one line per word (value, then voltage), shrunk if long.
   const lines = $derived(label.split(/\s+/).filter(Boolean).slice(0, 2));
@@ -126,14 +129,14 @@
       {/each}
     </div>
 
-    <svg class="rail" viewBox="0 0 320 150" role="img" aria-label="{kind} capacitor between the {rail} volt rail and GND, marked lead on the {markLeft ? 'plus' : 'ground'} side">
+    <svg class="rail" viewBox="0 0 320 150" role="img" aria-label={mark === 'none' ? `ceramic capacitor between the ${rail} volt rail and GND, no polarity` : `${kind} capacitor between the ${rail} volt rail and GND, marked lead on the ${markLeft ? 'plus' : 'ground'} side`}>
       <line class="wire plus" x1="10" y1="20" x2="310" y2="20" />
       <text class="t" x="12" y="14">+{rail} V</text>
       <line class="wire" x1="10" y1="135" x2="310" y2="135" />
       <text class="t" x="12" y="149">GND</text>
-      <!-- Left lead to +, right lead to GND. The marked lead is shorter. -->
-      <polyline class="lead" points="148,{markLeft && mark === 'negative' ? 100 : 108} 148,20" />
-      <polyline class="lead" points="172,{!markLeft && mark === 'negative' ? 100 : 108} 172,115 172,135" />
+      <!-- Left lead up to +, right lead down to GND. -->
+      <line class="lead" x1="148" y1="72" x2="148" y2="20" />
+      <line class="lead" x1="172" y1="72" x2="172" y2="135" />
       <circle class="dot" cx="148" cy="20" r="3" />
       <circle class="dot" cx="172" cy="135" r="3" />
       {#if kind === 'electrolytic'}

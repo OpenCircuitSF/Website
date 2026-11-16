@@ -690,7 +690,7 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
       {
         title: 'Where you’ll use it',
-        body: 'A 10 kΩ resistor and a 100 nF capacitor (τ = 1 ms) smooth out a bouncy push button. The same idea delays a reset at power-on, sets the speed of a fade, and turns PWM into a steady voltage. Each time, pick R and C so that 5τ is about the delay you want.',
+        body: 'A 10 kΩ resistor and a 100 nF capacitor (τ = 1 ms) smooth out a bouncy push button. The same idea delays a reset at power-on, sets the speed of a fade, and turns PWM into a steady voltage. Each time, τ sets the timescale: a logic input usually crosses its threshold within about one τ, and by 5τ the voltage has settled.',
       },
     ],
     takeaway: 'τ = R × C. After 1τ it’s 63% charged, after 5τ it’s full.',
@@ -705,7 +705,7 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
       {
         title: '100 nF, right at the pin',
-        body: 'A small ceramic capacitor next to each power pin is a local store of charge. It feeds the spike, and the regulator refills it at its own pace. The path from the capacitor to the pin must be short, because every millimetre of trace adds inductance. A few centimetres away it barely helps. 100 nF is the usual choice. Boards like the SuperMini already have them; add your own when you put a bare chip or sensor on a breadboard.',
+        body: 'A small ceramic capacitor next to each power pin is a local store of charge. It feeds the spike, and the regulator refills it at its own pace. The path from the capacitor to the pin must be short, because every millimetre of trace adds inductance. A few centimetres away it helps far less. 100 nF is the usual choice. Boards like the SuperMini already have them; add your own when you put a bare chip or sensor on a breadboard.',
       },
       {
         title: 'A big one for LED strips',

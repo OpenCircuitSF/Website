@@ -51,7 +51,9 @@
       ? 'Every current spike has to come all the way from the regulator, through the wiring’s inductance. The rail sags each time, below what the chip is rated for.'
       : below
         ? 'The capacitor is too far away. The trace between it and the chip adds inductance, so it can’t deliver the current fast enough. Move it right next to the power pin.'
-        : size < 100e-9
+        : dip.minV < 3.15 && dip.inductiveV > dip.resistiveV + dip.chargeV
+          ? 'It helps, but the trace between the capacitor and the chip adds inductance, so it can’t keep up with the spikes. Move it closer to the power pin.'
+          : size < 100e-9
           ? 'Close enough, but 10 nF runs low on charge during each spike. 100 nF is the usual choice.'
           : 'The capacitor sits right at the pin and supplies each spike itself. The regulator only has to top it up.',
   );

@@ -404,6 +404,11 @@ describe('guide demos', () => {
     await fireEvent.input(r.getByRole('textbox', { name: 'Marking on the capacitor' }), { target: { value: '472' } });
     expect(r.container.querySelector('.big')?.textContent).toBe('4.7 nF');
     expect(r.getByRole('img', { name: 'Ceramic capacitor marked 472' })).toBeTruthy();
+    // A code is never printed on a can, even at 1 µF; a value with units at 1 µF is.
+    await fireEvent.input(r.getByRole('textbox', { name: 'Marking on the capacitor' }), { target: { value: '105K' } });
+    expect(r.getByRole('img', { name: 'Ceramic capacitor marked 105K' })).toBeTruthy();
+    await fireEvent.input(r.getByRole('textbox', { name: 'Marking on the capacitor' }), { target: { value: '10µF 16V' } });
+    expect(r.getByRole('img', { name: 'Electrolytic capacitor marked 10µF 16V' })).toBeTruthy();
     // Electrolytic starts with its stripe on the + rail: reversed.
     expect(r.getByText('Reversed')).toBeTruthy();
     await fireEvent.click(r.getByRole('button', { name: 'Flip the capacitor' }));
@@ -428,6 +433,9 @@ describe('guide demos', () => {
     expect(r.getByRole('heading', { name: 'Dips below 3.0 V' })).toBeTruthy();
     await fireEvent.click(r.getByRole('checkbox', { name: /decoupling capacitor/ }));
     expect(r.getByRole('heading', { name: 'Steady' })).toBeTruthy();
+    await fireEvent.input(r.getByRole('slider', { name: /Distance/ }), { target: { value: '30' } });
+    expect(r.getByRole('heading', { name: 'Holding, but close' })).toBeTruthy();
+    expect(r.container.textContent).toContain('Move it closer to the power pin');
     await fireEvent.input(r.getByRole('slider', { name: /Distance/ }), { target: { value: '40' } });
     expect(r.getByRole('heading', { name: 'Dips below 3.0 V' })).toBeTruthy();
   });
