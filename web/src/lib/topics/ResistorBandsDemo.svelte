@@ -55,10 +55,15 @@
   }
   function setCount(n: BandCount) {
     if (n === count) return;
-    const b = bandsFor(reading.ohms, n);
+    const from = reading.ohms;
+    const b = bandsFor(from, n);
     count = n;
     bands = b ? b.bands : n === 4 ? ['red', 'red', 'brown', 'gold'] : ['red', 'red', 'black', 'black', 'brown'];
-    typedNote = '';
+    typedNote = !b
+      ? `${formatOhms(from)} can’t be shown on ${n} bands, so this starts again at ${formatOhms(readBands(bands).ohms)}.`
+      : b.exact
+        ? ''
+        : `Rounded to ${formatOhms(b.ohms)}: ${n} bands only hold ${n - 2} digits.`;
   }
   function onType() {
     const v = parseOhms(typed);

@@ -5,6 +5,8 @@
   import { LEDS, PIN_VOLTS, formatAmps, ledById, ledState, type LedColor } from './resistorsLeds';
 
   const R = 220;
+  const uid = $props.id();
+  const glowId = `${uid}-glow`;
   let reversed = $state(false);
   let withResistor = $state(true);
   let color = $state<LedColor>('red');
@@ -55,7 +57,7 @@
       aria-label="{led.name} LED, long leg on the {reversed ? 'ground' : 'pin'} side, {withResistor ? `through a ${R} Ω resistor` : 'with no resistor'}. {heading}."
     >
       <defs>
-        <radialGradient id="led-glow">
+        <radialGradient id={glowId}>
           <stop offset="0%" stop-color={led.light} stop-opacity="0.9" />
           <stop offset="100%" stop-color={led.light} stop-opacity="0" />
         </radialGradient>
@@ -86,7 +88,7 @@
 
       <!-- the LED -->
       {#if lit}
-        <circle cx="200" cy="62" r={30 + 30 * glow} fill="url(#led-glow)" opacity={glow} />
+        <circle cx="200" cy="62" r={30 + 30 * glow} fill="url(#{glowId})" opacity={glow} />
       {/if}
       <line x1="194" y1="104" x2="194" y2={leftEnd} class="leg" />
       <line x1="206" y1="104" x2="206" y2={rightEnd} class="leg" />
@@ -97,7 +99,7 @@
         class="dome"
         class:burnt={s.kind === 'no-resistor'}
         style:fill={s.kind === 'no-resistor' ? undefined : led.light}
-        style:fill-opacity={lit ? 0.55 + 0.45 * glow : 0.3}
+        style:fill-opacity={s.kind === 'no-resistor' ? undefined : lit ? 0.55 + 0.45 * glow : 0.3}
       />
       <!-- the rim, with its flat edge on the cathode side -->
       {#if reversed}

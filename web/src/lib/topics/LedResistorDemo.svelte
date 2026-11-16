@@ -111,7 +111,7 @@
         <ul class="warn">
           {#if r.warnings.includes('led-max')}<li>Over {formatAmps(LED_MAX_A)}: more than a plain 5 mm LED should carry.</li>{/if}
           {#if r.warnings.includes('pin')}<li>Over {formatAmps(PIN_MAX_A)} from an ESP32 pin. The pin’s voltage sags and you are near its limit. Aim for 5–10 mA.</li>{/if}
-          {#if r.warnings.includes('power')}<li>{formatWatts(r.watts)} is more than a 1/4 W resistor can take. Use a 1/2 W part.</li>{/if}
+          {#if r.warnings.includes('power')}<li>{formatWatts(r.watts)} is more than a 1/4 W resistor can take. Use a {r.watts > 0.5 ? '1 W' : '1/2 W'} part.</li>{/if}
         </ul>
       {/if}
       {#if supply !== 'pin'}
