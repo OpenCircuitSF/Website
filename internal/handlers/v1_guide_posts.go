@@ -148,7 +148,7 @@ func guidePostOps(h *AdminGuidePostsHandler) []api.Operation {
 			Name: "list_guide_posts", Method: http.MethodGet, Path: "/api/v1/guide-posts",
 			Scope:       apitokens.ScopeGuidePostsRead,
 			Summary:     "List guide posts, newest first, filtered by status, guide, channel, campaign or time.",
-			Description: "Times are UTC. Clicks are not included; see get_guide and guide_posts_overview.",
+			Description: "Times have a Pacific offset. Clicks are not included; see get_guide and guide_posts_overview.",
 		}, func(ctx context.Context, in listGuidePostsIn) (api.List[guideposts.Post], error) {
 			return h.listGuidePostsV1(ctx, in)
 		}),
@@ -172,7 +172,8 @@ func guidePostOps(h *AdminGuidePostsHandler) []api.Operation {
 			MayBeUnavailable: true,
 			PublicEffect:     "a scheduled_at here makes the post go out publicly at that time",
 		}, func(ctx context.Context, in updateGuidePostIn) (guideposts.Post, error) {
-			return h.updateGuidePostV1(ctx, in)
+			p, err := h.updateGuidePostV1(ctx, in)
+			return postInPacific(p), err
 		}),
 		api.Define(api.Operation{
 			Name: "schedule_guide_post", Method: http.MethodPost, Path: "/api/v1/guide-posts/{id}/schedule",
@@ -186,7 +187,7 @@ func guidePostOps(h *AdminGuidePostsHandler) []api.Operation {
 				return guideposts.Post{}, api.Validation(map[string]string{"scheduled_at": reason})
 			}
 			p, err := h.schedule(ctx, "", nil, in.ID, at)
-			return p, guidePostAPIError(err)
+			return postInPacific(p), guidePostAPIError(err)
 		}),
 		api.Define(api.Operation{
 			Name: "unschedule_guide_post", Method: http.MethodPost, Path: "/api/v1/guide-posts/{id}/unschedule",
@@ -194,7 +195,7 @@ func guidePostOps(h *AdminGuidePostsHandler) []api.Operation {
 			Summary: "Return a scheduled guide post to draft.",
 		}, func(ctx context.Context, in guidePostIDIn) (guideposts.Post, error) {
 			p, err := h.unschedule(ctx, "", nil, in.ID)
-			return p, guidePostAPIError(err)
+			return postInPacific(p), guidePostAPIError(err)
 		}),
 		api.Define(api.Operation{
 			Name: "send_guide_post", Method: http.MethodPost, Path: "/api/v1/guide-posts/{id}/send",
@@ -205,7 +206,7 @@ func guidePostOps(h *AdminGuidePostsHandler) []api.Operation {
 			PublicEffect:     "posts publicly to Bluesky or Mastodon right away",
 		}, func(ctx context.Context, in guidePostIDIn) (guideposts.Post, error) {
 			p, err := h.queueNow(ctx, "", nil, in.ID)
-			return p, guidePostAPIError(err)
+			return postInPacific(p), guidePostAPIError(err)
 		}),
 		api.Define(api.Operation{
 			Name: "post_guide_again", Method: http.MethodPost, Path: "/api/v1/guide-posts/{id}/again",
@@ -214,6 +215,7 @@ func guidePostOps(h *AdminGuidePostsHandler) []api.Operation {
 			Status:  http.StatusCreated,
 		}, func(ctx context.Context, in againGuidePostIn) (guidePostLinkResponse, error) {
 			resp, err := h.again(ctx, "", nil, in.ID, in.Campaign)
+			resp.Post = postInPacific(resp.Post)
 			return resp, guidePostAPIError(err)
 		}),
 		api.Define(api.Operation{
@@ -234,6 +236,10 @@ func guidePostOps(h *AdminGuidePostsHandler) []api.Operation {
 			Summary: "One row per topic guide: when it was last shared, where, its campaigns, next scheduled post, clicks and signups.",
 		}, func(ctx context.Context, _ struct{}) (guidePostsOverviewResponse, error) {
 			resp, err := h.overview(ctx)
+			for i := range resp.Guides {
+				g := &resp.Guides[i]
+				g.LastPostedAt, g.NextScheduledAt = inPacific(g.LastPostedAt), inPacific(g.NextScheduledAt)
+			}
 			return resp, guidePostAPIError(err)
 		}),
 		api.Define(api.Operation{
@@ -259,6 +265,15 @@ func (h *AdminGuidePostsHandler) channelsV1() channelsV1 {
 		out.Channels = append(out.Channels, v)
 	}
 	return out
+}
+
+// postInPacific is p with every time in America/Los_Angeles (#0687): the
+// same instants, marshalled with a Pacific offset like the event ops'. The
+// store and the admin API are unchanged; only v1 output converts.
+func postInPacific(p guideposts.Post) guideposts.Post {
+	p.ScheduledAt, p.PostedAt, p.UpdatedAt = inPacific(p.ScheduledAt), inPacific(p.PostedAt), inPacific(p.UpdatedAt)
+	p.CreatedAt = *inPacific(&p.CreatedAt)
+	return p
 }
 
 // guidePostTime is the time list_guide_posts' from/to bound: posted, else
@@ -302,7 +317,7 @@ func (h *AdminGuidePostsHandler) listGuidePostsV1(ctx context.Context, in listGu
 			in.To != nil && !guidePostTime(p).Before(*in.To):
 			continue
 		}
-		items = append(items, p)
+		items = append(items, postInPacific(p))
 	}
 	slices.SortFunc(items, func(a, b guideposts.Post) int {
 		switch {
@@ -402,7 +417,7 @@ func (h *AdminGuidePostsHandler) createGuidePostsV1(ctx context.Context, opName 
 			continue
 		}
 		created++
-		p := resp.Post
+		p := postInPacific(resp.Post)
 		res.Post, res.LinkError = &p, resp.LinkError
 		if in.ScheduledFor != nil {
 			if resp.Post.ShortURL == nil {
@@ -412,6 +427,7 @@ func (h *AdminGuidePostsHandler) createGuidePostsV1(ctx context.Context, opName 
 				msg := api.AsError(opName, guidePostAPIError(err)).Message
 				res.ScheduleError = &msg
 			} else {
+				sp = postInPacific(sp)
 				res.Post = &sp
 			}
 		}

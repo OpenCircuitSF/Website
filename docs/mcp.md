@@ -119,7 +119,7 @@ for DESTRUCTIVE, and `readOnlyHint` for every read.
 | Events | `list_events` | | `events:read` | |
 | | `get_event` | | `events:read` | |
 | | `create_event` | | `events:write` | yes |
-| | `update_event` | | `events:write` | |
+| | `update_event` | PUBLIC (on a published event) | `events:write` | |
 | | `publish_event` | PUBLIC | `events:write` | |
 | | `unpublish_event` | | `events:write` | |
 | | `cancel_event` | PUBLIC | `events:write` | |
@@ -131,9 +131,6 @@ for DESTRUCTIVE, and `readOnlyHint` for every read.
 | | `list_cadence_rules` | | `events:read` | |
 | | `set_cadence_rule` | | `events:write` | |
 | Engagement | `get_engagement` | | `engagement:read` | |
-
-`update_event` on a published event changes the public page right away, even
-though the tool is not flagged PUBLIC. Treat it with the same care.
 
 A failed tool call is a tool error (`isError`) whose text is the v1 error
 envelope, `{"error":{"code":…,"message":…,"fields":…}}`, so the model can read
@@ -214,8 +211,8 @@ house rules.
    Read every `results[]` entry. A `link_error` or `schedule_error` leaves that
    channel as a draft, and the agent reports it rather than retrying blindly.
 7. `list_guide_posts {"campaign": "guides-2026-12", "status": "scheduled"}`
-   confirms the result. There should be 28 posts. Their times are UTC, so
-   convert them back to Pacific in the summary.
+   confirms the result. There should be 28 posts, each at 9:00 AM with a
+   `-08:00` offset.
 
 ### B. Next month's Programming LEDs workshop, like last time
 

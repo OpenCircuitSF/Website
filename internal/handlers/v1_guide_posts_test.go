@@ -142,6 +142,12 @@ func TestV1GuidePosts_CreateAndSchedule(t *testing.T) {
 		if r.Post == nil || r.Post.Status != "scheduled" || r.Post.ScheduledAt == nil || r.Post.ScheduledAt.UTC().Format(time.RFC3339) != at || r.ScheduleError != nil {
 			t.Fatalf("%s: %+v", r.Channel, r)
 		}
+		// #0687: the same instant, written with a Pacific offset.
+		for name, tm := range map[string]time.Time{"scheduled_at": *r.Post.ScheduledAt, "created_at": r.Post.CreatedAt} {
+			if !hasPacificOffset(tm) {
+				t.Errorf("%s: %s = %s, want a Pacific offset", r.Channel, name, tm.Format(time.RFC3339))
+			}
+		}
 	}
 
 	e.links.linkErrForSource = map[string]error{"mastodon": errors.New("boom")}
@@ -487,15 +493,73 @@ func TestV1GuidePosts_OverviewMatchesAdmin(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("v1 overview = %d %s", rec.Code, rec.Body)
 	}
-	var a, v any
+	// v1 writes the times with a Pacific offset (#0687) and admin does not,
+	// so compare after putting both in UTC: the instants must match.
+	var a, v guidePostsOverviewResponse
 	if err := json.Unmarshal(adminBody, &a); err != nil {
 		t.Fatal(err)
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
 		t.Fatal(err)
 	}
+	sawPosted := false
+	for _, g := range v.Guides {
+		if g.LastPostedAt != nil {
+			sawPosted = true
+			if !hasPacificOffset(*g.LastPostedAt) {
+				t.Errorf("%s: last_posted_at %s, want a Pacific offset", g.Slug, g.LastPostedAt.Format(time.RFC3339))
+			}
+		}
+	}
+	if !sawPosted {
+		t.Fatal("no guide has a last_posted_at; the fixture should post one")
+	}
+	toUTC := func(r *guidePostsOverviewResponse) {
+		for i := range r.Guides {
+			g := &r.Guides[i]
+			for _, tp := range []**time.Time{&g.LastPostedAt, &g.NextScheduledAt} {
+				if *tp != nil {
+					u := (**tp).UTC()
+					*tp = &u
+				}
+			}
+		}
+	}
+	toUTC(&a)
+	toUTC(&v)
 	if !reflect.DeepEqual(a, v) {
 		t.Errorf("v1 overview differs from admin:\nadmin %s\nv1    %s", adminBody, rec.Body)
+	}
+}
+
+// hasPacificOffset reports whether tm carries America/Los_Angeles's offset
+// at that instant (-08:00 or -07:00), which a decoded RFC 3339 time keeps.
+func hasPacificOffset(tm time.Time) bool {
+	_, got := tm.Zone()
+	_, want := tm.In(announceLocation).Zone()
+	return got == want
+}
+
+// TestPostInPacific (#0687): every time keeps its instant and gains the
+// Pacific zone; nil times stay nil.
+func TestPostInPacific(t *testing.T) {
+	at := time.Date(2026, 12, 2, 17, 0, 0, 0, time.UTC)
+	summer := time.Date(2026, 7, 2, 16, 0, 0, 0, time.UTC)
+	p := postInPacific(guideposts.Post{ScheduledAt: &at, PostedAt: &summer, CreatedAt: at})
+	if p.UpdatedAt != nil {
+		t.Errorf("UpdatedAt = %v, want nil", p.UpdatedAt)
+	}
+	if got := p.ScheduledAt.Format(time.RFC3339); got != "2026-12-02T09:00:00-08:00" || !p.ScheduledAt.Equal(at) {
+		t.Errorf("ScheduledAt = %s", got)
+	}
+	if got := p.PostedAt.Format(time.RFC3339); got != "2026-07-02T09:00:00-07:00" || !p.PostedAt.Equal(summer) {
+		t.Errorf("PostedAt = %s", got)
+	}
+	if got := p.CreatedAt.Format(time.RFC3339); got != "2026-12-02T09:00:00-08:00" {
+		t.Errorf("CreatedAt = %s", got)
+	}
+	if at.Location() != time.UTC {
+		t.Error("postInPacific changed its argument's time")
 	}
 }
 

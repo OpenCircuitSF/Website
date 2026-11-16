@@ -200,8 +200,8 @@ func (h *AdminGuidePostsHandler) getGuideV1(ctx context.Context, baseURL, slug s
 	}
 	share := guideposts.Overview([]guides.Guide{g}, posts, h.baseURL, clicks, known)[0]
 	hist := &guideHistoryV1{
-		LastPostedAt: share.LastPostedAt, LastCampaign: share.LastCampaign, PostedCount: share.PostedCount,
-		NextScheduledAt: share.NextScheduledAt, Clicks: share.Clicks, PostsByChannel: byChannel,
+		LastPostedAt: inPacific(share.LastPostedAt), LastCampaign: share.LastCampaign, PostedCount: share.PostedCount,
+		NextScheduledAt: inPacific(share.NextScheduledAt), Clicks: share.Clicks, PostsByChannel: byChannel,
 		ClicksError: clicksErr,
 	}
 	rows, signupsErr := h.signupRows(ctx, posts)

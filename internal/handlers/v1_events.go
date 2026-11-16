@@ -339,9 +339,10 @@ func eventOps(d V1Deps) []api.Operation {
 		}),
 		api.Define(api.Operation{
 			Name: "update_event", Method: http.MethodPatch, Path: "/api/v1/events/{id}",
-			Scope:       apitokens.ScopeEventsWrite,
-			Summary:     "Change an event's fields; only the fields sent change.",
-			Description: "Status changes go through publish_event, unpublish_event and cancel_event. A published event's changes show on the site right away.",
+			Scope:        apitokens.ScopeEventsWrite,
+			Summary:      "Change an event's fields; only the fields sent change.",
+			Description:  "Status changes go through publish_event, unpublish_event and cancel_event.",
+			PublicEffect: "on a published event, the changes show on the public site right away",
 		}, func(ctx context.Context, in updateEventIn) (eventDetailV1, error) {
 			req, err := in.patchRequest()
 			if err != nil {

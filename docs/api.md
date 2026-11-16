@@ -73,7 +73,7 @@ preset is `guides:read`, `guide_posts:read`, `guide_posts:write`,
 To revoke a key, select **Revoke** in its row. Anything using it gets `401` on
 its next request.
 
-### `GET /api/v1/me`
+### `whoami`, `GET /api/v1/me`
 
 `/me` checks the connection. Any valid key may call it, whatever its scopes.
 
@@ -85,7 +85,8 @@ curl -s -H "Authorization: Bearer $OCSF_API_KEY" $B/me
 {"name":"Claude Code","prefix":"ocsf_AbCdEfG","scopes":["guides:read","guide_posts:read","guide_posts:write","events:read","events:write","venues:read"],"expires_at":"2027-02-13T23:43:41-08:00","server_version":"0.12.0","api_version":"v1"}
 ```
 
-`/api/v1/token` is a deprecated alias that Home Assistant still uses.
+`token_probe`, `GET /api/v1/token`, is a deprecated alias that Home Assistant
+still uses. It is not an MCP tool.
 
 ## Conventions
 
@@ -98,9 +99,15 @@ offset.
   `-08:00` from early November to mid-March, `-07:00` the rest of the year. For example,
   `2026-12-12T13:00:00-08:00` is 1 PM on 12 December.
 - **Output:** event times (`starts_at`, `ends_at`, `published_at`, and so on)
-  come back with a Pacific offset. Guide-post times
-  (`list_guide_posts`, `scheduled_at`, `posted_at`) and engagement times come
-  back in **UTC**. Convert them before showing them to a person.
+  and guide-post times (`scheduled_at`, `posted_at`, `created_at`,
+  `updated_at`, and a guide's `last_posted_at` and `next_scheduled_at`) come
+  back with a Pacific offset. It is the same instant the database holds, only
+  written in Pacific time.
+- **Two exceptions stay UTC.** `get_engagement` keeps the `Z` times that Home
+  Assistant's sensor was built on, byte for byte (see
+  [`home-assistant.md`](home-assistant.md)), and the coverage report's Luma
+  `read_at` and `last_good_at` are UTC. Convert those before showing them to a
+  person.
 - **A `+` in a query string has to be encoded.** `?from=2026-12-01T00:00:00+00:00`
   arrives as a space and fails validation. Write `%2B00:00`, or use `Z` or a
   negative offset, which work as typed.
@@ -255,8 +262,8 @@ curl -s -H "Authorization: Bearer $OCSF_API_KEY" $B/guide-posts/overview
 ```
 
 **`list_guide_posts`**, `GET /guide-posts`, lists posts newest first. It takes
-the filters `status`, `slug`, `channel`, `campaign`, `from` and `to`. Its times
-are UTC.
+the filters `status`, `slug`, `channel`, `campaign`, `from` and `to`. `from`
+and `to` take any offset. Its times come back with a Pacific offset.
 
 ```sh
 curl -s -H "Authorization: Bearer $OCSF_API_KEY" "$B/guide-posts?campaign=guides-2026-12&status=scheduled"
@@ -390,11 +397,11 @@ curl -s -X POST $B/events \
   -d '{"title":"Hack Night","event_type_id":2,"starts_at":"2026-12-03T18:00:00-08:00","ends_at":"2026-12-03T21:00:00-08:00","interest_ids":[1]}'
 ```
 
-**`update_event`**, `PATCH /events/{id}`, changes only the fields sent. An
+**`update_event`**, `PATCH /events/{id}`, is **PUBLIC on a published event**:
+its changes show on the site right away. It changes only the fields sent. An
 empty string clears a text field. `"clear_capacity": true` removes the limit,
 and `"no_venue": true` removes the location. `interest_ids` replaces the list.
 `status` is refused, because status changes go through the three calls below.
-A published event's changes show on the site right away.
 
 ```sh
 curl -s -X PATCH $B/events/17 \
@@ -510,5 +517,7 @@ curl -s -X POST $B/cadence-rules \
 ### Engagement (`engagement:read`)
 
 `get_engagement`, `GET /engagement`, returns new Bluesky and Mastodon
-engagement in a window. Its times are UTC. It is documented in
+engagement in a window. Its times are UTC, unlike the rest of v1: Home
+Assistant's sensor reads this response as it shipped, so it stays byte for byte
+unchanged. It is documented in
 [`home-assistant.md`](home-assistant.md).
