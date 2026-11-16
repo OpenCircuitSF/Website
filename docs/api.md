@@ -305,6 +305,12 @@ A channel that isn't connected fails validation before anything is written:
 {"error":{"code":"validation","message":"the request has invalid fields","fields":{"channels.bluesky":"Bluesky is not connected"}}}
 ```
 
+An unknown or repeated entry is reported under its position in `channels`,
+counting from 0, so every bad entry is named. For example,
+`"channels":["myspace","bluesky","bluesky"]` gives the fields
+`channels.0` (`"myspace" is not a channel; use bluesky or mastodon`) and
+`channels.2` (`bluesky is listed twice`).
+
 **`schedule_guide_post`**, `POST /guide-posts/{id}/schedule`, is **PUBLIC**. It
 takes `{"scheduled_at": "…"}`. A draft gets its short link first.
 
