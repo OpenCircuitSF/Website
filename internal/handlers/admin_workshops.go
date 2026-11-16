@@ -314,7 +314,7 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actorID := actor.ID
-	created, err := h.createWorkshop(r.Context(), clientIP(r), &actorID, req, nil)
+	created, err := h.createWorkshop(r.Context(), clientIP(r), &actorID, req, 0)
 	if err != nil {
 		writeWorkshopError(w, err)
 		return
@@ -326,9 +326,10 @@ func (h *AdminWorkshopsHandler) Create(w http.ResponseWriter, r *http.Request) {
 // store write, the cache invalidation and the audit row. POST
 // /admin/workshops and the v1 create_event and duplicate_event operations
 // all run it, so they cannot drift. actorID is nil for an API token, and an
-// empty ip falls back to api.ClientIPFromContext. extraMeta is merged into
-// the workshop.created audit metadata. Errors go through workshopErrInfo.
-func (h *AdminWorkshopsHandler) createWorkshop(ctx context.Context, ip string, actorID *int64, req createWorkshopRequest, extraMeta map[string]any) (workshops.Workshop, error) {
+// empty ip falls back to api.ClientIPFromContext. A non-zero copiedFrom (the
+// v1 duplicate) is recorded as the audit row's copied_from. Errors go
+// through workshopErrInfo.
+func (h *AdminWorkshopsHandler) createWorkshop(ctx context.Context, ip string, actorID *int64, req createWorkshopRequest, copiedFrom int64) (workshops.Workshop, error) {
 	title := strings.TrimSpace(req.Title)
 	if title == "" {
 		return workshops.Workshop{}, &workshopFieldError{http.StatusBadRequest, "title", "title is required"}
@@ -389,31 +390,26 @@ func (h *AdminWorkshopsHandler) createWorkshop(ctx context.Context, ip string, a
 		"event_type":   created.EventTypeSlug,
 		"venue_id":     created.VenueID,
 	}
-	for k, v := range extraMeta {
-		meta[k] = v
+	if copiedFrom != 0 {
+		meta["copied_from"] = copiedFrom
 	}
-	h.recordWorkshop(ctx, ip, actorID, created.ID, audit.ActionWorkshopCreated, meta)
+	h.recordWorkshop(ctx, ip, created.ID, audit.Entry{ActorID: actorID, Action: audit.ActionWorkshopCreated, Metadata: meta})
 	return created, nil
 }
 
 // recordWorkshop writes one workshop audit row, attributed to the API
 // token when the call came through /api/v1 or MCP (a no-op for a session).
-func (h *AdminWorkshopsHandler) recordWorkshop(ctx context.Context, ip string, actorID *int64, id int64, action string, meta map[string]any) {
+func (h *AdminWorkshopsHandler) recordWorkshop(ctx context.Context, ip string, id int64, e audit.Entry) {
 	if h.auditor == nil {
 		return
 	}
 	if ip == "" {
 		ip = api.ClientIPFromContext(ctx)
 	}
-	targetID := id
-	h.auditor.Record(ctx, middleware.AttributeAPIToken(ctx, audit.Entry{
-		ActorID:    actorID,
-		Action:     action,
-		TargetType: audit.TargetWorkshop,
-		TargetID:   &targetID,
-		Metadata:   meta,
-		IP:         ip,
-	}))
+	e.TargetType = audit.TargetWorkshop
+	e.TargetID = &id
+	e.IP = ip
+	h.auditor.Record(ctx, middleware.AttributeAPIToken(ctx, e))
 }
 
 // workshopFieldError is a validation failure found before the store is
@@ -661,7 +657,7 @@ func (h *AdminWorkshopsHandler) patchWorkshop(ctx context.Context, ip string, ac
 	case current.Status != workshops.StatusCanceled && updated.Status == workshops.StatusCanceled:
 		action = audit.ActionWorkshopCanceled
 	}
-	h.recordWorkshop(ctx, ip, actorID, updated.ID, action, map[string]any{
+	h.recordWorkshop(ctx, ip, updated.ID, audit.Entry{ActorID: actorID, Action: action, Metadata: map[string]any{
 		"slug":             updated.Slug,
 		"old_status":       current.Status,
 		"new_status":       updated.Status,
@@ -673,7 +669,7 @@ func (h *AdminWorkshopsHandler) patchWorkshop(ctx context.Context, ip string, ac
 		"new_event_type":   updated.EventTypeSlug,
 		"old_venue_id":     current.VenueID,
 		"new_venue_id":     updated.VenueID,
-	})
+	}})
 	return current, updated, nil
 }
 

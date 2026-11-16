@@ -331,7 +331,7 @@ func eventOps(d V1Deps) []api.Operation {
 				Title: in.Title, Summary: in.Summary, BodyMD: in.BodyMD, StartsAt: in.StartsAt, EndsAt: in.EndsAt,
 				Capacity: in.Capacity, SignupURL: in.SignupURL, CoverImage: in.CoverImage,
 				InterestIDs: in.InterestIDs, EventTypeID: in.EventTypeID, VenueID: venue,
-			}, nil)
+			}, 0)
 			if err != nil {
 				return eventDetailV1{}, workshopAPIError(err)
 			}
@@ -531,7 +531,7 @@ func (d V1Deps) duplicateEvent(ctx context.Context, in duplicateEventIn) (eventD
 		StartsAt: format(starts), EndsAt: format(ends),
 		Capacity: src.Capacity, SignupURL: src.SignupURL, CoverImage: src.CoverImage,
 		InterestIDs: append([]int64(nil), src.InterestIDs...), EventTypeID: &typeID, VenueID: venue,
-	}, map[string]any{"copied_from": src.ID})
+	}, src.ID)
 	if err != nil {
 		return eventDetailV1{}, workshopAPIError(err)
 	}
