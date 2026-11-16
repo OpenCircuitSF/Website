@@ -289,8 +289,8 @@ delete that row to reconcile the count — the guard requires it.
 
 | Package | Reaches into |
 |---|---|
-| `internal/handlers` | **the whole repo tree** — `TestNoCommentCitesUnresolvedPathOrSection` walks the repo root for the set of citable paths and reads `AGENTS.md`'s own `##` section headings; the rest of the citation-guard family, `TestNoDocCommentNamesADifferentDeclarationInSameFile`, and the audit-metadata guard scan `internal/`, `cmd/`, `web/`; plus `migrations/` (`settings_test.go`'s existing seed-value check, and, since `#0459`, `TestMigrationCitationIdentifierMatchesContent` reading every migration file's own SQL text to verify a comment's cited constraint or column identifier actually appears in the migration it names), `testdata/url_validators.json`, and three `web/src/lib/*.ts` parity fixtures |
-| `internal/db` | the repo root — `issues/`, `PRD.md`, `AGENTS.md`, `migrations/`, `docs/database.md` — and, since `#0511`, every tracked file (`git ls-files`) for the identifier-redaction guard; since `#0682`, also `web/src/lib/apiTokens.ts` (`TestAPITokenScopesMatchWeb`, the scope list's web parity) |
+| `internal/handlers` | **the whole repo tree** — `TestNoCommentCitesUnresolvedPathOrSection` walks the repo root for the set of citable paths and reads `AGENTS.md`'s own `##` section headings; the rest of the citation-guard family, `TestNoDocCommentNamesADifferentDeclarationInSameFile`, and the audit-metadata guard scan `internal/`, `cmd/`, `web/`; plus `docs/api.md` and `docs/mcp.md` (since `#0687`, `TestV1DocsNameEveryOperation` asserts every v1 operation and MCP tool name appears in them); plus `migrations/` (`settings_test.go`'s existing seed-value check, and, since `#0459`, `TestMigrationCitationIdentifierMatchesContent` reading every migration file's own SQL text to verify a comment's cited constraint or column identifier actually appears in the migration it names), `testdata/url_validators.json`, and three `web/src/lib/*.ts` parity fixtures |
+| `internal/db` | the repo root — `issues/`, `PRD.md`, `AGENTS.md`, `migrations/`, `docs/database.md` — and, since `#0511`, every tracked file (`git ls-files`) for the identifier-redaction guard; since `#0682`, also `web/src/lib/apiTokens.ts` (`TestAPITokenScopesMatchWeb`, the scope list's web parity); and, since `#0688`, every `.go`/`.ts`/`.svelte` path under `internal/`, `cmd/` and `web/src/`, checked against `.gitignore` with `git check-ignore --no-index` (`TestGitignoreMatchesNoSourcePath`) — so editing `.gitignore` means running `internal/db` |
 | `internal/outbox` | `internal/` and `cmd/` (both the claim-kinds and claim-comment guards) |
 | `internal/subscribers` | all of `internal/` |
 | `internal/seo` | `web/index.html` and `web/dist/index.html` (`#0141`'s placeholder guard); since `#0519`, also the seven static `web/src/views/*.svelte` sources (`Home`, `About`, `PrivacyPolicy`, `Subscribe`, `WorkshopsIndex`, `ArchiveIndex`, and since `#0656` `GuidesIndex`), `web/src/lib/Header.svelte`, `Footer.svelte`, and `branding.ts` — `TestStaticFallbackCopyMatchesSvelteViews` and `TestFallbackNavCoversHeaderNav` (`fallback_copy_guard_test.go`); and, since `#0662`, `web/src/lib/GuideEnd.svelte` (`TestGuideEndFallbackCopyMatchesSvelte`) |
@@ -589,7 +589,7 @@ on the operator's machine, not an address — and is fine to keep.
 |---|---|
 | Canonical host | **`https://www.opencircuitsf.com`** — the apex and plain HTTP both 301 to it |
 | Server | An EC2 **`t4g.small`** (arm64, 2 vCPU) in **`us-east-1`** — instance id, hostname, public IP and IAM role name in the private AWS repo (redaction note above). Apache 2.4.68 on Amazon Linux 2023, OpenSSL 3.5.7. `ssh photon` gets you there — already configured, verified working. |
-| TLS | Let's Encrypt **wildcard** (`opencircuitsf.com` + `*.opencircuitsf.com`), ECDSA, valid to 2026-11-16, renewed by `certbot-renew.timer` via the **`dns-route53`** authenticator — so renewal never touches a vhost or an ACME webroot |
+| TLS | Let's Encrypt **wildcard** (`opencircuitsf.com` + `*.opencircuitsf.com`), ECDSA, valid to 2027-02-07, renewed by `certbot-renew.timer` via the **`dns-route53`** authenticator — so renewal never touches a vhost or an ACME webroot |
 | Already on the box | PostgreSQL **15.19** (one cluster, also holding `shortlinks` and `shortlinks_ocsf`) and Apache. Ports `:8081`/`:8083` are two ShortLinks instances, `:8082` is prototypes; this project owns **`:8080`**. |
 | Currently served | **This project, since 2026-08-25.** `opencircuit.service` on `127.0.0.1:8080` behind `/etc/httpd/conf.d/001-www.opencircuitsf.com-le-ssl.conf`. The static placeholder is gone. |
 | The one static exception | **`/.well-known/` is still served from disk**, out of `/var/www/vhosts/www.opencircuitsf.com/.well-known/`, via `ProxyPass /.well-known/ !` + `Alias` ahead of the proxy rules. It holds `atproto-did` — this domain's Bluesky DID. **The Go service 404s that path**, so removing the exception silently breaks Bluesky handle verification. Verify by hash, not by status code, after any Apache change: `curl -s https://www.opencircuitsf.com/.well-known/atproto-did \| shasum -a 256` → `4198e742…5948d`. |
@@ -965,6 +965,13 @@ gofmt -l . | while read -r f; do
   gofmt -w "$f"
 done
 ```
+
+**Before removing a worktree, run `git status --ignored` in it** and check
+that nothing you wrote is listed as ignored (`#0688`). An ignored file is not
+in any commit, so merging the branch does not carry it and removing the
+worktree deletes the only copy. `#0678`'s `internal/cadence/coverage.go` was
+lost exactly this way to an over-broad `.gitignore` pattern, and was restored
+from a transcript.
 
 **`git commit -- <paths> -m "<msg>"` silently swallows the message as a
 pathspec.** After `--`, everything is a path — including `-m` and the message.

@@ -16,7 +16,13 @@ Thumbs.db
 /opencircuit
 *.test
 *.out
-coverage.*
+# Coverage artefacts only, by name (#0688). The old unanchored coverage.*
+# matched source at any depth and swallowed the cadence package's coverage.go;
+# internal/db's TestGitignoreMatchesNoSourcePath now fails on any pattern
+# that reaches a .go, .ts or .svelte path under internal/, cmd/ or web/src/.
+# (coverage.out is already covered by *.out.)
+/coverage.html
+*.coverprofile
 
 # ── Node / Vite ───────────────────────────────────────────────────────────────
 node_modules/
