@@ -448,11 +448,15 @@ func servePostgres(cfg *config.Config) error {
 	settingsH.SetAPITokens(apiTokensH)
 	// #0684: expired Idempotency-Keys are swept once at startup as well as
 	// by every idempotent request, so the table does not wait on traffic.
-	if n, err := api.SweepIdempotencyKeys(ctx, pool, time.Now()); err != nil {
+	// #0686: bounded, so a slow database cannot hold up startup.
+	const startupSweepTimeout = 10 * time.Second
+	sweepCtx, cancelSweep := context.WithTimeout(ctx, startupSweepTimeout)
+	if n, err := api.SweepIdempotencyKeys(sweepCtx, pool, time.Now()); err != nil {
 		slog.Warn("api: startup idempotency sweep failed", "err", err)
 	} else if n > 0 {
 		slog.Info("api: swept expired idempotency keys", "count", n)
 	}
+	cancelSweep()
 	// #0675: the /api/v1 operation registry (whoami, the #0652 probe, and
 	// #0653's engagement check, #0676's guides and guide posts, which
 	// share adminGuidePostsH, and #0677's events and lookups, which share

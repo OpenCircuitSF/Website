@@ -272,6 +272,40 @@ func TestDelete_RefusesPosted(t *testing.T) {
 	}
 }
 
+// TestDeleteDraft_Conditional (#0686): DeleteDraft deletes only a draft, in
+// one statement. A post scheduled after the caller saw it as a draft is
+// refused with ErrNotDraft and kept; an unknown id is ErrNotFound.
+func TestDeleteDraft_Conditional(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	d := create(t, s, "baud-rate", "bluesky", "", "")
+	got, err := s.DeleteDraft(ctx, d.ID)
+	if err != nil || got.ID != d.ID || got.GuideSlug != "baud-rate" || got.Channel != "bluesky" {
+		t.Fatalf("DeleteDraft(draft) = %+v, %v", got, err)
+	}
+	if _, err := s.Get(ctx, d.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("deleted draft still there: %v", err)
+	}
+	if _, err := s.DeleteDraft(ctx, d.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("DeleteDraft(gone) = %v, want ErrNotFound", err)
+	}
+
+	p := linked(t, s, "bluesky")
+	seen, _ := s.Get(ctx, p.ID) // the caller's read: a draft
+	if seen.Status != "draft" {
+		t.Fatalf("setup status %q", seen.Status)
+	}
+	if _, err := s.Schedule(ctx, p.ID, time.Now().Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DeleteDraft(ctx, p.ID); !errors.Is(err, ErrNotDraft) {
+		t.Errorf("DeleteDraft(scheduled) = %v, want ErrNotDraft", err)
+	}
+	if cur, err := s.Get(ctx, p.ID); err != nil || cur.Status != "scheduled" {
+		t.Errorf("scheduled post after refused delete = %+v, %v", cur, err)
+	}
+}
+
 func TestShortLinkKey_UniqueAcrossPosts(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
