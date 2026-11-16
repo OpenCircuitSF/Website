@@ -23,6 +23,7 @@ describe('GuidesIndex sets', () => {
       'ESP32-C3',
       'Multimeter',
       'Soldering',
+      'Components',
       'Workshop guides',
     ]);
     const nav = screen.getByRole('navigation', { name: 'Filter guides' });
@@ -33,6 +34,7 @@ describe('GuidesIndex sets', () => {
       '/guides?set=esp32',
       '/guides?set=multimeter',
       '/guides?set=soldering',
+      '/guides?set=components',
     ]);
     expect(links[0].getAttribute('aria-current')).toBe('page');
   });

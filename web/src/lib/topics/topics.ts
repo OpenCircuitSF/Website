@@ -40,6 +40,11 @@ import C3PinChooserDemo from './C3PinChooserDemo.svelte';
 import C3AnalogDemo from './C3AnalogDemo.svelte';
 import C3PwmDemo from './C3PwmDemo.svelte';
 import C3PowerDemo from './C3PowerDemo.svelte';
+// Components: transistors and MOSFETs (#0692)
+import BjtSwitchDemo from './BjtSwitchDemo.svelte';
+import MosfetSwitchDemo from './MosfetSwitchDemo.svelte';
+import FlybackDemo from './FlybackDemo.svelte';
+import SwitchPickerDemo from './SwitchPickerDemo.svelte';
 
 /** The page body of one topic guide; its metadata comes from the catalog. */
 export interface TopicBody {
@@ -651,6 +656,95 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
     ],
     takeaway: '5 V goes to the 5V pin, 3.3 V to the 3.3 pin, and only one supply at a time.',
+  },
+  // Components: transistors and MOSFETs (#0692)
+  'bjt-transistor-switch': {
+    demo: BjtSwitchDemo,
+    tryIt: 'Toggle the pin, then drag the base resistor up to 10 kΩ and watch the transistor stop fully turning on. Try a 300 mA load on each part.',
+    ideas: [
+      {
+        title: 'A small current switches a big one',
+        body: 'Current into the base (B) lets a much bigger current flow from the collector (C) to the emitter (E). The pin only supplies the base current. The load sits between +5 V and the collector, and the emitter goes to ground. This is called a low-side switch.',
+      },
+      {
+        title: 'The base resistor sets the base current',
+        body: 'The base sits about 0.7 V above ground, so the resistor sees 3.3 − 0.7 = 2.6 V. 470 Ω gives about 5.5 mA. Never leave it out: without it the pin would try to push far more current than it can.',
+      },
+      {
+        title: 'Aim for Ic/Ib of 10',
+        body: 'Gain (hFE) is how many times the base current the collector can carry. It changes from part to part and with current, so the datasheet gives a minimum. To be sure the transistor is saturated (fully on, with only 0.1–0.3 V across it), give it a tenth of the load current as base current. Too little and it sits half on and gets hot.',
+      },
+      {
+        title: 'Check the pinout',
+        body: 'Most TO-92 2N3904s and PN2222As are E-B-C with the flat face toward you. But the P2N2222A is C-B-E, so look up the datasheet for the exact part you have. A 10 kΩ resistor from base to ground keeps it off while the board boots.',
+      },
+    ],
+    takeaway: 'Base current = load current ÷ 10. From 3.3 V that’s 2.6 V ÷ base resistor.',
+  },
+  'mosfet-switch': {
+    demo: MosfetSwitchDemo,
+    tryIt: 'Start with the AO3400A, then pick the IRFZ44N and see what 3.3 V on its gate does. Set the gate to 10 V. Then untick the pull-down and pick "board booting".',
+    ideas: [
+      {
+        title: 'Voltage on the gate, not current',
+        body: 'A MOSFET is turned on by the voltage between gate (G) and source (S). Once the gate is charged, almost no current flows into it, so one pin can switch amps. The load goes between + and the drain (D), and the source goes to ground.',
+      },
+      {
+        title: 'Logic level means "on at 3.3 to 5 V"',
+        body: 'Rds(on) is the resistance from drain to source when the MOSFET is on, and datasheets give it at set gate voltages. The IRLZ44N promises 25 mΩ at 5 V and the AO3400A 32 mΩ at 4.5 V. The IRFZ44N is only specified at 10 V. At 3.3 V it may barely conduct at all.',
+      },
+      {
+        title: 'Heat is current squared times Rds(on)',
+        body: 'At 2 A through 40 mΩ the MOSFET makes 0.16 W, which is fine. Halve the gate voltage on the wrong part and it can sit partly on, with most of the supply across it, and burn watts. A tiny SOT-23 part like the AO3400A gets hot sooner than a TO-220.',
+      },
+      {
+        title: 'Two resistors on the gate',
+        body: 'A 100 Ω resistor in series with the gate limits the current spike that charges it. A 10 kΩ pull-down from gate to ground holds it off while the board boots and the pin floats. Without it the load can twitch on at power-up.',
+      },
+    ],
+    takeaway: 'From 3.3 V, pick a MOSFET with Rds(on) given at 2.5 V, like the AO3400A, and add a 10 kΩ pull-down.',
+  },
+  'flyback-diodes': {
+    demo: FlybackDemo,
+    tryIt: 'Switch off with no diode and watch the spike. Then add the diode, band to +, and switch off again. Try it reversed too, while switched on.',
+    ideas: [
+      {
+        title: 'Coils hate sudden change',
+        body: 'Relays, motors and solenoids are coils of wire, and a coil stores energy in its magnetic field. Cut the current suddenly and the coil makes whatever voltage it takes to keep it flowing, for a moment: often hundreds of volts at the transistor.',
+      },
+      {
+        title: 'The diode gives the current somewhere to go',
+        body: 'Put a diode across the coil with its band (the cathode) to the positive supply and the other end to the transistor. While the switch is on, the diode is reverse biased and does nothing. At switch-off the current loops round through the diode, and the voltage stops about 0.7 V above the supply.',
+      },
+      {
+        title: 'Backwards is worse than none',
+        body: 'With the band toward the transistor, the diode conducts from + straight into the transistor every time it turns on. That shorts the supply. A 1N4148 is fine for a small relay. Use a 1N4007 or a Schottky like the 1N5819 for motors and solenoids.',
+      },
+      {
+        title: 'Relay modules often have it already',
+        body: 'Most relay modules sold for Arduino and ESP32 already include the transistor and the diode. A bare relay, a motor or a solenoid needs one added. Brushed DC motors also make electrical noise, so a small 100 nF capacitor across the motor helps too.',
+      },
+    ],
+    takeaway: 'Every coil you switch gets a diode across it, band to the positive supply.',
+  },
+  'bjt-vs-mosfet': {
+    demo: SwitchPickerDemo,
+    tryIt: 'Start at 50 mA, then drag the current up and watch the transistor drop out. Try 48 V, and a 5 V Arduino pin.',
+    ideas: [
+      {
+        title: 'Small loads: either one',
+        body: 'An LED, a buzzer or a small relay draws under 100 mA. A 2N2222 or 2N3904 with a 220 Ω to 1 kΩ base resistor switches it cheaply, and a MOSFET works too. Use whichever you have.',
+      },
+      {
+        title: 'Big loads: a MOSFET',
+        body: 'A transistor needs about a tenth of its load current from the pin. At 200 mA that’s 20 mA, more than an ESP32 pin should give. A MOSFET needs almost no gate current, and with a low Rds(on) it wastes less power than a transistor’s 0.2–1 V drop.',
+      },
+      {
+        title: 'Check three numbers',
+        body: 'Drain-source voltage (Vds) above your supply, with room to spare. Current rating above your load. And Rds(on) specified at or below your gate voltage. For a 3.3 V pin that means 2.5 V, like the AO3400A. The IRLZ44N is specified down to 4 V and usually works at 3.3 V for a few amps. The IRFZ44N is specified at 10 V and doesn’t.',
+      },
+    ],
+    takeaway: 'Under 100 mA, either. Over that, a logic-level MOSFET.',
   },
 };
 
