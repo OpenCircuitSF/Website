@@ -91,9 +91,11 @@ type ErrorDetail struct {
 // never to a response.
 func AsError(op string, err error) *Error {
 	var e *Error
-	if errors.As(err, &e) {
+	if errors.As(err, &e) && e != nil && e.Status >= 400 && e.Status <= 599 {
 		return e
 	}
+	// A typed-nil *Error, or one with no error status, is an operation bug:
+	// answer 500 rather than panic in WriteHeader.
 	slog.Error("api: operation failed", "op", op, "err", err)
 	return internalError()
 }
