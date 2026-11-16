@@ -39,6 +39,8 @@ later.
 
 ## Integrations
 
+- [Agent API (`/api/v1`)](api.md) — keys and scopes, the error envelope, pagination, idempotency, and a `curl` example per resource; the reference is `/api/v1/openapi.json`
+- [MCP server and Claude Code](mcp.md) — connecting Claude Code and Claude Desktop to `/mcp`, the tool list, and three worked workflows (with the `ocsf-ops` skill in `.claude/skills/`)
 - [Home Assistant daily engagement check](home-assistant.md) — an API token, a REST sensor and a 9:00 AM automation that notifies you of new Bluesky and Mastodon engagement
 
 ## Working the tracker
