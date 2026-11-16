@@ -234,9 +234,12 @@ the two from drifting apart.
   sandboxing CSP, confirmed by `curl -sI`. `#0417`'s dimensions/EXIF work on
   these two files remains open.
 - **The repo's copy of the vhost is in sync.**
-  `deploy/apache/installed-001-www.opencircuitsf.com-le-ssl.conf` matches the
-  live file byte for byte as of 2026-09-04. Nothing enforces that — it is kept
-  current by hand, so re-diff it after any change to the running config.
+  `deploy/apache/installed-001-www.opencircuitsf.com-le-ssl.conf` was
+  re-captured from the live file on 2026-11-16 (`#0681`) and matches it except
+  for two comment lines citing `AGENTS.md` where the live file says
+  `CLAUDE.md`; the `/media` block is identical. Nothing enforces that — the
+  live file is authoritative and the copy is kept current by hand, so re-diff
+  it after any change to the running config.
 
 ## Troubleshooting
 

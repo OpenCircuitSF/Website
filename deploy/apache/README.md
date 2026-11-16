@@ -14,7 +14,30 @@ Tested on **Amazon Linux 2023** with `httpd` and `mod_ssl`.
 | File | What it is |
 |---|---|
 | `opencircuitsf.com.conf` | The **reference** vhost: one self-contained `:443` vhost doing apex→www, the `/.well-known/` exclusion, the proxy, and the security headers. Use it when standing up a fresh box. |
-| `installed-001-www.opencircuitsf.com-le-ssl.conf` | A **verbatim copy of what is actually running** on the production box as `/etc/httpd/conf.d/001-www.opencircuitsf.com-le-ssl.conf`, captured 2026-08-25. It differs from the reference: no apex→www redirect (the box's `002-…` file does that), a short-ramp HSTS `max-age`, and the box's real log paths. Keep it in sync by hand when the live file changes — nothing enforces that. |
+| `installed-001-www.opencircuitsf.com-le-ssl.conf` | A copy of what is actually running on the production box as `/etc/httpd/conf.d/001-www.opencircuitsf.com-le-ssl.conf`, **re-captured 2026-11-16 (`#0681`)**. **The live file is authoritative; this copy follows it.** It is byte-identical to the live file except for two comment lines that cite `AGENTS.md` §7/§8 where the live file still says `CLAUDE.md` (a stale name; the live comments are fixed on the next hand edit there). It differs from the reference file: no apex→www redirect (the box's `002-…` file does that), a short-ramp HSTS `max-age`, the backend port as `${PORT_OPENCIRCUIT}` rather than a literal, and the box's per-site log layout. Nothing enforces the sync — re-diff after any change to the running config: `diff <(ssh photon 'sudo cat /etc/httpd/conf.d/001-www.opencircuitsf.com-le-ssl.conf') deploy/apache/installed-001-www.opencircuitsf.com-le-ssl.conf`. |
+
+## Box-wide definitions the installed copy relies on
+
+The installed file is not self-contained. Two names in it are defined
+elsewhere on the box, and neither definition is in this repo:
+
+- **`${PORT_OPENCIRCUIT}`** — an Apache `Define` in
+  `/etc/httpd/conf.d/000-ports.conf` (value `8080`). That file is generated
+  from the box's own port registry and says not to edit it by hand; it sorts
+  ahead of the `001-…` vhosts, so the variable is defined before any vhost
+  uses it. To change the port, change the registry and the service's
+  `PORT`, not this vhost.
+- **`vhostlog`** — a `LogFormat` nickname in `/etc/httpd/conf/httpd.conf`
+  (`"%V:%p %h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\""`, i.e.
+  combined with the requested host and port prefixed). It is deliberately
+  not named `vhost_combined`: certbot's `options-ssl-apache.conf`, which
+  every `-le-ssl.conf` vhost `Include`s, redefines that nickname without the
+  host field and would silently shadow it on `:443`.
+
+Logs land in `logs/sites/www.opencircuitsf.com/{error_log,access_log}`
+(relative to `ServerRoot`, i.e. `/var/log/httpd/sites/…`). The reference
+`opencircuitsf.com.conf` still uses a literal `8080` and `combined` so it
+stays usable on a fresh box that has neither definition.
 
 ## Install
 
