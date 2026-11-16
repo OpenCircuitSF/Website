@@ -18,7 +18,8 @@ const IdempotencyTTL = 24 * time.Hour
 // (no stored response) before a retry treats it as abandoned and takes it
 // over (#0684). A row is left in flight when Complete fails or the process
 // dies mid-operation; without this, every retry would get 409 "still in
-// progress" for the whole TTL. It is far longer than any request runs.
+// progress" for the whole TTL. It is far longer than any request runs: a
+// write is cut off at WriteTimeout (#0685).
 const IdempotencyInFlightTimeout = 5 * time.Minute
 
 // IdempotencyStore remembers Idempotency-Keys per API key

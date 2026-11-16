@@ -116,7 +116,9 @@ func handlerFor(op api.Operation, idem api.IdempotencyStore, now func() time.Tim
 			return errorResult(api.AsError(op.Name, err)), nil
 		}
 		call := func(ctx context.Context) (int, []byte, *api.Error) {
-			out, err := op.Call(api.CallContext(ctx, op), in)
+			ctx, cancel := api.CallContext(ctx, op)
+			defer cancel()
+			out, err := op.Call(ctx, in)
 			if err != nil {
 				return 0, nil, api.AsError(op.Name, err)
 			}

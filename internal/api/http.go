@@ -212,13 +212,20 @@ func RunIdempotent(ctx context.Context, idem IdempotencyStore, now time.Time, to
 // a create, send or publish finishes even if the client disconnects. It is
 // never left half done, and an idempotent write records its result for the
 // retry to replay. Context values (the token, the client IP) are kept
-// either way.
-func CallContext(ctx context.Context, op Operation) context.Context {
+// either way. A detached write is still bounded by WriteTimeout, since
+// nothing else (no client, no http.Server timeout) would stop a hung one.
+// Call cancel when op returns.
+func CallContext(ctx context.Context, op Operation) (context.Context, context.CancelFunc) {
 	if op.Method == http.MethodGet {
-		return ctx
+		return ctx, func() {}
 	}
-	return context.WithoutCancel(ctx)
+	return context.WithTimeout(context.WithoutCancel(ctx), WriteTimeout)
 }
+
+// WriteTimeout bounds a write detached by CallContext. It is well under
+// IdempotencyInFlightTimeout, so a write still running can never have its
+// key taken over by a retry and run twice (#0685's review).
+const WriteTimeout = 2 * time.Minute
 
 // readBody reads a POST, PUT or PATCH body, capped at MaxBodyBytes. A
 // non-empty body must be application/json.
@@ -251,7 +258,9 @@ func readBody(w http.ResponseWriter, r *http.Request) ([]byte, *Error) {
 // Encoder, so HTML-escaped with a trailing newline): the engagement success
 // body stays byte-identical across the move onto the registry.
 func run(ctx context.Context, op Operation, in any) (int, []byte, *Error) {
-	out, err := op.call(CallContext(ctx, op), in)
+	ctx, cancel := CallContext(ctx, op)
+	defer cancel()
+	out, err := op.call(ctx, in)
 	if err != nil {
 		return 0, nil, AsError(op.Name, err)
 	}

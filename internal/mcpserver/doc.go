@@ -31,8 +31,9 @@
 // Cancellation (#0685). The handler sets PropagateRequestCancellation, so a
 // tool call's context ends with its HTTP request. Each call then runs on
 // api.CallContext, which REST shares: a read (GET) stops when the client
-// cancels or disconnects. A write runs on a context that is never cancelled,
-// so a create, send or publish that has started always finishes, and its
+// cancels or disconnects. A write runs on a context the client cannot cancel
+// (bounded only by api.WriteTimeout), so a create, send or publish that has
+// started finishes, and its
 // audit entries and idempotency result are recorded. Running a write to
 // completion is the safe choice for an operation with a PublicEffect, where
 // a half-finished send could not be retried cleanly. For other writes it
