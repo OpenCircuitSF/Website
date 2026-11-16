@@ -104,7 +104,7 @@ describe('guidePosts', () => {
 
   it('mirrors the Go sample short URL', () => {
     const path = fileURLToPath(new URL('../../../internal/guideposts/guideposts.go', import.meta.url));
-    expect(readFileSync(path, 'utf-8')).toContain(`sampleShortURL = "${GUIDE_LINK_SAMPLE}"`);
+    expect(readFileSync(path, 'utf-8')).toContain(`LinkMeasuredAs = "${GUIDE_LINK_SAMPLE}"`);
   });
 
   it('accepts blank and lowercase-hyphen campaigns, rejects others', () => {

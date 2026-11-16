@@ -23,10 +23,14 @@ import (
 // counted apart.
 const CampaignSlug = "guide-posts"
 
-// sampleShortURL stands in for the short link while a draft still holds the
+// LinkMeasuredAs stands in for the short link while a draft still holds the
 // link token: a 12-character key, longer than ShortLinks' real 6, so a draft
-// that passes here still fits once the real link is in.
-const sampleShortURL = "https://go.opencircuitsf.com/u/XXXXXXXXXXXX"
+// that passes here still fits once the real link is in. The v1 API reports it
+// (list_channels, #0676) so a tool can size a post before creating it.
+const LinkMeasuredAs = "https://go.opencircuitsf.com/u/XXXXXXXXXXXX"
+
+// sampleShortURL is the package's own name for LinkMeasuredAs.
+const sampleShortURL = LinkMeasuredAs
 
 var campaignSlugPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
@@ -41,6 +45,7 @@ var (
 	ErrForeignLink     = errors.New("guideposts: ShortLinks returned a link for another destination")
 	ErrBadCampaignSlug = errors.New("guideposts: campaign slug may use only lowercase letters, digits and single hyphens")
 	ErrLinkRemoved     = errors.New("guideposts: the post must keep its short link")
+	ErrLinkFixed       = errors.New("guideposts: the campaign is fixed once the post has its short link")
 )
 
 // BodyError is a post body that fails validation (too long, empty); the

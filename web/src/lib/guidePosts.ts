@@ -19,7 +19,7 @@ import type {
 export { asSentence, formatClicks };
 
 /** The URL the server measures `{link}` as before a short link exists.
- * Mirrors internal/guideposts's sampleShortURL. */
+ * Mirrors internal/guideposts's LinkMeasuredAs (#0676). */
 export const GUIDE_LINK_SAMPLE = 'https://go.opencircuitsf.com/u/XXXXXXXXXXXX';
 
 /** A body's length with its link included: the real short URL once it

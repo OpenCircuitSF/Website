@@ -29,6 +29,22 @@ const (
 	Topic
 )
 
+// String is the kind's API name: "workshop" or "topic".
+func (k Kind) String() string {
+	if k == Workshop {
+		return "workshop"
+	}
+	return "topic"
+}
+
+// Set is one of the catalog's guide sets (LEDs, ESP32-C3, ...); every guide
+// belongs to exactly one.
+type Set struct {
+	ID    string
+	Title string
+	Blurb string
+}
+
 // Guide is one catalog entry.
 type Guide struct {
 	Kind  Kind
@@ -43,6 +59,8 @@ type Guide struct {
 	Tags        []string
 	// Post is the suggested social-post copy, without the link; topics only.
 	Post string
+	// Set is the id of the guide's set (see Sets).
+	Set string
 }
 
 // Path is the guide's public URL path.
@@ -61,24 +79,44 @@ type entry struct {
 	Minutes     int      `json:"minutes"`
 	Tags        []string `json:"tags"`
 	Post        string   `json:"post"`
+	Set         string   `json:"set"`
+}
+
+type setEntry struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Blurb string `json:"blurb"`
 }
 
 type file struct {
-	WorkshopGuides []entry `json:"workshopGuides"`
-	Topics         []entry `json:"topics"`
+	Sets           []setEntry `json:"sets"`
+	WorkshopGuides []entry    `json:"workshopGuides"`
+	Topics         []entry    `json:"topics"`
 }
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
 // load parses and validates a catalog. Workshop guides come first, then
-// topics, each in file order.
-func load(raw []byte) ([]Guide, error) {
+// topics, each in file order. Every guide must name a declared set.
+func load(raw []byte) ([]Guide, []Set, error) {
 	var f file
 	if err := json.Unmarshal(raw, &f); err != nil {
-		return nil, fmt.Errorf("guides: parse catalog: %w", err)
+		return nil, nil, fmt.Errorf("guides: parse catalog: %w", err)
 	}
 	if len(f.WorkshopGuides) == 0 || len(f.Topics) == 0 {
-		return nil, errors.New("guides: catalog needs at least one workshop guide and one topic")
+		return nil, nil, errors.New("guides: catalog needs at least one workshop guide and one topic")
+	}
+	var sets []Set
+	setIDs := map[string]bool{}
+	for _, se := range f.Sets {
+		if !slugPattern.MatchString(se.ID) {
+			return nil, nil, fmt.Errorf("guides: set id %q is not URL-safe", se.ID)
+		}
+		if setIDs[se.ID] {
+			return nil, nil, fmt.Errorf("guides: duplicate set id %q", se.ID)
+		}
+		setIDs[se.ID] = true
+		sets = append(sets, Set{ID: se.ID, Title: se.Title, Blurb: se.Blurb})
 	}
 	seen := map[string]bool{}
 	var out []Guide
@@ -99,6 +137,12 @@ func load(raw []byte) ([]Guide, error) {
 		if kind == Topic && (strings.TrimSpace(e.Post) == "" || !isPlainText(e.Post)) {
 			return fmt.Errorf("guides: topic %q needs plain post copy", e.Slug)
 		}
+		if e.Set == "" {
+			return fmt.Errorf("guides: %q needs a set", e.Slug)
+		}
+		if !setIDs[e.Set] {
+			return fmt.Errorf("guides: %q names set %q, which is not declared", e.Slug, e.Set)
+		}
 		if kind == Workshop && e.Post != "" {
 			return fmt.Errorf("guides: workshop guide %q must not carry post copy", e.Slug)
 		}
@@ -109,20 +153,20 @@ func load(raw []byte) ([]Guide, error) {
 		if !isPlainText(desc) {
 			return fmt.Errorf("guides: %q meta description has a control character or soft hyphen; add a plain description", e.Slug)
 		}
-		out = append(out, Guide{Kind: kind, Slug: e.Slug, Title: e.Title, Hook: e.Hook, Description: desc, Minutes: e.Minutes, Tags: e.Tags, Post: e.Post})
+		out = append(out, Guide{Kind: kind, Slug: e.Slug, Title: e.Title, Hook: e.Hook, Description: desc, Minutes: e.Minutes, Tags: e.Tags, Post: e.Post, Set: e.Set})
 		return nil
 	}
 	for _, e := range f.WorkshopGuides {
 		if err := add(Workshop, e); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	for _, e := range f.Topics {
 		if err := add(Topic, e); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	return out, nil
+	return out, sets, nil
 }
 
 // isPlainText reports whether s has no C0/C1 control character and no soft
@@ -136,19 +180,22 @@ func isPlainText(s string) bool {
 	return true
 }
 
-func mustLoad(fsys fs.FS) []Guide {
+func mustLoad(fsys fs.FS) ([]Guide, []Set) {
 	raw, err := fs.ReadFile(fsys, "guides/guides.json")
 	if err != nil {
 		panic("guides: read embedded catalog: " + err.Error())
 	}
-	gs, err := load(raw)
+	gs, sets, err := load(raw)
 	if err != nil {
 		panic(err.Error())
 	}
-	return gs
+	return gs, sets
 }
 
-var catalog = mustLoad(web.StaticContent())
+var catalog, catalogSets = mustLoad(web.StaticContent())
+
+// Sets returns the guide sets in catalog order.
+func Sets() []Set { return append([]Set(nil), catalogSets...) }
 
 // All returns every guide: workshop guides first, then topics.
 func All() []Guide { return append([]Guide(nil), catalog...) }

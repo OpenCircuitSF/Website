@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/brennanMKE/OpenCircuitSF/internal/api"
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/guideposts"
 	"github.com/brennanMKE/OpenCircuitSF/internal/guides"
@@ -24,6 +25,7 @@ type guidePostStore interface {
 	Get(ctx context.Context, id int64) (guideposts.Post, error)
 	Create(ctx context.Context, slug, channel, body, base, campaign string) (guideposts.Post, error)
 	UpdateBody(ctx context.Context, id int64, body string) (guideposts.Post, error)
+	UpdateCampaign(ctx context.Context, id int64, campaign string) (guideposts.Post, error)
 	Schedule(ctx context.Context, id int64, at time.Time) (guideposts.Post, error)
 	Unschedule(ctx context.Context, id int64) (guideposts.Post, error)
 	QueueNow(ctx context.Context, id int64) (guideposts.Post, string, error)
@@ -119,15 +121,22 @@ func (h *AdminGuidePostsHandler) configured(name string) bool {
 	return h.channels != nil && h.channels.ChannelConfigured(name)
 }
 
-// record writes e against guide post id, filling the target and IP.
-func (h *AdminGuidePostsHandler) record(r *http.Request, id int64, e audit.Entry) {
+// recordCtx writes e against guide post id, filling the target and IP. ip ""
+// takes the IP the v1 API put in ctx (api.ClientIPFromContext). An API-token
+// request is attributed to its token (#0674); for a session request that is
+// a no-op, so admin rows are unchanged.
+func (h *AdminGuidePostsHandler) recordCtx(ctx context.Context, ip string, id int64, e audit.Entry) {
 	if h.auditor == nil {
 		return
 	}
 	e.TargetType = audit.TargetGuidePost
 	e.TargetID = &id
-	e.IP = clientIP(r)
-	h.auditor.Record(r.Context(), e)
+	if ip == "" {
+		ip = api.ClientIPFromContext(ctx)
+	}
+	e.IP = ip
+	e = middleware.AttributeAPIToken(ctx, e)
+	h.auditor.Record(ctx, e)
 }
 
 // guideTopicView is one postable guide in the List response.
@@ -300,16 +309,24 @@ func (h *AdminGuidePostsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 // Overview handles GET /admin/guide-posts-overview: one row per topic guide.
 func (h *AdminGuidePostsHandler) Overview(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	posts, err := h.store.List(ctx)
+	resp, err := h.overview(r.Context())
 	if err != nil {
 		writeGuidePostError(w, err)
 		return
 	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// overview builds the recently-shared overview; the admin route and the v1
+// guide_posts_overview operation (#0676) both serve it.
+func (h *AdminGuidePostsHandler) overview(ctx context.Context) (guidePostsOverviewResponse, error) {
+	posts, err := h.store.List(ctx)
+	if err != nil {
+		return guidePostsOverviewResponse{}, err
+	}
 	clicks, known, clicksErr, err := h.clicks(ctx)
 	if err != nil {
-		writeGuidePostError(w, err)
-		return
+		return guidePostsOverviewResponse{}, err
 	}
 	rows, signupsErr := h.signupRows(ctx, posts)
 	resp := guidePostsOverviewResponse{Guides: []guideShareView{}, ClicksError: clicksErr, SignupsError: signupsErr}
@@ -321,7 +338,7 @@ func (h *AdminGuidePostsHandler) Overview(w http.ResponseWriter, r *http.Request
 		}
 		resp.Guides = append(resp.Guides, v)
 	}
-	writeJSON(w, http.StatusOK, resp)
+	return resp, nil
 }
 
 func guideActor(w http.ResponseWriter, r *http.Request) (int64, bool) {
@@ -333,11 +350,27 @@ func guideActor(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return actor.ID, true
 }
 
-// mintAfterCreate gives a new draft its link and answers 201 with the post
-// and link_error; a failed mint keeps the unlinked draft.
-func (h *AdminGuidePostsHandler) mintAfterCreate(w http.ResponseWriter, r *http.Request, actorID int64, p guideposts.Post) {
+// errChannelNotConnected is gate's refusal when the post's channel account
+// is not connected.
+type errChannelNotConnected struct{ label string }
+
+func (e errChannelNotConnected) Error() string { return e.label + " is not connected" }
+
+// errShortLinks wraps a ShortLinks failure while gate mints a link, so each
+// transport can answer it as a ShortLinks problem.
+type errShortLinks struct{ err error }
+
+func (e errShortLinks) Error() string { return "guide post link: " + e.err.Error() }
+func (e errShortLinks) Unwrap() error { return e.err }
+
+// errDraftOnly is deletePost's refusal of a non-draft when draftOnly is set.
+var errDraftOnly = errors.New("only a draft can be deleted; unschedule it first")
+
+// mint gives new draft p its link and returns the post with link_error; a
+// failed mint keeps the unlinked draft.
+func (h *AdminGuidePostsHandler) mint(ctx context.Context, ip string, actorID *int64, p guideposts.Post) guidePostLinkResponse {
 	resp := guidePostLinkResponse{Post: p}
-	linked, minted, err := h.linker.Ensure(r.Context(), p.ID)
+	linked, minted, err := h.linker.Ensure(ctx, p.ID)
 	if err != nil {
 		slog.Default().Warn("admin_guide_posts: link mint failed", "id", p.ID, "err", err)
 		reason := linkFailureReason(err)
@@ -345,20 +378,137 @@ func (h *AdminGuidePostsHandler) mintAfterCreate(w http.ResponseWriter, r *http.
 	} else {
 		resp.Post = linked
 		if minted {
-			h.recordLinkCreated(r, actorID, linked)
+			h.recordLinkCreated(ctx, ip, actorID, linked)
 		}
 	}
-	writeJSON(w, http.StatusCreated, resp)
+	return resp
 }
 
-func (h *AdminGuidePostsHandler) recordLinkCreated(r *http.Request, actorID int64, p guideposts.Post) {
+func (h *AdminGuidePostsHandler) recordLinkCreated(ctx context.Context, ip string, actorID *int64, p guideposts.Post) {
 	key := ""
 	if p.ShortLinkKey != nil {
 		key = *p.ShortLinkKey
 	}
-	h.record(r, p.ID, audit.Entry{ActorID: &actorID, Action: audit.ActionGuidePostLinkCreated, Metadata: map[string]any{
+	h.recordCtx(ctx, ip, p.ID, audit.Entry{ActorID: actorID, Action: audit.ActionGuidePostLinkCreated, Metadata: map[string]any{
 		"slug": p.GuideSlug, "channel": p.Channel, "campaign": p.CampaignSlug, "short_link_key": key,
 	}})
+}
+
+// createDraft makes a draft for slug on channel, audits it and mints its
+// link.
+func (h *AdminGuidePostsHandler) createDraft(ctx context.Context, ip string, actorID *int64, slug, channel, body, campaign string) (guidePostLinkResponse, error) {
+	p, err := h.store.Create(ctx, slug, channel, body, h.baseURL, campaign)
+	if err != nil {
+		return guidePostLinkResponse{}, err
+	}
+	h.recordCtx(ctx, ip, p.ID, audit.Entry{ActorID: actorID, Action: audit.ActionGuidePostCreated, Metadata: map[string]any{"slug": p.GuideSlug, "channel": p.Channel, "campaign": p.CampaignSlug}})
+	return h.mint(ctx, ip, actorID, p), nil
+}
+
+// again copies posted post id into a new draft with its own link.
+func (h *AdminGuidePostsHandler) again(ctx context.Context, ip string, actorID *int64, id int64, campaign string) (guidePostLinkResponse, error) {
+	p, err := h.store.CopyAsDraft(ctx, id, h.baseURL, campaign)
+	if err != nil {
+		return guidePostLinkResponse{}, err
+	}
+	h.recordCtx(ctx, ip, p.ID, audit.Entry{ActorID: actorID, Action: audit.ActionGuidePostCreated, Metadata: map[string]any{"slug": p.GuideSlug, "channel": p.Channel, "campaign": p.CampaignSlug, "copied_from": id}})
+	return h.mint(ctx, ip, actorID, p), nil
+}
+
+// updateBody edits post id's text.
+func (h *AdminGuidePostsHandler) updateBody(ctx context.Context, ip string, actorID *int64, id int64, body string) (guideposts.Post, error) {
+	p, err := h.store.UpdateBody(ctx, id, body)
+	if err != nil {
+		return guideposts.Post{}, err
+	}
+	h.recordCtx(ctx, ip, p.ID, audit.Entry{ActorID: actorID, Action: audit.ActionGuidePostUpdated, Metadata: map[string]any{"slug": p.GuideSlug, "channel": p.Channel}})
+	return p, nil
+}
+
+// gate loads post id, requires its channel to be connected and gives an
+// unlinked draft its link. A disconnected channel is errChannelNotConnected
+// and a ShortLinks failure errShortLinks.
+func (h *AdminGuidePostsHandler) gate(ctx context.Context, ip string, actorID *int64, id int64) (guideposts.Post, error) {
+	p, err := h.store.Get(ctx, id)
+	if err != nil {
+		return p, err
+	}
+	if !h.configured(p.Channel) {
+		label := p.Channel
+		if ch, ok := outreach.ChannelByName(p.Channel); ok {
+			label = ch.Label
+		}
+		return p, errChannelNotConnected{label: label}
+	}
+	if p.ShortURL != nil || p.Status != "draft" {
+		return p, nil
+	}
+	linked, minted, err := h.linker.Ensure(ctx, id)
+	if err != nil {
+		if errors.Is(err, guideposts.ErrNotFound) || errors.Is(err, guideposts.ErrUnknownGuide) {
+			return p, err
+		}
+		return p, errShortLinks{err: err}
+	}
+	if minted {
+		h.recordLinkCreated(ctx, ip, actorID, linked)
+	}
+	return linked, nil
+}
+
+// schedule gates post id and sets it to go out at.
+func (h *AdminGuidePostsHandler) schedule(ctx context.Context, ip string, actorID *int64, id int64, at time.Time) (guideposts.Post, error) {
+	if _, err := h.gate(ctx, ip, actorID, id); err != nil {
+		return guideposts.Post{}, err
+	}
+	p, err := h.store.Schedule(ctx, id, at)
+	if err != nil {
+		return guideposts.Post{}, err
+	}
+	h.recordCtx(ctx, ip, p.ID, audit.Entry{ActorID: actorID, Action: audit.ActionGuidePostScheduled, Metadata: map[string]any{"slug": p.GuideSlug, "channel": p.Channel, "scheduled_at": at.Format(time.RFC3339)}})
+	return p, nil
+}
+
+// queueNow gates post id and queues it for the publisher: a first send, or
+// a retry of a failed post.
+func (h *AdminGuidePostsHandler) queueNow(ctx context.Context, ip string, actorID *int64, id int64) (guideposts.Post, error) {
+	if _, err := h.gate(ctx, ip, actorID, id); err != nil {
+		return guideposts.Post{}, err
+	}
+	p, prev, err := h.store.QueueNow(ctx, id)
+	if err != nil {
+		return guideposts.Post{}, err
+	}
+	h.recordCtx(ctx, ip, p.ID, audit.Entry{ActorID: actorID, Action: audit.ActionGuidePostQueued, Metadata: map[string]any{"slug": p.GuideSlug, "channel": p.Channel, "retry": prev == "failed"}})
+	return p, nil
+}
+
+// unschedule returns scheduled post id to draft.
+func (h *AdminGuidePostsHandler) unschedule(ctx context.Context, ip string, actorID *int64, id int64) (guideposts.Post, error) {
+	p, err := h.store.Unschedule(ctx, id)
+	if err != nil {
+		return guideposts.Post{}, err
+	}
+	h.recordCtx(ctx, ip, p.ID, audit.Entry{ActorID: actorID, Action: audit.ActionGuidePostUnscheduled, Metadata: map[string]any{"slug": p.GuideSlug, "channel": p.Channel}})
+	return p, nil
+}
+
+// deletePost removes post id. draftOnly (the v1 API) refuses anything but a
+// draft with errDraftOnly; the admin UI may also delete a scheduled or
+// failed post. The short link, if any, stays in ShortLinks.
+func (h *AdminGuidePostsHandler) deletePost(ctx context.Context, ip string, actorID *int64, id int64, draftOnly bool) error {
+	p, err := h.store.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+	if draftOnly && p.Status != "draft" {
+		return errDraftOnly
+	}
+	if err := h.store.Delete(ctx, id); err != nil {
+		return err
+	}
+	h.recordCtx(ctx, ip, id, audit.Entry{ActorID: actorID, Action: audit.ActionGuidePostDeleted, Metadata: map[string]any{"slug": p.GuideSlug, "channel": p.Channel}})
+	return nil
 }
 
 // Create handles POST /admin/guide-posts.
@@ -377,13 +527,12 @@ func (h *AdminGuidePostsHandler) Create(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	p, err := h.store.Create(r.Context(), req.Slug, req.Channel, req.Body, h.baseURL, req.Campaign)
+	resp, err := h.createDraft(r.Context(), clientIP(r), &actorID, req.Slug, req.Channel, req.Body, req.Campaign)
 	if err != nil {
 		writeGuidePostError(w, err)
 		return
 	}
-	h.record(r, p.ID, audit.Entry{ActorID: &actorID, Action: audit.ActionGuidePostCreated, Metadata: map[string]any{"slug": p.GuideSlug, "channel": p.Channel, "campaign": p.CampaignSlug}})
-	h.mintAfterCreate(w, r, actorID, p)
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 // Again handles POST /admin/guide-posts/{id}/again: "schedule again" copies
@@ -406,13 +555,12 @@ func (h *AdminGuidePostsHandler) Again(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	p, err := h.store.CopyAsDraft(r.Context(), id, h.baseURL, req.Campaign)
+	resp, err := h.again(r.Context(), clientIP(r), &actorID, id, req.Campaign)
 	if err != nil {
 		writeGuidePostError(w, err)
 		return
 	}
-	h.record(r, p.ID, audit.Entry{ActorID: &actorID, Action: audit.ActionGuidePostCreated, Metadata: map[string]any{"slug": p.GuideSlug, "channel": p.Channel, "campaign": p.CampaignSlug, "copied_from": id}})
-	h.mintAfterCreate(w, r, actorID, p)
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 // Patch handles PATCH /admin/guide-posts/{id}: edit the text.
@@ -432,48 +580,12 @@ func (h *AdminGuidePostsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	p, err := h.store.UpdateBody(r.Context(), id, req.Body)
+	p, err := h.updateBody(r.Context(), clientIP(r), &actorID, id, req.Body)
 	if err != nil {
 		writeGuidePostError(w, err)
 		return
 	}
-	h.record(r, p.ID, audit.Entry{ActorID: &actorID, Action: audit.ActionGuidePostUpdated, Metadata: map[string]any{"slug": p.GuideSlug, "channel": p.Channel}})
 	writeJSON(w, http.StatusOK, p)
-}
-
-// sendGate loads post id, requires its channel to be connected and gives an
-// unlinked draft its link, writing the response and returning ok=false when
-// any step fails.
-func (h *AdminGuidePostsHandler) sendGate(w http.ResponseWriter, r *http.Request, actorID, id int64) (guideposts.Post, bool) {
-	p, err := h.store.Get(r.Context(), id)
-	if err != nil {
-		writeGuidePostError(w, err)
-		return p, false
-	}
-	if !h.configured(p.Channel) {
-		label := p.Channel
-		if ch, ok := outreach.ChannelByName(p.Channel); ok {
-			label = ch.Label
-		}
-		writeError(w, http.StatusConflict, label+" is not connected")
-		return p, false
-	}
-	if p.ShortURL != nil || p.Status != "draft" {
-		return p, true
-	}
-	linked, minted, err := h.linker.Ensure(r.Context(), id)
-	if err != nil {
-		if errors.Is(err, guideposts.ErrNotFound) || errors.Is(err, guideposts.ErrUnknownGuide) {
-			writeGuidePostError(w, err)
-		} else {
-			writeShortLinksError(w, "guide_post_link", err)
-		}
-		return p, false
-	}
-	if minted {
-		h.recordLinkCreated(r, actorID, linked)
-	}
-	return linked, true
 }
 
 // Schedule handles POST /admin/guide-posts/{id}/schedule.
@@ -498,15 +610,11 @@ func (h *AdminGuidePostsHandler) Schedule(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusUnprocessableEntity, "scheduled_at "+reason)
 		return
 	}
-	if _, ok := h.sendGate(w, r, actorID, id); !ok {
-		return
-	}
-	p, err := h.store.Schedule(r.Context(), id, at)
+	p, err := h.schedule(r.Context(), clientIP(r), &actorID, id, at)
 	if err != nil {
 		writeGuidePostError(w, err)
 		return
 	}
-	h.record(r, p.ID, audit.Entry{ActorID: &actorID, Action: audit.ActionGuidePostScheduled, Metadata: map[string]any{"slug": p.GuideSlug, "channel": p.Channel, "scheduled_at": at.Format(time.RFC3339)}})
 	writeJSON(w, http.StatusOK, p)
 }
 
@@ -521,15 +629,11 @@ func (h *AdminGuidePostsHandler) Send(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, ok := h.sendGate(w, r, actorID, id); !ok {
-		return
-	}
-	p, prev, err := h.store.QueueNow(r.Context(), id)
+	p, err := h.queueNow(r.Context(), clientIP(r), &actorID, id)
 	if err != nil {
 		writeGuidePostError(w, err)
 		return
 	}
-	h.record(r, p.ID, audit.Entry{ActorID: &actorID, Action: audit.ActionGuidePostQueued, Metadata: map[string]any{"slug": p.GuideSlug, "channel": p.Channel, "retry": prev == "failed"}})
 	writeJSON(w, http.StatusAccepted, p)
 }
 
@@ -543,17 +647,15 @@ func (h *AdminGuidePostsHandler) Unschedule(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	p, err := h.store.Unschedule(r.Context(), id)
+	p, err := h.unschedule(r.Context(), clientIP(r), &actorID, id)
 	if err != nil {
 		writeGuidePostError(w, err)
 		return
 	}
-	h.record(r, p.ID, audit.Entry{ActorID: &actorID, Action: audit.ActionGuidePostUnscheduled, Metadata: map[string]any{"slug": p.GuideSlug, "channel": p.Channel}})
 	writeJSON(w, http.StatusOK, p)
 }
 
-// Delete handles DELETE /admin/guide-posts/{id}. The short link, if any,
-// stays in ShortLinks.
+// Delete handles DELETE /admin/guide-posts/{id}.
 func (h *AdminGuidePostsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	actorID, ok := guideActor(w, r)
 	if !ok {
@@ -563,45 +665,61 @@ func (h *AdminGuidePostsHandler) Delete(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	p, err := h.store.Get(r.Context(), id)
-	if err != nil {
+	if err := h.deletePost(r.Context(), clientIP(r), &actorID, id, false); err != nil {
 		writeGuidePostError(w, err)
 		return
 	}
-	if err := h.store.Delete(r.Context(), id); err != nil {
-		writeGuidePostError(w, err)
-		return
-	}
-	h.record(r, id, audit.Entry{ActorID: &actorID, Action: audit.ActionGuidePostDeleted, Metadata: map[string]any{"slug": p.GuideSlug, "channel": p.Channel}})
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// writeGuidePostError maps a guideposts error to a fixed response.
-func writeGuidePostError(w http.ResponseWriter, err error) {
+// guidePostErrInfo is the one table mapping a guide-post error to a status,
+// the request field it concerns ("" when none) and a fixed message. The
+// admin routes (writeGuidePostError) and the v1 operations
+// (guidePostAPIError) both read it. status 500 means unrecognised.
+func guidePostErrInfo(err error) (status int, field, msg string) {
 	var be *guideposts.BodyError
+	var nc errChannelNotConnected
 	switch {
 	case errors.Is(err, guideposts.ErrNotFound):
-		writeError(w, http.StatusNotFound, "post not found")
+		return http.StatusNotFound, "", "post not found"
 	case errors.Is(err, guideposts.ErrPostLocked):
-		writeError(w, http.StatusConflict, "post is already posted")
+		return http.StatusConflict, "", "post is already posted"
 	case errors.Is(err, guideposts.ErrPostInFlight):
-		writeError(w, http.StatusConflict, "post is being sent")
+		return http.StatusConflict, "", "post is being sent"
 	case errors.Is(err, guideposts.ErrWrongStatus):
-		writeError(w, http.StatusConflict, "post is not in a state that allows this")
+		return http.StatusConflict, "", "post is not in a state that allows this"
 	case errors.Is(err, guideposts.ErrNoLink):
-		writeError(w, http.StatusConflict, "the post has no short link yet")
+		return http.StatusConflict, "", "the post has no short link yet"
+	case errors.Is(err, guideposts.ErrLinkFixed):
+		return http.StatusConflict, "campaign", "the campaign is fixed once the post has its short link; use post_guide_again with a new campaign"
+	case errors.Is(err, errDraftOnly):
+		return http.StatusConflict, "", errDraftOnly.Error()
+	case errors.As(err, &nc):
+		return http.StatusConflict, "channel", nc.Error()
 	case errors.Is(err, guideposts.ErrUnknownGuide):
-		writeError(w, http.StatusBadRequest, "not a topic guide")
+		return http.StatusBadRequest, "slug", "not a topic guide"
 	case errors.Is(err, guideposts.ErrChannelUnknown):
-		writeError(w, http.StatusBadRequest, "unknown channel")
+		return http.StatusBadRequest, "channel", "unknown channel"
 	case errors.Is(err, guideposts.ErrBadCampaignSlug):
-		writeError(w, http.StatusUnprocessableEntity, "campaign may use only lowercase letters, digits and single hyphens")
+		return http.StatusUnprocessableEntity, "campaign", "campaign may use only lowercase letters, digits and single hyphens"
 	case errors.Is(err, guideposts.ErrLinkRemoved):
-		writeError(w, http.StatusUnprocessableEntity, "the post must keep its short link")
+		return http.StatusUnprocessableEntity, "body", "the post must keep its short link"
 	case errors.As(err, &be):
-		writeError(w, http.StatusUnprocessableEntity, be.Error())
-	default:
-		slog.Default().Error("admin_guide_posts: request failed", "err", err)
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		return http.StatusUnprocessableEntity, "body", be.Error()
 	}
+	return http.StatusInternalServerError, "", "internal server error"
+}
+
+// writeGuidePostError maps a guide-post error to a fixed admin response.
+func writeGuidePostError(w http.ResponseWriter, err error) {
+	var sl errShortLinks
+	if errors.As(err, &sl) {
+		writeShortLinksError(w, "guide_post_link", sl.err)
+		return
+	}
+	status, _, msg := guidePostErrInfo(err)
+	if status == http.StatusInternalServerError {
+		slog.Default().Error("admin_guide_posts: request failed", "err", err)
+	}
+	writeError(w, status, msg)
 }

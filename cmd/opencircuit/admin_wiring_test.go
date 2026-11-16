@@ -134,10 +134,14 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// #0652: attach the API tokens handler so its three admin routes are
 	// swept below, and /api/v1/token is mounted for the bearer checks.
 	apiTokensH := handlers.NewAPITokensHandler(apitokens.NewStore(pool), auditLogger)
+	// #0659, #0676: the guide-posts handler, shared by its admin routes
+	// (mounted through adminOutreachH below) and the v1 guide-post ops.
+	guideStore := guideposts.NewStore(pool, outbox.NewStore(pool))
+	adminGuidePostsH := handlers.NewAdminGuidePostsHandler(guideStore, guideposts.NewLinker(guideStore, nil), (*shortlinks.Client)(nil), auditLogger, cfg.BaseURL, (*guideposts.Publisher)(nil))
 	// #0653, #0675: the v1 operation registry, built as main.go builds it.
 	apiTokensH.SetV1(handlers.BuildV1Registry(
 		api.Config{Version: "wiring-version", Idempotency: api.NewIdempotencyStore(pool)},
-		handlers.V1Deps{Engagement: outreach.NewStore(pool)},
+		handlers.V1Deps{Engagement: outreach.NewStore(pool), BaseURL: cfg.BaseURL, GuidePosts: adminGuidePostsH},
 	))
 	settingsH.SetAPITokens(apiTokensH)
 	adminUsersH := handlers.NewAdminUsersHandler(store, auditLogger)
@@ -247,9 +251,9 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// 400 from the real handler still proves RequireAdmin let it through).
 	adminOutreachH := handlers.NewAdminOutreachHandler(outreach.NewStore(pool), outreach.NewStore(pool), outreach.NewStore(pool), workshopsStore, (*shortlinks.Client)(nil), auditLogger, cfg.BaseURL, (*outreach.Publisher)(nil))
 	// #0659: the guide-post routes, mounted through adminOutreachH, so the
-	// route loop proves all nine are admin-only.
-	guideStore := guideposts.NewStore(pool, outbox.NewStore(pool))
-	adminOutreachH.SetGuidePosts(handlers.NewAdminGuidePostsHandler(guideStore, guideposts.NewLinker(guideStore, nil), (*shortlinks.Client)(nil), auditLogger, cfg.BaseURL, (*guideposts.Publisher)(nil)))
+	// route loop proves all nine are admin-only. adminGuidePostsH is built
+	// above, before the v1 registry (#0676) that shares it.
+	adminOutreachH.SetGuidePosts(adminGuidePostsH)
 	// #0643: mounted through adminCampaignsH, so its guard is proven here too.
 	adminCampaignsH.SetUpcomingEvents(handlers.NewAdminNewsletterEventsHandler(campaignsStore, workshopsStore, outreach.NewStore(pool), outreach.NewStore(pool), (*shortlinks.Client)(nil), auditLogger, cfg.BaseURL))
 	broker := events.NewBroker()

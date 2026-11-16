@@ -106,3 +106,71 @@ func TestIdempotencyStoreScopedPerToken(t *testing.T) {
 		t.Fatalf("same key, other token: %v %v", got, err)
 	}
 }
+
+// TestIdempotencyStoreTakesOverAbandonedInFlight (#0684): an in-flight key
+// older than IdempotencyInFlightTimeout is abandoned, so a retry with the
+// same request claims it; a younger one is still in progress.
+func TestIdempotencyStoreTakesOverAbandonedInFlight(t *testing.T) {
+	pool := testPool(t)
+	s, ctx, id, now := NewIdempotencyStore(pool), context.Background(), newIdemToken(t, pool), time.Now()
+	if _, err := s.Begin(ctx, id, "k", "op", hashOf("a"), now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Begin(ctx, id, "k", "op", hashOf("a"), now.Add(IdempotencyInFlightTimeout-time.Second)); !errors.Is(err, ErrIdempotencyInFlight) {
+		t.Fatalf("young in-flight row: %v", err)
+	}
+	later := now.Add(IdempotencyInFlightTimeout + time.Second)
+	if _, err := s.Begin(ctx, id, "k", "op", hashOf("b"), later); !errors.Is(err, ErrIdempotencyMismatch) {
+		t.Fatalf("abandoned row, different request: %v", err)
+	}
+	got, err := s.Begin(ctx, id, "k", "op", hashOf("a"), later)
+	if err != nil || got != nil {
+		t.Fatalf("take over: %v %v", got, err)
+	}
+	// The take-over restarted the clock: a second retry right after is in flight.
+	if _, err := s.Begin(ctx, id, "k", "op", hashOf("a"), later.Add(time.Second)); !errors.Is(err, ErrIdempotencyInFlight) {
+		t.Fatalf("after take over: %v", err)
+	}
+	if err := s.Complete(ctx, id, "k", 201, []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	// A completed key is replayed however old it is, until the TTL.
+	if got, err := s.Begin(ctx, id, "k", "op", hashOf("a"), later.Add(time.Hour)); err != nil || got == nil || got.Status != 201 {
+		t.Fatalf("replay after take over: %+v %v", got, err)
+	}
+}
+
+// TestSweepIdempotencyKeys (#0684): the startup sweep removes only keys
+// past the TTL.
+func TestSweepIdempotencyKeys(t *testing.T) {
+	pool := testPool(t)
+	s, ctx, id, now := NewIdempotencyStore(pool), context.Background(), newIdemToken(t, pool), time.Now()
+	// "new" first: Begin sweeps relative to its own now, so claiming it after
+	// "old" would delete "old" before the sweep under test runs.
+	if _, err := s.Begin(ctx, id, "new", "op", hashOf("a"), now.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Begin(ctx, id, "old", "op", hashOf("a"), now.Add(-IdempotencyTTL-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	n, err := SweepIdempotencyKeys(ctx, pool, now)
+	if err != nil || n < 1 {
+		t.Fatalf("sweep: %d %v", n, err)
+	}
+	var keys []string
+	rows, err := pool.Query(ctx, `SELECT idem_key FROM api_idempotency_keys WHERE token_id = $1 ORDER BY idem_key`, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			t.Fatal(err)
+		}
+		keys = append(keys, k)
+	}
+	if len(keys) != 1 || keys[0] != "new" {
+		t.Fatalf("keys left %v, want [new]", keys)
+	}
+}

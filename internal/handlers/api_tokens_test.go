@@ -43,7 +43,9 @@ func newAPITokEnv(t *testing.T) *apiTokEnv {
 	mux.Handle("GET /admin/api-tokens", requireAdmin(http.HandlerFunc(h.List)))
 	mux.Handle("POST /admin/api-tokens", requireAdmin(http.HandlerFunc(h.Create)))
 	mux.Handle("POST /admin/api-tokens/{id}/revoke", requireAdmin(http.HandlerFunc(h.Revoke)))
-	h.SetV1(BuildV1Registry(api.Config{Version: "test"}, V1Deps{}))
+	// #0676: create_guide_posts takes an Idempotency-Key, so the registry
+	// needs a store before it can be served.
+	h.SetV1(BuildV1Registry(api.Config{Version: "test", Idempotency: api.NewIdempotencyStore(pool)}, V1Deps{}))
 	mux.Handle("/api/v1/", api.NewHTTPRouter(h.V1(), api.RouterDeps{Resolver: h.Resolver(), Limiter: middleware.NewAPITokenRateLimiter()}))
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)

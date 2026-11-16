@@ -14,6 +14,13 @@ import (
 // IdempotencyTTL is how long an Idempotency-Key is remembered.
 const IdempotencyTTL = 24 * time.Hour
 
+// IdempotencyInFlightTimeout is how long a claimed key may stay in flight
+// (no stored response) before a retry treats it as abandoned and takes it
+// over (#0684). A row is left in flight when Complete fails or the process
+// dies mid-operation; without this, every retry would get 409 "still in
+// progress" for the whole TTL. It is far longer than any request runs.
+const IdempotencyInFlightTimeout = 5 * time.Minute
+
 // IdempotencyStore remembers Idempotency-Keys per API key
 // (api_idempotency_keys, migrations/000054).
 type IdempotencyStore interface {
@@ -43,12 +50,24 @@ var (
 type pgIdempotencyStore struct{ pool *pgxpool.Pool }
 
 // NewIdempotencyStore returns the Postgres IdempotencyStore. Expired keys are
-// swept lazily by Begin, so no worker is needed.
+// swept by Begin and once at startup (SweepIdempotencyKeys), so no worker is
+// needed.
 func NewIdempotencyStore(pool *pgxpool.Pool) IdempotencyStore { return &pgIdempotencyStore{pool: pool} }
 
+// SweepIdempotencyKeys deletes every key older than IdempotencyTTL and
+// returns how many it removed. main runs it at startup (#0684), so expired
+// rows do not wait for the next idempotent request.
+func SweepIdempotencyKeys(ctx context.Context, pool *pgxpool.Pool, now time.Time) (int64, error) {
+	tag, err := pool.Exec(ctx, `DELETE FROM api_idempotency_keys WHERE created_at <= $1`, now.Add(-IdempotencyTTL))
+	if err != nil {
+		return 0, fmt.Errorf("api: idempotency sweep: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 func (s *pgIdempotencyStore) Begin(ctx context.Context, tokenID int64, key, op string, hash []byte, now time.Time) (*StoredResponse, error) {
-	if _, err := s.pool.Exec(ctx, `DELETE FROM api_idempotency_keys WHERE created_at <= $1`, now.Add(-IdempotencyTTL)); err != nil {
-		return nil, fmt.Errorf("api: idempotency sweep: %w", err)
+	if _, err := SweepIdempotencyKeys(ctx, s.pool, now); err != nil {
+		return nil, err
 	}
 	var inserted int
 	err := s.pool.QueryRow(ctx, `
@@ -67,10 +86,11 @@ func (s *pgIdempotencyStore) Begin(ctx context.Context, tokenID int64, key, op s
 		gotHash []byte
 		status  *int
 		body    []byte
+		created time.Time
 	)
 	err = s.pool.QueryRow(ctx, `
-		SELECT operation, request_hash, status_code, response_body
-		  FROM api_idempotency_keys WHERE token_id = $1 AND idem_key = $2`, tokenID, key).Scan(&gotOp, &gotHash, &status, &body)
+		SELECT operation, request_hash, status_code, response_body, created_at
+		  FROM api_idempotency_keys WHERE token_id = $1 AND idem_key = $2`, tokenID, key).Scan(&gotOp, &gotHash, &status, &body, &created)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Abandoned between the insert and the select: treat as in flight,
 		// and the client's retry will claim it.
@@ -82,10 +102,30 @@ func (s *pgIdempotencyStore) Begin(ctx context.Context, tokenID int64, key, op s
 	switch {
 	case gotOp != op || !bytes.Equal(gotHash, hash):
 		return nil, ErrIdempotencyMismatch
-	case status == nil:
+	case status == nil && created.After(now.Add(-IdempotencyInFlightTimeout)):
 		return nil, ErrIdempotencyInFlight
+	case status == nil:
+		return s.takeOver(ctx, tokenID, key, now)
 	}
 	return &StoredResponse{Status: *status, Body: body}, nil
+}
+
+// takeOver claims an in-flight key older than IdempotencyInFlightTimeout
+// for this retry (#0684), restarting its clock. The UPDATE re-checks both
+// conditions, so of two retries racing for one abandoned key only one wins;
+// the other sees a fresh in-flight row.
+func (s *pgIdempotencyStore) takeOver(ctx context.Context, tokenID int64, key string, now time.Time) (*StoredResponse, error) {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE api_idempotency_keys SET created_at = $3
+		 WHERE token_id = $1 AND idem_key = $2 AND status_code IS NULL AND created_at <= $4`,
+		tokenID, key, now, now.Add(-IdempotencyInFlightTimeout))
+	if err != nil {
+		return nil, fmt.Errorf("api: idempotency take over: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, ErrIdempotencyInFlight
+	}
+	return nil, nil
 }
 
 func (s *pgIdempotencyStore) Complete(ctx context.Context, tokenID int64, key string, status int, body []byte) error {

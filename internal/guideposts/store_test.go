@@ -160,8 +160,10 @@ func TestUpdateBody_LockedWhenQueuedOrPosted(t *testing.T) {
 	if _, err := s.UpdateBody(ctx, p.ID, "edited "+*p.ShortURL); err != nil {
 		t.Fatalf("draft edit: %v", err)
 	}
-	if _, err := s.UpdateBody(ctx, p.ID, "still has "+outreach.LinkToken); err == nil {
-		t.Error("a linked post accepted the link token back")
+	// #0676: on a linked post the link token is filled with its own short
+	// link rather than refused.
+	if got, err := s.UpdateBody(ctx, p.ID, "still has "+outreach.LinkToken); err != nil || got.Body != "still has "+*p.ShortURL {
+		t.Errorf("link token on a linked post: %q, %v", got.Body, err)
 	}
 	if _, _, err := s.QueueNow(ctx, p.ID); err != nil {
 		t.Fatal(err)
@@ -416,5 +418,42 @@ func TestCopyAsDraft_BlankCampaignIsDefault(t *testing.T) {
 	t.Cleanup(func() { _, _ = s.pool.Exec(ctx, `DELETE FROM guide_posts WHERE id = $1`, cp.ID) })
 	if cp.CampaignSlug != CampaignSlug {
 		t.Errorf("campaign = %q", cp.CampaignSlug)
+	}
+}
+
+// TestUpdateBodyFillsLinkTokenOnLinkedPost (#0676): on a linked post the link
+// token means the post's own short link.
+func TestUpdateBodyFillsLinkTokenOnLinkedPost(t *testing.T) {
+	s := newTestStore(t)
+	p := linked(t, s, "bluesky")
+	got, err := s.UpdateBody(context.Background(), p.ID, "fresh words "+outreach.LinkToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "fresh words " + *p.ShortURL; got.Body != want {
+		t.Errorf("body %q, want %q", got.Body, want)
+	}
+}
+
+func TestUpdateCampaignOnlyWhileUnlinked(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	d := create(t, s, "baud-rate", "bluesky", "", "")
+	got, err := s.UpdateCampaign(ctx, d.ID, "guides-2026-12")
+	if err != nil || got.CampaignSlug != "guides-2026-12" {
+		t.Fatalf("got %q, %v", got.CampaignSlug, err)
+	}
+	if got, err := s.UpdateCampaign(ctx, d.ID, ""); err != nil || got.CampaignSlug != CampaignSlug {
+		t.Fatalf("blank campaign: %q, %v", got.CampaignSlug, err)
+	}
+	if _, err := s.UpdateCampaign(ctx, d.ID, "Bad Slug"); !errors.Is(err, ErrBadCampaignSlug) {
+		t.Errorf("bad slug err = %v", err)
+	}
+	l := linked(t, s, "mastodon")
+	if _, err := s.UpdateCampaign(ctx, l.ID, "guides-2026-12"); !errors.Is(err, ErrLinkFixed) {
+		t.Errorf("linked err = %v, want ErrLinkFixed", err)
+	}
+	if _, err := s.UpdateCampaign(ctx, -1, "x"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing err = %v, want ErrNotFound", err)
 	}
 }
