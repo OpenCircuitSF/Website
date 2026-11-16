@@ -215,6 +215,11 @@ describe('settings sections (#0584)', () => {
     expect(settingsSectionFromQuery(new URLSearchParams('section=api'))).toBe('api');
   });
 
+  it('finds the event cadence settings section (#0678)', () => {
+    expect(settingsSectionFromQuery(new URLSearchParams('section=cadence'))).toBe('cadence');
+    expect(adminSettingsHash('cadence')).toBe('#/settings?section=cadence');
+  });
+
   it('ignores an unknown section', () => {
     expect(settingsSectionFromQuery(new URLSearchParams('section=nope'))).toBeNull();
     expect(settingsSectionFromQuery(new URLSearchParams())).toBeNull();

@@ -53,6 +53,13 @@ func TestMigration000045EventTypes(t *testing.T) {
 		must(err)
 	}
 
+	// 000055's event_cadence_rules (#0678) references event_types, so its
+	// down runs first, as golang-migrate's would on the way to 44.
+	for _, name := range laterDependents(t, dir, "000045_create_event_types", "event_types") {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		must(err)
+		exec(string(b))
+	}
 	exec(string(down))
 	var wid int64
 	must(tx.QueryRow(ctx, `INSERT INTO workshops (slug, title) VALUES ('zz-0613-mig', 'zz 0613') RETURNING id`).Scan(&wid))

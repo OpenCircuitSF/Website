@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,6 +46,18 @@ func migration000048(t *testing.T) (ctx context.Context, tx pgx.Tx, up, down str
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+	// A later migration whose table references venues (000055's
+	// event_cadence_rules, #0678) would block the drop, so its down runs
+	// first, newest first, as golang-migrate would on the way to 47.
+	for _, name := range laterDependents(t, dir, "000048_create_venues", "venues") {
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, string(b)); err != nil {
+			t.Fatalf("down %s: %v", name, err)
+		}
+	}
 	if _, err := tx.Exec(ctx, string(downB)); err != nil {
 		t.Fatalf("down: %v", err)
 	}
@@ -56,6 +70,33 @@ func migration000048(t *testing.T) (ctx context.Context, tx pgx.Tx, up, down str
 		}
 	}
 	return ctx, tx, string(upB), string(downB)
+}
+
+// laterDependents names the down files of the migrations after stem whose up
+// creates a foreign key to table, newest first. A test that runs an old
+// migration's down at head runs these first, as golang-migrate would.
+func laterDependents(t *testing.T, dir, stem, table string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var downs []string
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasSuffix(name, ".up.sql") || name <= stem+".up.sql" {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "REFERENCES "+table+"(") {
+			downs = append(downs, strings.TrimSuffix(name, ".up.sql")+".down.sql")
+		}
+	}
+	slices.Reverse(downs)
+	return downs
 }
 
 func textPtr(s string) *string { return &s }

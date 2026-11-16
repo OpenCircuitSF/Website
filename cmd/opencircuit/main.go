@@ -35,6 +35,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/apitokens"
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
+	"github.com/brennanMKE/OpenCircuitSF/internal/cadence"
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
 	"github.com/brennanMKE/OpenCircuitSF/internal/crt"
 	"github.com/brennanMKE/OpenCircuitSF/internal/db"
@@ -419,7 +420,10 @@ func servePostgres(cfg *config.Config) error {
 	adminOutreachH.SetAccounts(conns.Account)
 	adminOutreachH.SetCardURL(serverSettings.BlueskyCardURL)
 	adminOutreachH.SetEnabledChannels(serverSettings.OutreachChannels)
-	adminOutreachH.SetLuma(luma.NewChecker(serverSettings.LumaCalendarID, ""))
+	// #0678: one Luma checker, shared by the outreach Luma route and the
+	// event coverage report, so they share one cache and never fetch twice.
+	lumaChecker := luma.NewChecker(serverSettings.LumaCalendarID, "")
+	adminOutreachH.SetLuma(lumaChecker)
 	adminOutreachH.SetConnections(handlers.NewAdminOutreachConnectionsHandler(conns, auditLogger))
 
 	// Admin image upload (#0433, reopening #0153): constructed
@@ -462,11 +466,16 @@ func servePostgres(cfg *config.Config) error {
 	// share adminGuidePostsH, and #0677's events and lookups, which share
 	// adminWorkshopsH). BuildV1Registry is the one list of v1
 	// operations; mountAndServe serves it with api.NewHTTPRouter.
+	// #0678: the event coverage service, served to the admin through
+	// adminWorkshopsH's routes and to v1 below.
+	eventCadenceH := handlers.NewEventCadenceHandler(cadence.NewStore(pool), workshopsStore, eventTypesStore, venuesStore, lumaChecker, auditLogger, cfg.BaseURL)
+	adminWorkshopsH.SetCadence(eventCadenceH)
 	apiTokensH.SetV1(handlers.BuildV1Registry(
 		api.Config{Version: version, Idempotency: api.NewIdempotencyStore(pool)},
 		handlers.V1Deps{
 			Engagement: outreachStore, BaseURL: cfg.BaseURL, GuidePosts: adminGuidePostsH,
 			Workshops: adminWorkshopsH, Venues: venuesStore, EventTypes: eventTypesStore, Interests: interestsStore,
+			Cadence: eventCadenceH,
 		},
 	))
 
@@ -1636,6 +1645,18 @@ func adminRoutes(
 			// AdminWorkshopsHandler itself, same as Announce above -- no new
 			// parameter here or on mountAndServe.
 			adminRoute{http.MethodPost, "/admin/workshops/{id}/preview", http.HandlerFunc(adminWorkshopsH.Preview)},
+		)
+	}
+	if adminWorkshopsH != nil && adminWorkshopsH.Cadence() != nil {
+		// #0678: event cadence rules and the coverage report, mounted
+		// through adminWorkshopsH (SetCadence) like Announce above.
+		c := adminWorkshopsH.Cadence()
+		routes = append(routes,
+			adminRoute{http.MethodGet, "/admin/event-cadence", http.HandlerFunc(c.ListRules)},
+			adminRoute{http.MethodPost, "/admin/event-cadence", http.HandlerFunc(c.CreateRule)},
+			adminRoute{http.MethodPatch, "/admin/event-cadence/{id}", http.HandlerFunc(c.UpdateRule)},
+			adminRoute{http.MethodDelete, "/admin/event-cadence/{id}", http.HandlerFunc(c.DeleteRule)},
+			adminRoute{http.MethodGet, "/admin/event-coverage", http.HandlerFunc(c.Coverage)},
 		)
 	}
 	if adminMediaH != nil {

@@ -197,11 +197,12 @@ export function adminSectionHash(section: Exclude<AdminSection, 'not-found'>): s
 
 /** The addressable parts of the Settings screen (#0584), carried in the hash
  * query (`#/settings?section=outreach`). */
-export type SettingsSection = 'general' | 'server' | 'outreach' | 'api';
+export type SettingsSection = 'general' | 'server' | 'outreach' | 'cadence' | 'api';
 export const SETTINGS_SECTIONS: readonly { id: SettingsSection; label: string }[] = [
   { id: 'general', label: 'General' },
   { id: 'server', label: 'Server settings' },
   { id: 'outreach', label: 'Outreach' },
+  { id: 'cadence', label: 'Event cadence' },
   { id: 'api', label: 'API tokens' },
 ];
 

@@ -59,11 +59,9 @@ var specTools = map[string]string{
 
 // pendingTools are the spec names whose issue has not landed. The issue that
 // adds an operation deletes its name here, or TestMCPToolSetMatchesIssueSpec
-// fails.
-var pendingTools = []string{
-	// #0678
-	"event_coverage", "list_cadence_rules", "set_cadence_rule",
-}
+// fails. Empty since #0678 landed the last three; a spec tool added before
+// its operation exists goes here until it lands.
+var pendingTools = []string{}
 
 func TestEveryWriteOperationIsATool(t *testing.T) {
 	ops := productionRegistry().Operations()

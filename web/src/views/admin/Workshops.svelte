@@ -44,6 +44,7 @@
   import Button from '../../lib/Button.svelte';
   import Panel from '../../lib/Panel.svelte';
   import WorkshopEditor from './WorkshopEditor.svelte';
+  import EventCoveragePanel from './EventCoveragePanel.svelte';
 
   interface Props {
     // #0527: the hash owns the screen — workshopId null is the list
@@ -239,6 +240,7 @@
     />
   {/key}
 {:else}
+  <EventCoveragePanel />
   <Panel title="Events" noPadding={listPanelNoPadding}>
     {#if loading}
       <p class="text-muted" role="status">Loading events…</p>

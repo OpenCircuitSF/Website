@@ -156,6 +156,7 @@
   import Deliverability from './admin/Deliverability.svelte';
   import OutreachConnections from './admin/OutreachConnections.svelte';
   import ApiTokens from './admin/ApiTokens.svelte';
+  import EventCadence from './admin/EventCadence.svelte';
   import ServerSettings from './admin/ServerSettings.svelte';
   import { ServerSettingsStore } from '../lib/serverSettingsStore.svelte';
   import CrtCommands from './admin/CrtCommands.svelte';
@@ -1452,6 +1453,7 @@
           <OutreachConnections bare />
         </Panel>
       </div>
+      <div id="settings-cadence"><EventCadence /></div>
       <div id="settings-api"><ApiTokens /></div>
     {/if}
 

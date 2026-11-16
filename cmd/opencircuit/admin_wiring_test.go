@@ -21,6 +21,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/apitokens"
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/auth"
+	"github.com/brennanMKE/OpenCircuitSF/internal/cadence"
 	"github.com/brennanMKE/OpenCircuitSF/internal/config"
 	"github.com/brennanMKE/OpenCircuitSF/internal/crt"
 	"github.com/brennanMKE/OpenCircuitSF/internal/db"
@@ -220,6 +221,11 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// the handler ever calls it.
 	workshopsStore := workshops.NewStore(pool)
 	adminWorkshopsH := handlers.NewAdminWorkshopsHandler(workshopsStore, nil, campaignsStore, auditLogger, cfg.BaseURL)
+	// #0678: the event coverage service, mounted through adminWorkshopsH,
+	// so the route loop proves its five admin routes are admin-only. A nil
+	// Luma feed: the report's Luma part answers "off" with no network call.
+	eventCadenceH := handlers.NewEventCadenceHandler(cadence.NewStore(pool), workshopsStore, eventTypesStore, venuesStore, nil, auditLogger, cfg.BaseURL)
+	adminWorkshopsH.SetCadence(eventCadenceH)
 	// #0653, #0675: the v1 operation registry, built as main.go builds it
 	// (#0677 moved it here, below the stores its event ops share).
 	apiTokensH.SetV1(handlers.BuildV1Registry(
@@ -227,6 +233,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 		handlers.V1Deps{
 			Engagement: outreach.NewStore(pool), BaseURL: cfg.BaseURL, GuidePosts: adminGuidePostsH,
 			Workshops: adminWorkshopsH, Venues: venuesStore, EventTypes: eventTypesStore, Interests: interestsStore,
+			Cadence: eventCadenceH,
 		},
 	))
 	// #0433: exercised the same way as adminWorkshopsH above — a real
@@ -498,6 +505,32 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 				t.Errorf("%s: %s %s status = %d, unexpected for this case", c.name, route.method, path, resp.StatusCode)
 			}
 		}
+	}
+
+	// #0678: the coverage report on the real mux. No session is a 401;
+	// the admin session gets the report, with Luma "off" (nil feed).
+	coverageReq := func(cookie string) (int, []byte) {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, baseURL+"/admin/event-coverage", nil)
+		if err != nil {
+			t.Fatalf("build coverage request: %v", err)
+		}
+		if cookie != "" {
+			req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: cookie})
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("coverage request: %v", err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, b
+	}
+	if code, b := coverageReq(""); code != http.StatusUnauthorized {
+		t.Errorf("GET /admin/event-coverage with no session = %d %s, want 401", code, b)
+	}
+	if code, b := coverageReq("wiring-admin-token"); code != http.StatusOK || !strings.Contains(string(b), `"luma":{"status":"off"`) {
+		t.Errorf("GET /admin/event-coverage as admin = %d %s, want 200 with luma status off", code, b)
 	}
 
 	// #0652: /api/v1/token on the real mux — Bearer only, GET only.

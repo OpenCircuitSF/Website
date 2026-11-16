@@ -191,7 +191,7 @@ describe('Admin.svelte hash routing (#0527)', () => {
       await waitFor(() => expect(scrolled).toContain('settings-outreach'));
       const jump = screen.getByRole('navigation', { name: 'Settings sections' });
       const hrefs = [...jump.querySelectorAll('a')].map((a) => a.getAttribute('href'));
-      expect(hrefs).toEqual(['#/settings?section=general', '#/settings?section=server', '#/settings?section=outreach', '#/settings?section=api']);
+      expect(hrefs).toEqual(['#/settings?section=general', '#/settings?section=server', '#/settings?section=outreach', '#/settings?section=cadence', '#/settings?section=api']);
       expect(document.getElementById('settings-outreach')?.textContent).toContain('Connections');
     } finally {
       Element.prototype.scrollIntoView = original;
