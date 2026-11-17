@@ -223,6 +223,11 @@ type cacheEntry struct {
 // same STORAGE=json path, which has no email_campaigns-table backing
 // either, with the identical fallback for /archive/{slug}.
 func NewRenderer(template []byte, baseURL string, source WorkshopSource, archive ArchiveSource) *Renderer {
+	return newRenderer(template, baseURL, source, archive, defaultGuideArt)
+}
+
+// newRenderer is NewRenderer with the guide art set injected (#0709).
+func newRenderer(template []byte, baseURL string, source WorkshopSource, archive ArchiveSource, art map[string]guideArt) *Renderer {
 	baseURL = strings.TrimSuffix(baseURL, "/")
 	r := &Renderer{
 		template: template,
@@ -233,7 +238,7 @@ func NewRenderer(template []byte, baseURL string, source WorkshopSource, archive
 		now:      time.Now,
 		cache:    make(map[string]cacheEntry),
 	}
-	r.static = defaultStaticRouteMeta(baseURL)
+	r.static = defaultStaticRouteMeta(baseURL, art)
 	r.fallback = defaultFallbackMeta(baseURL)
 	r.notFound = defaultNotFoundMeta(baseURL)
 	return r
@@ -246,7 +251,7 @@ func NewRenderer(template []byte, baseURL string, source WorkshopSource, archive
 // rather than the generic fallback below. /archive was added at #0123 (PRD
 // §6.8) for the same reason: the archive index is the site's only recurring
 // indexable page.
-func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
+func defaultStaticRouteMeta(baseURL string, art map[string]guideArt) map[string]RouteMeta {
 	image := baseURL + "/og-default.png"
 	m := map[string]RouteMeta{
 		"/": {
@@ -358,7 +363,7 @@ func defaultStaticRouteMeta(baseURL string) map[string]RouteMeta {
 			Description:   g.Description,
 			OGTitle:       g.Title,
 			OGDescription: g.Description,
-			OGImage:       baseURL + "/guides/" + g.Slug + "/og.png",
+			OGImage:       guideOGImage(baseURL, g.Slug, art),
 			OGURL:         baseURL + g.Path(),
 			Canonical:     baseURL + g.Path(),
 			OGType:        "article",

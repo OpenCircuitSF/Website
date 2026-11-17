@@ -22,6 +22,7 @@ type Site struct {
 	robots   []byte
 	cards    *cardCache
 	feed     *Feed
+	guideArt map[string]guideArt
 }
 
 // NewSite constructs a Site from the built index.html template bytes
@@ -32,8 +33,15 @@ type Site struct {
 // STORAGE=json path, which has no email_campaigns-table backing either --
 // mirrors WorkshopSource's own nil-tolerant contract).
 func NewSite(indexHTML []byte, baseURL string, source WorkshopSource, archive ArchiveSource) *Site {
+	return newSite(indexHTML, baseURL, source, archive, defaultGuideArt)
+}
+
+// newSite is NewSite with the guide art set injected (#0709), so tests can
+// use a fixture map instead of the embedded images.
+func newSite(indexHTML []byte, baseURL string, source WorkshopSource, archive ArchiveSource, art map[string]guideArt) *Site {
 	return &Site{
-		renderer: NewRenderer(indexHTML, baseURL, source, archive),
+		guideArt: art,
+		renderer: newRenderer(indexHTML, baseURL, source, archive, art),
 		sitemap:  NewSitemap(baseURL, source, archive),
 		robots:   BuildRobotsTxt(baseURL),
 		cards:    newCardCache(mustCardRenderer()),
@@ -178,7 +186,12 @@ func (s *Site) serveCard(w http.ResponseWriter, r *http.Request, key, title, met
 		http.Error(w, "failed to render card", http.StatusInternalServerError)
 		return
 	}
+	writePNG(w, r, body, etag)
+}
 
+// writePNG serves body as a PNG with a one-hour Cache-Control and etag,
+// answering a matching If-None-Match with 304.
+func writePNG(w http.ResponseWriter, r *http.Request, body []byte, etag string) {
 	h := w.Header()
 	h.Set("Content-Type", "image/png")
 	h.Set("Cache-Control", "public, max-age=3600")
@@ -226,12 +239,17 @@ func (s *Site) ArchiveCardHandler() http.HandlerFunc {
 // rendered by the same card builder as the event and archive cards. The
 // workshop guide's card lives here too, not at /workshops/{slug}/og.png,
 // which still renders the production event of the same slug. A slug
-// outside the catalog is a 404.
+// outside the catalog is a 404. It serves the guide's hand-made art when
+// present (#0709), else the generated card.
 func (s *Site) GuideCardHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		g, ok := guides.Lookup(r.PathValue("slug"))
 		if !ok {
 			http.NotFound(w, r)
+			return
+		}
+		if a, ok := s.guideArt[g.Slug]; ok {
+			writePNG(w, r, a.data, a.etag)
 			return
 		}
 		s.serveCard(w, r, "guide:"+g.Slug, g.Title, guideCardMeta(g))
@@ -240,12 +258,16 @@ func (s *Site) GuideCardHandler() http.HandlerFunc {
 
 // GuideCard returns the PNG Open Graph card for the guide slug, the same
 // bytes GuideCardHandler serves (#0658: the Bluesky thumbnail of a guide
-// post). The returned slice is the card cache's own; the caller must not
+// post): the hand-made art when present (#0709), else the generated card.
+// The returned slice is the art's or the card cache's own; the caller must not
 // modify it. An unknown slug is an error.
 func (s *Site) GuideCard(slug string) (data []byte, mime string, err error) {
 	g, ok := guides.Lookup(slug)
 	if !ok {
 		return nil, "", fmt.Errorf("seo: unknown guide %q", slug)
+	}
+	if a, ok := s.guideArt[g.Slug]; ok {
+		return a.data, "image/png", nil
 	}
 	data, _, err = s.cards.get("guide:"+g.Slug, g.Title, guideCardMeta(g))
 	if err != nil {

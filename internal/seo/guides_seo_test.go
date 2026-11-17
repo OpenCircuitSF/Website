@@ -43,7 +43,7 @@ func TestRender_GuideRoutesCarryOwnMeta(t *testing.T) {
 		if canon := extractCanonicalHref(t, body); canon != ogURL || ogURL != testBaseURL+g.Path() {
 			t.Errorf("%s: canonical %q, og:url %q", g.Path(), canon, ogURL)
 		}
-		if got, want := extractMetaContent(t, body, "og:image"), testBaseURL+"/guides/"+g.Slug+"/og.png"; got != want {
+		if got, want := extractMetaContent(t, body, "og:image"), guideOGImage(testBaseURL, g.Slug, defaultGuideArt); got != want {
 			t.Errorf("%s: og:image = %q, want %q", g.Path(), got, want)
 		}
 	}
