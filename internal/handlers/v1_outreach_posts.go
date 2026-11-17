@@ -76,11 +76,9 @@ type updateOutreachPostIn struct {
 
 // outreachPostInPacific gives a post view's times a Pacific offset.
 func outreachPostInPacific(v outreachPostView) outreachPostView {
-	for _, p := range []*string{v.ScheduledAt, v.PostedAt, v.UpdatedAt} {
-		if p != nil {
-			*p = pacificRFC3339(*p)
-		}
-	}
+	v.ScheduledAt = pacificRFC3339Ptr(v.ScheduledAt)
+	v.PostedAt = pacificRFC3339Ptr(v.PostedAt)
+	v.UpdatedAt = pacificRFC3339Ptr(v.UpdatedAt)
 	v.CreatedAt = pacificRFC3339(v.CreatedAt)
 	return v
 }
@@ -101,7 +99,7 @@ func outreachWriteOperations(h *AdminOutreachHandler) []api.Operation {
 			if err != nil {
 				return eventOutreachV1{}, outreachAPIError(err)
 			}
-			return eventOutreachV1{Started: true, outreachPanelView: v}, nil
+			return eventOutreachV1{Started: true, outreachPanelView: pacificPanel(v)}, nil
 		}),
 		api.Define(api.Operation{
 			Name: "create_outreach_post", Method: http.MethodPost, Path: "/api/v1/outreach/{id}/posts",
@@ -152,7 +150,7 @@ func outreachWriteOperations(h *AdminOutreachHandler) []api.Operation {
 			if err != nil {
 				return eventOutreachV1{}, outreachAPIError(err)
 			}
-			return eventOutreachV1{Started: true, outreachPanelView: v}, nil
+			return eventOutreachV1{Started: true, outreachPanelView: pacificPanel(v)}, nil
 		}),
 	}
 }

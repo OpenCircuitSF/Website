@@ -81,6 +81,9 @@ func TestV1OutreachWrite_Start(t *testing.T) {
 	if !strings.Contains(string(b), `"started":true`) || !strings.Contains(string(b), `"link_report":{`) {
 		t.Errorf("start body %s", b)
 	}
+	if strings.Contains(string(b), `Z"`) {
+		t.Errorf("start body has a UTC time, want Pacific: %s", b)
+	}
 	// Repeating returns the existing outreach and audits nothing more.
 	e.v1(t, http.MethodPost, path, e.write, "", http.StatusOK)
 	e.assertTokenAudit(t, audit.ActionOutreachStarted, 1)
@@ -165,7 +168,10 @@ func TestV1OutreachWrite_Reset(t *testing.T) {
 	path := fmt.Sprintf("/api/v1/events/%d/outreach/reset", w.ID)
 
 	e.v1(t, http.MethodPost, path, e.read, "", http.StatusForbidden)
-	e.v1(t, http.MethodPost, path, e.write, "", http.StatusOK)
+	rb := e.v1(t, http.MethodPost, path, e.write, "", http.StatusOK)
+	if strings.Contains(string(rb), `Z"`) {
+		t.Errorf("reset body has a UTC time, want Pacific: %s", rb)
+	}
 	var n int
 	if err := e.pool.QueryRow(context.Background(), `SELECT count(*) FROM outreach_posts WHERE outreach_id = $1`, o.ID).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("posts after reset = %d (%v)", n, err)
