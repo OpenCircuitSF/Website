@@ -52,6 +52,8 @@ func notFoundWhat(msg string) string {
 		return "event"
 	case "post not found":
 		return "outreach post"
+	case "location not found":
+		return "outreach location"
 	}
 	return "outreach"
 }

@@ -151,6 +151,10 @@ for DESTRUCTIVE, and `readOnlyHint` for every read.
 | | `outreach_results_summary` | | `outreach:read` | |
 | | `outreach_timeline` | | `outreach:read` | |
 | | `outreach_luma` | | `outreach:read` | |
+| | `list_outreach_locations` | | `outreach:read` | |
+| | `create_outreach_location` | | `outreach:write` | yes |
+| | `update_outreach_location` | | `outreach:write` | |
+| | `delete_outreach_location` | DESTRUCTIVE | `outreach:write` | |
 | Media | `create_media_upload` | | `media:write` | |
 | | `list_media` | | `media:read` | |
 | Engagement | `get_engagement` | | `engagement:read` | |

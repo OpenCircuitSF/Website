@@ -537,6 +537,10 @@ curl -s -X POST $B/cadence-rules \
 - **`outreach_results_summary`**, `GET /outreach/results`: one row per event with outreach (posts, clicks, reactions) plus recent mentions; `status` as above.
 - **`outreach_timeline`**, `GET /outreach/timeline`: published events starting in the next 30 days with their outreach and posts; no network call.
 - **`outreach_luma`**, `GET /outreach/luma`: each upcoming event against the Luma calendar (`on_luma`, `differs` with the fields, `not_on_luma`) and unmatched Luma events; `status` is `off`, `ok` or a failure.
+- **`list_outreach_locations`**, `GET /outreach/locations`: the places flyers are put up, active and inactive.
+- **`create_outreach_location`**, `POST /outreach/locations`: `name`, `code` (2–16 lowercase letters, digits or dashes), optional `address`, `notes`, `active`. Takes `Idempotency-Key`; `201`; `409` when the code is taken.
+- **`update_outreach_location`**, `PATCH /outreach/locations/{id}`: only the fields sent change; `409` when changing a code a flyer link already uses.
+- **`delete_outreach_location`**, `DELETE /outreach/locations/{id}`: destructive; `409` when a flyer link uses it (set `active` to false instead).
 
 ### Media (`media:read`, `media:write`)
 

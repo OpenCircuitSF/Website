@@ -119,17 +119,40 @@ func (h *AdminOutreachHandler) CreateLocation(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Name == nil {
-		writeError(w, http.StatusBadRequest, "name must be 1–100 characters")
+	actorID := actor.ID
+	loc, err := h.createLocation(r.Context(), clientIP(r), &actorID, req)
+	if err != nil {
+		writeOutreachError(w, "create location", err)
 		return
+	}
+	writeJSON(w, http.StatusCreated, locationView(loc))
+}
+
+// locationFieldOf names the request field a validateLocationFields message
+// is about, for the v1 validation envelope.
+func locationFieldOf(msg string) string {
+	for _, f := range []string{"name", "code", "address", "notes"} {
+		if strings.HasPrefix(msg, f+" ") {
+			return f
+		}
+	}
+	return ""
+}
+
+func locationBadRequest(msg string) error {
+	return outreachRefusal(http.StatusBadRequest, locationFieldOf(msg), msg)
+}
+
+// createLocation is CreateLocation without the transport (#0702).
+func (h *AdminOutreachHandler) createLocation(ctx context.Context, ip string, actorID *int64, req outreachLocationRequest) (outreach.Location, error) {
+	if req.Name == nil {
+		return outreach.Location{}, locationBadRequest("name must be 1–100 characters")
 	}
 	if req.Code == nil {
-		writeError(w, http.StatusBadRequest, msgLocCodeInvalid)
-		return
+		return outreach.Location{}, locationBadRequest(msgLocCodeInvalid)
 	}
 	if msg := validateLocationFields(&req); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
-		return
+		return outreach.Location{}, locationBadRequest(msg)
 	}
 	in := outreach.LocationInput{Name: *req.Name, Code: *req.Code, Active: true}
 	if req.Address != nil {
@@ -141,28 +164,20 @@ func (h *AdminOutreachHandler) CreateLocation(w http.ResponseWriter, r *http.Req
 	if req.Active != nil {
 		in.Active = *req.Active
 	}
-	loc, err := h.locations.CreateLocation(r.Context(), in)
+	loc, err := h.locations.CreateLocation(ctx, in)
 	switch {
 	case err == nil:
 	case errors.Is(err, outreach.ErrCodeTaken):
-		writeError(w, http.StatusConflict, "code already in use")
-		return
+		return outreach.Location{}, outreachRefusal(http.StatusConflict, "code", "code already in use")
 	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreach.Location{}, err
 	}
-	if h.auditor != nil {
-		actorID, targetID := actor.ID, loc.ID
-		h.auditor.Record(r.Context(), audit.Entry{
-			ActorID:    &actorID,
-			Action:     audit.ActionOutreachLocationCreated,
-			TargetType: audit.TargetOutreachLocation,
-			TargetID:   &targetID,
-			Metadata:   map[string]any{"code": loc.Code, "name": loc.Name, "active": loc.Active},
-			IP:         clientIP(r),
-		})
-	}
-	writeJSON(w, http.StatusCreated, locationView(loc))
+	h.recordCtx(ctx, ip, audit.TargetOutreachLocation, loc.ID, audit.Entry{
+		ActorID:  actorID,
+		Action:   audit.ActionOutreachLocationCreated,
+		Metadata: map[string]any{"code": loc.Code, "name": loc.Name, "active": loc.Active},
+	})
+	return loc, nil
 }
 
 // changedLocationFields lists, sorted, the fields whose value differs between
@@ -205,56 +220,57 @@ func (h *AdminOutreachHandler) PatchLocation(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Name == nil && req.Code == nil && req.Address == nil && req.Notes == nil && req.Active == nil {
-		writeError(w, http.StatusBadRequest, "no fields to update")
+	actorID := actor.ID
+	after, err := h.patchLocation(r.Context(), clientIP(r), &actorID, id, req)
+	if err != nil {
+		writeOutreachError(w, "update location", err)
 		return
+	}
+	writeJSON(w, http.StatusOK, locationView(after))
+}
+
+var errLocationNotFound = outreachRefusal(http.StatusNotFound, "", "location not found")
+
+// patchLocation is PatchLocation without the transport (#0702).
+func (h *AdminOutreachHandler) patchLocation(ctx context.Context, ip string, actorID *int64, id int64, req outreachLocationRequest) (outreach.Location, error) {
+	if req.Name == nil && req.Code == nil && req.Address == nil && req.Notes == nil && req.Active == nil {
+		return outreach.Location{}, locationBadRequest("no fields to update")
 	}
 	if msg := validateLocationFields(&req); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
-		return
+		return outreach.Location{}, locationBadRequest(msg)
 	}
-	before, err := h.locations.GetLocation(r.Context(), id)
+	before, err := h.locations.GetLocation(ctx, id)
 	if errors.Is(err, outreach.ErrLocationNotFound) {
-		writeError(w, http.StatusNotFound, "location not found")
-		return
+		return outreach.Location{}, errLocationNotFound
 	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreach.Location{}, err
 	}
-	after, err := h.locations.UpdateLocation(r.Context(), id, outreach.LocationPatch{
+	after, err := h.locations.UpdateLocation(ctx, id, outreach.LocationPatch{
 		Name: req.Name, Code: req.Code, Address: req.Address, Notes: req.Notes, Active: req.Active,
 	})
 	switch {
 	case err == nil:
 	case errors.Is(err, outreach.ErrLocationNotFound):
-		writeError(w, http.StatusNotFound, "location not found")
-		return
+		return outreach.Location{}, errLocationNotFound
 	case errors.Is(err, outreach.ErrCodeTaken):
-		writeError(w, http.StatusConflict, "code already in use")
-		return
+		return outreach.Location{}, outreachRefusal(http.StatusConflict, "code", "code already in use")
 	case errors.Is(err, outreach.ErrCodeLocked):
-		writeError(w, http.StatusConflict, "code is locked: flyer links already use it")
-		return
+		return outreach.Location{}, outreachRefusal(http.StatusConflict, "code", "code is locked: flyer links already use it")
 	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreach.Location{}, err
 	}
-	if changed := changedLocationFields(before, after); len(changed) > 0 && h.auditor != nil {
+	if changed := changedLocationFields(before, after); len(changed) > 0 {
 		meta := map[string]any{"code": after.Code, "changed": changed, "active": after.Active}
 		if before.Code != after.Code {
 			meta["previous_code"] = before.Code
 		}
-		actorID, targetID := actor.ID, after.ID
-		h.auditor.Record(r.Context(), audit.Entry{
-			ActorID:    &actorID,
-			Action:     audit.ActionOutreachLocationUpdated,
-			TargetType: audit.TargetOutreachLocation,
-			TargetID:   &targetID,
-			Metadata:   meta,
-			IP:         clientIP(r),
+		h.recordCtx(ctx, ip, audit.TargetOutreachLocation, after.ID, audit.Entry{
+			ActorID:  actorID,
+			Action:   audit.ActionOutreachLocationUpdated,
+			Metadata: meta,
 		})
 	}
-	writeJSON(w, http.StatusOK, locationView(after))
+	return after, nil
 }
 
 // DeleteLocation handles DELETE /admin/outreach-locations/{id}. A location a
@@ -269,38 +285,37 @@ func (h *AdminOutreachHandler) DeleteLocation(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	loc, err := h.locations.GetLocation(r.Context(), id)
-	if errors.Is(err, outreach.ErrLocationNotFound) {
-		writeError(w, http.StatusNotFound, "location not found")
+	actorID := actor.ID
+	if err := h.deleteLocation(r.Context(), clientIP(r), &actorID, id); err != nil {
+		writeOutreachError(w, "delete location", err)
 		return
-	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-	switch err := h.locations.DeleteLocation(r.Context(), id); {
-	case err == nil:
-	case errors.Is(err, outreach.ErrLocationNotFound):
-		writeError(w, http.StatusNotFound, "location not found")
-		return
-	case errors.Is(err, outreach.ErrLocationInUse):
-		writeError(w, http.StatusConflict, "location has flyer links; deactivate it instead")
-		return
-	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-	if h.auditor != nil {
-		actorID, targetID := actor.ID, loc.ID
-		h.auditor.Record(r.Context(), audit.Entry{
-			ActorID:    &actorID,
-			Action:     audit.ActionOutreachLocationDeleted,
-			TargetType: audit.TargetOutreachLocation,
-			TargetID:   &targetID,
-			Metadata:   map[string]any{"code": loc.Code, "name": loc.Name},
-			IP:         clientIP(r),
-		})
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteLocation is DeleteLocation without the transport (#0702).
+func (h *AdminOutreachHandler) deleteLocation(ctx context.Context, ip string, actorID *int64, id int64) error {
+	loc, err := h.locations.GetLocation(ctx, id)
+	if errors.Is(err, outreach.ErrLocationNotFound) {
+		return errLocationNotFound
+	} else if err != nil {
+		return err
+	}
+	switch err := h.locations.DeleteLocation(ctx, id); {
+	case err == nil:
+	case errors.Is(err, outreach.ErrLocationNotFound):
+		return errLocationNotFound
+	case errors.Is(err, outreach.ErrLocationInUse):
+		return outreachRefusal(http.StatusConflict, "", "location has flyer links; deactivate it instead")
+	default:
+		return err
+	}
+	h.recordCtx(ctx, ip, audit.TargetOutreachLocation, loc.ID, audit.Entry{
+		ActorID:  actorID,
+		Action:   audit.ActionOutreachLocationDeleted,
+		Metadata: map[string]any{"code": loc.Code, "name": loc.Name},
+	})
+	return nil
 }
 
 // outreachLocationPathID parses {id}; a malformed id is 404, matching the
