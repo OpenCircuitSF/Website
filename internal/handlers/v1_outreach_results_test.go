@@ -34,14 +34,6 @@ func newV1OutreachResultsEnv(t *testing.T, enabled bool) *v1OutreachWriteEnv {
 	return &v1OutreachWriteEnv{outreachEnv: e, api: h, read: read, write: none}
 }
 
-// assertPacific fails on any UTC time in a v1 body.
-func assertPacific(t *testing.T, b []byte) {
-	t.Helper()
-	if strings.Contains(string(b), `Z"`) {
-		t.Errorf("v1 body has a UTC time: %s", b)
-	}
-}
-
 func TestV1OutreachResults_ForEvent(t *testing.T) {
 	e := newV1OutreachResultsEnv(t, true)
 	w, panel := e.seedResultsOutreach(t)
