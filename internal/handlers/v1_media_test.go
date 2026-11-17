@@ -183,7 +183,7 @@ func TestV1ListMedia_NewestFirstPaged(t *testing.T) {
 	if len(page.Items) != 2 || page.Items[0].Name != "c.png" || page.Items[1].Name != "b.jpg" || page.NextCursor == nil {
 		t.Fatalf("page 1 = %+v", page)
 	}
-	if page.Items[0].Path != "/media/c.png" || page.Items[0].SizeBytes != 3 {
+	if page.Items[0].Path != "/media/c.png" || page.Items[0].SizeBytes != 3 || page.Items[0].ModifiedAt != "2026-10-31T19:00:00-07:00" {
 		t.Fatalf("item = %+v", page.Items[0])
 	}
 	rec = apitest.Do(t, f.router, http.MethodGet, "/api/v1/media?limit=2&cursor="+*page.NextCursor, f.key, "")

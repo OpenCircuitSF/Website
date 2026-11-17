@@ -171,7 +171,7 @@ func mediaOperations(m *MediaV1) []api.Operation {
 			}
 			u := m.baseURL + mediaUploadPathPrefix + id
 			return mediaUploadTicketV1{
-				UploadURL: u, UploadToken: secret, ExpiresAt: expires.UTC().Format(time.RFC3339),
+				UploadURL: u, UploadToken: secret, ExpiresAt: expires.In(announceLocation).Format(time.RFC3339),
 				MaxBytes: mediaMaxUploadBytes,
 				Curl:     fmt.Sprintf(`curl -H "Authorization: Bearer %s" -F file=@cover.jpg %s`, secret, u),
 			}, nil
@@ -201,7 +201,7 @@ func mediaOperations(m *MediaV1) []api.Operation {
 				}
 				mod := fi.ModTime().UTC()
 				items = append(items, mediaEntry{mod: mod, file: mediaFileV1{
-					Name: e.Name(), Path: "/media/" + e.Name(), SizeBytes: fi.Size(), ModifiedAt: mod.Format(time.RFC3339),
+					Name: e.Name(), Path: "/media/" + e.Name(), SizeBytes: fi.Size(), ModifiedAt: mod.In(announceLocation).Format(time.RFC3339),
 				}})
 			}
 			slices.SortFunc(items, func(a, b mediaEntry) int {
