@@ -2,7 +2,12 @@
 #
 # ship.sh — cut a release and deploy it in one step.
 #
-#   scripts/ship.sh 0.13.0
+#   scripts/ship.sh 0.13.0          # asks [Y/n] before touching production
+#   scripts/ship.sh 0.13.0 --yes    # answers yes for you (needed when run
+#                                   # with Claude Code's `!` prefix, which
+#                                   # has no keyboard input)
+#
+# Safe to re-run: if vX.Y.Z is already tagged at HEAD it just deploys again.
 #
 # Bumps `const version` in cmd/opencircuit/main.go, commits "Release vX.Y.Z",
 # tags vX.Y.Z, then runs scripts/deploy.sh — which still asks [Y/n] before it
@@ -12,8 +17,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 VERSION="${1:-}"
+YES="${2:-}"
 if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-  echo "usage: scripts/ship.sh X.Y.Z" >&2
+  echo "usage: scripts/ship.sh X.Y.Z [--yes]" >&2
   exit 2
 fi
 
@@ -25,8 +31,14 @@ if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   git status --short --untracked-files=no >&2
   exit 1
 fi
+RESUME=
 if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
-  echo "refusing: tag v$VERSION already exists" >&2; exit 1
+  if [ "$(git rev-list -n1 "v$VERSION")" = "$(git rev-parse HEAD)" ]; then
+    echo "v$VERSION is already tagged at HEAD — deploying it again."
+    RESUME=1
+  else
+    echo "refusing: tag v$VERSION exists but is not HEAD" >&2; exit 1
+  fi
 fi
 
 MAIN=cmd/opencircuit/main.go
@@ -35,15 +47,23 @@ if [ -z "$CURRENT" ]; then
   echo "refusing: could not find const version in $MAIN" >&2; exit 1
 fi
 
-if [ "$CURRENT" != "$VERSION" ]; then
+if [ -z "$RESUME" ] && [ "$CURRENT" != "$VERSION" ]; then
   echo "Bumping version $CURRENT -> $VERSION"
   sed -i '' "s/^const version = \"$CURRENT\"$/const version = \"$VERSION\"/" "$MAIN"
   git add "$MAIN"
   git commit -q -m "Release v$VERSION" -- "$MAIN"
 fi
-git tag "v$VERSION"
+[ -n "$RESUME" ] || git tag "v$VERSION"
 git show --stat --oneline HEAD | head -5
 
 echo
 echo "Deploying v$VERSION — deploy.sh will ask before changing production."
-exec scripts/deploy.sh "$VERSION"
+if [ "$YES" = "--yes" ]; then
+  yes y | scripts/deploy.sh "$VERSION"
+elif [ ! -t 0 ]; then
+  echo "No keyboard input here, so the [Y/n] prompt would abort. Re-run with --yes:" >&2
+  echo "  scripts/ship.sh $VERSION --yes" >&2
+  exit 1
+else
+  exec scripts/deploy.sh "$VERSION"
+fi
