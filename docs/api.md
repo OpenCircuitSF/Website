@@ -384,7 +384,9 @@ same way as the admin form, and the slug comes from the title.
 - `title` is required.
 - `summary`, `body_md` (Markdown), `starts_at` and `ends_at` (`ends_at` must be
   after `starts_at`).
-- `signup_url`, `cover_image` (a `/media/…` path) and `capacity`.
+- `signup_url`, `cover_image` (a `/media/…` path) with `cover_alt`, its alt
+  text (up to 1500 characters; Mastodon posts attach the cover only when it is
+  set), and `capacity`.
 - `interest_ids`.
 - `event_type_id`. Omit it for the default type.
 - `venue_id`. Omit both this and `no_venue` for the default venue, or send
@@ -402,6 +404,7 @@ its changes show on the site right away. It changes only the fields sent. An
 empty string clears a text field. `"clear_capacity": true` removes the limit,
 and `"no_venue": true` removes the location. `interest_ids` replaces the list.
 `status` is refused, because status changes go through the three calls below.
+Changing `cover_image` without sending `cover_alt` clears the old alt text.
 
 ```sh
 curl -s -X PATCH $B/events/17 \

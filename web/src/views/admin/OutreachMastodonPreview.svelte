@@ -2,9 +2,11 @@
   A Mastodon post as it will look (#0583): links and hashtags styled, the link
   preview Mastodon builds from the first URL (none when the image is
   attached, as Mastodon draws no card for a status with media), and the character count (every
-  URL counts as 23). When the workshop exposes its cover's alt text (#0572) an
-  image-attachment block shows the cover with an ALT badge, or says the image
-  cannot go out because the alt text is missing.
+  URL counts as 23). The server now sends the cover's alt text (#0572), and
+  the publisher attaches the cover only with it: an image-attachment block
+  shows the cover with an ALT badge, or says the image cannot go out because
+  the alt text is missing. A cover the publisher cannot load (thumb_ok false)
+  draws no attachment at all.
 -->
 <script lang="ts">
   import { countCharacters, isOverLimit } from '../../lib/outreach';
@@ -25,8 +27,9 @@
   const counted = $derived(countCharacters(channel, text, post.prepared));
   const over = $derived(isOverLimit(channel, counted.count));
   const cover = $derived(view.workshop.cover_image ?? null);
-  // Only a workshop that exposes cover_alt can attach the image.
-  const attachment = $derived(cover !== null && view.workshop.cover_alt !== undefined);
+  // Only a workshop that exposes cover_alt, with a cover the publisher can
+  // load, can attach the image.
+  const attachment = $derived(cover !== null && view.workshop.cover_alt !== undefined && view.thumb_ok !== false);
   const alt = $derived((view.workshop.cover_alt ?? '').trim());
   // Mastodon draws no link preview for a status that carries media.
   const attached = $derived(attachment && alt !== '');

@@ -93,6 +93,9 @@ import type { CreateWorkshopFields } from './api';
 
 // ── Status vocabulary (migration 000020's workshops_status_check) ──────────
 
+/** Mastodon's media description limit, mirrored by migration 000058's CHECK on workshops.cover_alt (#0572). */
+export const MAX_COVER_ALT_CHARS = 1500;
+
 /** The three workshops.Status* values, in no particular order. */
 export const WORKSHOP_STATUSES: readonly string[] = ['draft', 'published', 'canceled'] as const;
 
@@ -499,6 +502,8 @@ export interface WorkshopFormFields {
   capacity: string; // raw text input
   signupUrl: string;
   coverImage: string;
+  /** The cover's alt text (#0572). */
+  coverAlt: string;
   interestIds: number[];
   // Null means not chosen: the field is omitted and the server decides (#0613).
   eventTypeId: number | null;
@@ -533,6 +538,8 @@ export interface ValidatedWorkshopFields {
   capacity: number | null;
   signup_url: string;
   cover_image: string;
+  // #0572: always sent, '' clears it, like cover_image.
+  cover_alt: string;
   interest_ids: number[];
   // Only present when a type is chosen (#0613).
   event_type_id?: number;
@@ -688,6 +695,11 @@ export function validateWorkshopForm(
     };
   }
 
+  const coverAlt = fields.coverAlt.trim();
+  if ([...coverAlt].length > MAX_COVER_ALT_CHARS) {
+    return { error: 'Image description must be 1500 characters or fewer.' };
+  }
+
   return {
     title,
     // #0139: always the trimmed value, `''` when blank -- never `undefined`.
@@ -703,6 +715,7 @@ export function validateWorkshopForm(
     capacity,
     signup_url: signupUrl,
     cover_image: coverImage,
+    cover_alt: coverAlt,
     interest_ids: fields.interestIds,
     ...(fields.eventTypeId !== null ? { event_type_id: fields.eventTypeId } : {}),
   };
@@ -733,6 +746,7 @@ export function workshopToFormFields(w: AdminWorkshop): WorkshopFormFields {
     capacity: w.capacity != null ? String(w.capacity) : '',
     signupUrl: w.signup_url ?? '',
     coverImage: w.cover_image ?? '',
+    coverAlt: w.cover_alt ?? '',
     interestIds: w.interest_ids,
     eventTypeId: w.event_type_id,
   };
@@ -750,6 +764,7 @@ export function blankWorkshopFormFields(): WorkshopFormFields {
     capacity: '',
     signupUrl: '',
     coverImage: '',
+    coverAlt: '',
     interestIds: [],
     eventTypeId: null,
   };
@@ -810,6 +825,7 @@ export function cloneWorkshopFields(
     capacity: source.capacity,
     signup_url: source.signup_url,
     cover_image: source.cover_image,
+    cover_alt: source.cover_alt ?? undefined,
     interest_ids: [...source.interest_ids],
     // A new assignment: the server refuses a disabled type, and the clone
     // dialog shows that message rather than silently changing type (#0613).

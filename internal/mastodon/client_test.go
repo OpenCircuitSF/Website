@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // All values are fake fixtures; nothing here reaches a real instance (#0545).
@@ -199,5 +201,154 @@ func TestDeleteStatus_BadInputAndNilClient(t *testing.T) {
 	}
 	if hit {
 		t.Error("a malformed id must not reach the network")
+	}
+}
+
+// newMediaClient is a client against srv with a few-ms media poll (#0572).
+func newMediaClient(t *testing.T, srv *httptest.Server) *Client {
+	t.Helper()
+	c, err := New(srv.URL, fakeToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.mediaPoll = 2 * time.Millisecond
+	return c
+}
+
+func TestUploadMedia_ReadyImmediately(t *testing.T) {
+	var gotPath, gotAuth, gotPartCT, gotDesc string
+	var gotFile []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotAuth = r.URL.Path, r.Header.Get("Authorization")
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("parse multipart: %v", err)
+		}
+		gotDesc = r.FormValue("description")
+		if f, fh, err := r.FormFile("file"); err == nil {
+			gotFile, _ = io.ReadAll(f)
+			gotPartCT = fh.Header.Get("Content-Type")
+		}
+		io.WriteString(w, `{"id":"m1","url":"https://files.example.test/m1.png"}`)
+	}))
+	defer srv.Close()
+	id, err := newMediaClient(t, srv).UploadMedia(context.Background(), []byte("PNGBYTES"), "image/png", "A soldering iron")
+	if err != nil || id != "m1" {
+		t.Fatalf("UploadMedia = %q, %v", id, err)
+	}
+	if gotPath != "/api/v2/media" || gotAuth != "Bearer "+fakeToken || string(gotFile) != "PNGBYTES" || gotPartCT != "image/png" || gotDesc != "A soldering iron" {
+		t.Errorf("request: path=%q auth ok=%v file=%q partCT=%q desc=%q", gotPath, gotAuth == "Bearer "+fakeToken, gotFile, gotPartCT, gotDesc)
+	}
+}
+
+func TestUploadMedia_PollsUntilProcessed(t *testing.T) {
+	var gets atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v2/media":
+			w.WriteHeader(http.StatusAccepted)
+			io.WriteString(w, `{"id":"m2","url":null}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/media/m2":
+			if gets.Add(1) < 3 {
+				w.WriteHeader(http.StatusPartialContent)
+			}
+			io.WriteString(w, `{"id":"m2"}`)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusTeapot)
+		}
+	}))
+	defer srv.Close()
+	id, err := newMediaClient(t, srv).UploadMedia(context.Background(), []byte("x"), "image/jpeg", "alt")
+	if err != nil || id != "m2" {
+		t.Fatalf("UploadMedia = %q, %v", id, err)
+	}
+	if n := gets.Load(); n != 3 {
+		t.Errorf("GETs = %d, want 3 (206, 206, 200)", n)
+	}
+}
+
+func TestUploadMedia_PollStopsAtDeadline(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			w.WriteHeader(http.StatusAccepted)
+		} else {
+			w.WriteHeader(http.StatusPartialContent)
+		}
+		io.WriteString(w, `{"id":"m3"}`)
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	id, err := newMediaClient(t, srv).UploadMedia(ctx, []byte("x"), "image/jpeg", "alt")
+	if err == nil || id != "" {
+		t.Fatalf("UploadMedia = %q, %v; want an error once the deadline passes", id, err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("UploadMedia took %v after a 50ms deadline", d)
+	}
+}
+
+func TestUploadMedia_RefusesBlankAltOrData(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1) }))
+	defer srv.Close()
+	c := newMediaClient(t, srv)
+	for _, tc := range []struct {
+		data []byte
+		alt  string
+	}{{[]byte("x"), ""}, {[]byte("x"), "  \n"}, {nil, "alt"}} {
+		_, err := c.UploadMedia(context.Background(), tc.data, "image/jpeg", tc.alt)
+		if !IsPermanent(err) || !errors.Is(err, ErrInvalid) {
+			t.Errorf("UploadMedia(%q, %q) err = %v, want permanent ErrInvalid", tc.data, tc.alt, err)
+		}
+	}
+	var nilClient *Client
+	if _, err := nilClient.UploadMedia(context.Background(), []byte("x"), "image/jpeg", "alt"); !errors.Is(err, ErrAuth) {
+		t.Errorf("nil client err = %v, want ErrAuth", err)
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("requests = %d, want 0", n)
+	}
+}
+
+func TestUploadMedia_ErrorsAreRedacted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, `{"error":"bad token `+fakeToken+`"}`)
+	}))
+	defer srv.Close()
+	_, err := newMediaClient(t, srv).UploadMedia(context.Background(), []byte("x"), "image/jpeg", "alt")
+	if !errors.Is(err, ErrAuth) || !IsPermanent(err) {
+		t.Fatalf("err = %v, want permanent ErrAuth", err)
+	}
+	if strings.Contains(err.Error(), fakeToken) {
+		t.Errorf("error leaks the token: %v", err)
+	}
+}
+
+func TestPostStatus_SendsMediaIDs(t *testing.T) {
+	var bodies []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var m map[string]any
+		b, _ := io.ReadAll(r.Body)
+		json.Unmarshal(b, &m)
+		bodies = append(bodies, m)
+		io.WriteString(w, `{"id":"1","url":"u","uri":"u"}`)
+	}))
+	defer srv.Close()
+	c := newMediaClient(t, srv)
+	if _, err := c.PostStatus(context.Background(), "with image", "k1", "m1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.PostStatus(context.Background(), "text only", "k2"); err != nil {
+		t.Fatal(err)
+	}
+	ids, _ := bodies[0]["media_ids"].([]any)
+	if len(ids) != 1 || ids[0] != "m1" {
+		t.Errorf("first body media_ids = %v, want [m1]", bodies[0]["media_ids"])
+	}
+	if _, ok := bodies[1]["media_ids"]; ok {
+		t.Errorf("second body has media_ids: %v", bodies[1])
 	}
 }

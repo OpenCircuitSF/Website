@@ -1574,3 +1574,121 @@ func TestAdminWorkshops_EndsBeforeStartIs400(t *testing.T) {
 		t.Errorf("valid patch status = %d (%s)", code, b)
 	}
 }
+
+// coverAltWorkshop is the slice of a workshop response the #0572 tests read.
+type coverAltWorkshop struct {
+	ID         int64   `json:"id"`
+	CoverImage *string `json:"cover_image"`
+	CoverAlt   *string `json:"cover_alt"`
+}
+
+func coverAltDo(t *testing.T, srv *httptest.Server, method, url, token, body string) (int, coverAltWorkshop, []byte) {
+	t.Helper()
+	resp := doJSON(t, srv.Client(), method, url, token, body)
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var w coverAltWorkshop
+	if resp.StatusCode < 300 {
+		if err := json.Unmarshal(raw, &w); err != nil {
+			t.Fatalf("decode %s %s: %v (body=%s)", method, url, err, raw)
+		}
+	}
+	return resp.StatusCode, w, raw
+}
+
+func altOf(w coverAltWorkshop) string {
+	if w.CoverAlt == nil {
+		return "<nil>"
+	}
+	return *w.CoverAlt
+}
+
+// TestAdminWorkshops_CoverAltCreateAndPatch is #0572: cover_alt is accepted
+// on create, returned by GET, and cleared by a PATCH of "".
+func TestAdminWorkshops_CoverAltCreateAndPatch(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+	admin := seedAdmin(t, pool, "admin-workshops-coveralt@example.com")
+	const tok = "workshops-admin-coveralt-token"
+	seedSession(t, pool, admin, tok)
+
+	body := fmt.Sprintf(`{"title":%q,"cover_image":"/media/a.jpg","cover_alt":"  A soldering iron  "}`, uniqueAdminWorkshopTitle(t))
+	code, created, raw := coverAltDo(t, srv, http.MethodPost, srv.URL+"/admin/workshops", tok, body)
+	if code != http.StatusCreated {
+		t.Fatalf("create status = %d (body=%s)", code, raw)
+	}
+	cleanupAdminWorkshop(t, pool, created.ID)
+	if altOf(created) != "A soldering iron" {
+		t.Fatalf("created cover_alt = %q, want trimmed text", altOf(created))
+	}
+	u := fmt.Sprintf("%s/admin/workshops/%d", srv.URL, created.ID)
+	if code, got, raw := coverAltDo(t, srv, http.MethodGet, u, tok, ""); code != http.StatusOK || altOf(got) != "A soldering iron" {
+		t.Fatalf("GET status = %d cover_alt = %q (body=%s)", code, altOf(got), raw)
+	}
+	if code, got, raw := coverAltDo(t, srv, http.MethodPatch, u, tok, `{"cover_alt":""}`); code != http.StatusOK || got.CoverAlt != nil {
+		t.Fatalf(`PATCH cover_alt "" status = %d cover_alt = %q (body=%s)`, code, altOf(got), raw)
+	}
+}
+
+// TestAdminWorkshops_CoverAltTooLongIs400 is #0572: 1501 runes is a 400 naming
+// cover_alt; exactly 1500 (multi-byte runes, so bytes would exceed) is fine.
+func TestAdminWorkshops_CoverAltTooLongIs400(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+	admin := seedAdmin(t, pool, "admin-workshops-coveralt-long@example.com")
+	const tok = "workshops-admin-coveralt-long-token"
+	seedSession(t, pool, admin, tok)
+
+	long := strings.Repeat("é", 1501)
+	code, _, raw := coverAltDo(t, srv, http.MethodPost, srv.URL+"/admin/workshops", tok,
+		fmt.Sprintf(`{"title":%q,"cover_alt":%q}`, uniqueAdminWorkshopTitle(t), long))
+	if code != http.StatusBadRequest || !strings.Contains(string(raw), "cover_alt") {
+		t.Fatalf("1501-rune create status = %d body=%s, want 400 naming cover_alt", code, raw)
+	}
+	code, created, raw := coverAltDo(t, srv, http.MethodPost, srv.URL+"/admin/workshops", tok,
+		fmt.Sprintf(`{"title":%q,"cover_alt":%q}`, uniqueAdminWorkshopTitle(t), long[:len(long)-len("é")]))
+	if code != http.StatusCreated {
+		t.Fatalf("1500-rune create status = %d body=%s, want 201", code, raw)
+	}
+	cleanupAdminWorkshop(t, pool, created.ID)
+	code, _, raw = coverAltDo(t, srv, http.MethodPatch, fmt.Sprintf("%s/admin/workshops/%d", srv.URL, created.ID), tok,
+		fmt.Sprintf(`{"cover_alt":%q}`, long))
+	if code != http.StatusBadRequest || !strings.Contains(string(raw), "cover_alt") {
+		t.Fatalf("1501-rune patch status = %d body=%s, want 400 naming cover_alt", code, raw)
+	}
+}
+
+// TestAdminWorkshops_CoverChangeClearsAlt is #0572: a new cover without new
+// alt text clears the old alt text; a new cover with alt keeps the new alt;
+// a PATCH that leaves the cover alone keeps the alt.
+func TestAdminWorkshops_CoverChangeClearsAlt(t *testing.T) {
+	pool := interestsTestPool(t)
+	srv := httptest.NewServer(adminWorkshopsMux(pool, nil))
+	defer srv.Close()
+	admin := seedAdmin(t, pool, "admin-workshops-coveralt-change@example.com")
+	const tok = "workshops-admin-coveralt-change-token"
+	seedSession(t, pool, admin, tok)
+
+	code, created, raw := coverAltDo(t, srv, http.MethodPost, srv.URL+"/admin/workshops", tok,
+		fmt.Sprintf(`{"title":%q,"cover_image":"/media/a.jpg","cover_alt":"first"}`, uniqueAdminWorkshopTitle(t)))
+	if code != http.StatusCreated {
+		t.Fatalf("create status = %d (body=%s)", code, raw)
+	}
+	cleanupAdminWorkshop(t, pool, created.ID)
+	u := fmt.Sprintf("%s/admin/workshops/%d", srv.URL, created.ID)
+
+	if _, got, raw := coverAltDo(t, srv, http.MethodPatch, u, tok, `{"cover_image":"/media/b.jpg"}`); got.CoverAlt != nil {
+		t.Fatalf("new cover without alt kept cover_alt %q (body=%s)", altOf(got), raw)
+	}
+	if _, got, raw := coverAltDo(t, srv, http.MethodPatch, u, tok, `{"cover_image":"/media/c.jpg","cover_alt":"third"}`); altOf(got) != "third" {
+		t.Fatalf("new cover with alt: cover_alt = %q (body=%s)", altOf(got), raw)
+	}
+	if _, got, raw := coverAltDo(t, srv, http.MethodPatch, u, tok, `{"title":"Renamed cover-alt workshop"}`); altOf(got) != "third" {
+		t.Fatalf("title-only patch: cover_alt = %q, want kept (body=%s)", altOf(got), raw)
+	}
+	if _, got, raw := coverAltDo(t, srv, http.MethodPatch, u, tok, `{"cover_image":"/media/c.jpg"}`); altOf(got) != "third" {
+		t.Fatalf("same cover resent: cover_alt = %q, want kept (body=%s)", altOf(got), raw)
+	}
+}

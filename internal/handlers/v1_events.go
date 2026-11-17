@@ -126,6 +126,7 @@ type eventDetailV1 struct {
 	BodyMD       *string `json:"body_md"`
 	LocationNote *string `json:"location_note" jsonschema:"the venue's note"`
 	CoverImage   *string `json:"cover_image"`
+	CoverAlt     *string `json:"cover_alt"`
 }
 
 // lumaURL is signup when its host is lu.ma, luma.com or a subdomain of
@@ -195,7 +196,7 @@ func (d V1Deps) toEventDetailV1(ctx context.Context, w workshops.Workshop) (even
 	if err != nil {
 		return eventDetailV1{}, err
 	}
-	return eventDetailV1{eventV1: d.toEventV1(w, names), BodyMD: w.BodyMD, LocationNote: w.LocationNote, CoverImage: w.CoverImage}, nil
+	return eventDetailV1{eventV1: d.toEventV1(w, names), BodyMD: w.BodyMD, LocationNote: w.LocationNote, CoverImage: w.CoverImage, CoverAlt: w.CoverAlt}, nil
 }
 
 // ── inputs ───────────────────────────────────────────────────────────────────
@@ -228,6 +229,7 @@ type createEventIn struct {
 	EndsAt      *string `json:"ends_at,omitempty" jsonschema:"RFC 3339; must be after starts_at"`
 	SignupURL   *string `json:"signup_url,omitempty" jsonschema:"http(s), mailto: or a site path"`
 	CoverImage  *string `json:"cover_image,omitempty" jsonschema:"a site path under /media"`
+	CoverAlt    *string `json:"cover_alt,omitempty" jsonschema:"the cover's image description (alt text), up to 1500 characters; empty clears it. Mastodon posts attach the cover only when this is set"`
 	Capacity    *int    `json:"capacity,omitempty" jsonschema:"1 or more; omit for no limit"`
 	InterestIDs []int64 `json:"interest_ids,omitempty" jsonschema:"ids from list_interests"`
 	EventTypeID *int64  `json:"event_type_id,omitempty" jsonschema:"an id from list_event_types; omit for the default type"`
@@ -243,7 +245,8 @@ type updateEventIn struct {
 	StartsAt      *string  `json:"starts_at,omitempty" jsonschema:"RFC 3339; empty clears it"`
 	EndsAt        *string  `json:"ends_at,omitempty" jsonschema:"RFC 3339; empty clears it"`
 	SignupURL     *string  `json:"signup_url,omitempty" jsonschema:"empty clears it"`
-	CoverImage    *string  `json:"cover_image,omitempty" jsonschema:"empty clears it"`
+	CoverImage    *string  `json:"cover_image,omitempty" jsonschema:"empty clears it; changing it without cover_alt clears the old alt text"`
+	CoverAlt      *string  `json:"cover_alt,omitempty" jsonschema:"the cover's image description (alt text), up to 1500 characters; empty clears it. Mastodon posts attach the cover only when this is set"`
 	Capacity      *int     `json:"capacity,omitempty"`
 	ClearCapacity bool     `json:"clear_capacity,omitempty" jsonschema:"true removes the capacity limit"`
 	InterestIDs   *[]int64 `json:"interest_ids,omitempty" jsonschema:"replaces the list; [] clears it"`
@@ -329,7 +332,7 @@ func eventOps(d V1Deps) []api.Operation {
 			}
 			w, err := d.Workshops.createWorkshop(ctx, "", nil, createWorkshopRequest{
 				Title: in.Title, Summary: in.Summary, BodyMD: in.BodyMD, StartsAt: in.StartsAt, EndsAt: in.EndsAt,
-				Capacity: in.Capacity, SignupURL: in.SignupURL, CoverImage: in.CoverImage,
+				Capacity: in.Capacity, SignupURL: in.SignupURL, CoverImage: in.CoverImage, CoverAlt: in.CoverAlt,
 				InterestIDs: in.InterestIDs, EventTypeID: in.EventTypeID, VenueID: venue,
 			}, 0)
 			if err != nil {
@@ -395,11 +398,11 @@ func (in updateEventIn) patchRequest() (patchWorkshopRequest, error) {
 	}
 	req := patchWorkshopRequest{
 		Title: in.Title, Summary: in.Summary, BodyMD: in.BodyMD, StartsAt: in.StartsAt, EndsAt: in.EndsAt,
-		Capacity: capacity, SignupURL: in.SignupURL, CoverImage: in.CoverImage,
+		Capacity: capacity, SignupURL: in.SignupURL, CoverImage: in.CoverImage, CoverAlt: in.CoverAlt,
 		InterestIDs: in.InterestIDs, EventTypeID: in.EventTypeID, VenueID: venue,
 	}
 	if req.Title == nil && req.Summary == nil && req.BodyMD == nil && req.StartsAt == nil && req.EndsAt == nil &&
-		!req.Capacity.Present && req.SignupURL == nil && req.CoverImage == nil && req.InterestIDs == nil &&
+		!req.Capacity.Present && req.SignupURL == nil && req.CoverImage == nil && req.CoverAlt == nil && req.InterestIDs == nil &&
 		req.EventTypeID == nil && !req.VenueID.Present {
 		return patchWorkshopRequest{}, api.Validation(map[string]string{"body": "send at least one field"})
 	}
@@ -530,7 +533,7 @@ func (d V1Deps) duplicateEvent(ctx context.Context, in duplicateEventIn) (eventD
 	w, err := d.Workshops.createWorkshop(ctx, "", nil, createWorkshopRequest{
 		Title: src.Title, Summary: src.Summary, BodyMD: src.BodyMD,
 		StartsAt: format(starts), EndsAt: format(ends),
-		Capacity: src.Capacity, SignupURL: src.SignupURL, CoverImage: src.CoverImage,
+		Capacity: src.Capacity, SignupURL: src.SignupURL, CoverImage: src.CoverImage, CoverAlt: src.CoverAlt,
 		InterestIDs: append([]int64(nil), src.InterestIDs...), EventTypeID: &typeID, VenueID: venue,
 	}, src.ID)
 	if err != nil {

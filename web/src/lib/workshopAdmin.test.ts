@@ -414,6 +414,18 @@ describe('validateWorkshopForm', () => {
     expect(result).toEqual({ error: 'Title is required.' });
   });
 
+  it('trims cover_alt and rejects one over 1500 characters (#0572)', () => {
+    const ok = validateWorkshopForm(blankFields({ title: 'X', coverAlt: '  A breadboard  ' }));
+    if ('error' in ok) throw new Error('unexpected validation error');
+    expect(ok.cover_alt).toBe('A breadboard');
+    // 1500 astral code points is 3000 UTF-16 units: the limit is code points.
+    const atLimit = validateWorkshopForm(blankFields({ title: 'X', coverAlt: '\u{1F527}'.repeat(1500) }));
+    expect('error' in atLimit).toBe(false);
+    expect(validateWorkshopForm(blankFields({ title: 'X', coverAlt: 'a'.repeat(1501) }))).toEqual({
+      error: 'Image description must be 1500 characters or fewer.',
+    });
+  });
+
   it('accepts a minimal valid form (title only)', () => {
     const result = validateWorkshopForm(blankFields({ title: 'Soldering 101' }));
     expect(result).toEqual({
@@ -432,6 +444,7 @@ describe('validateWorkshopForm', () => {
       capacity: null,
       signup_url: '',
       cover_image: '',
+      cover_alt: '',
       interest_ids: [],
     });
   });
@@ -649,9 +662,19 @@ describe('workshopToFormFields / blankWorkshopFormFields', () => {
       capacity: '',
       signupUrl: '',
       coverImage: '',
+      coverAlt: '',
       interestIds: [],
       eventTypeId: null,
     });
+  });
+
+  it('maps cover_alt into the form and back (#0572)', () => {
+    const fields = workshopToFormFields(workshop({ title: 'X', cover_alt: 'A soldering iron' }));
+    expect(fields.coverAlt).toBe('A soldering iron');
+    expect(workshopToFormFields(workshop({ cover_alt: null })).coverAlt).toBe('');
+    const result = validateWorkshopForm(fields);
+    if ('error' in result) throw new Error('unexpected validation error');
+    expect(result.cover_alt).toBe('A soldering iron');
   });
 
   it('maps a loaded workshop onto form fields, substituting empty string/array for absent optionals', () => {
@@ -709,6 +732,7 @@ describe('cloneWorkshopFields', () => {
     capacity: 12,
     signup_url: 'https://example.com/signup',
     cover_image: '/media/soldering.jpg',
+    cover_alt: 'A soldering iron',
     interest_ids: [3, 5],
   });
 
@@ -725,6 +749,7 @@ describe('cloneWorkshopFields', () => {
       capacity: 12,
       signup_url: 'https://example.com/signup',
       cover_image: '/media/soldering.jpg',
+      cover_alt: 'A soldering iron',
       interest_ids: [3, 5],
       event_type_id: source.event_type_id,
     });

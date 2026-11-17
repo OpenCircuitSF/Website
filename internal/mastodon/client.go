@@ -1,6 +1,7 @@
 // Package mastodon is a small plain-net/http client for posting a status to
-// one Mastodon instance (#0545). No media and no card: the instance builds
-// the link preview from the page's OpenGraph tags.
+// one Mastodon instance (#0545). A status may carry one uploaded image with
+// alt text (#0572); otherwise the instance builds the link preview card from
+// the page's OpenGraph tags.
 //
 // A nil *Client means "Mastodon not configured". The token never appears in
 // an error or a log line.
@@ -13,7 +14,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"regexp"
 	"strings"
@@ -77,6 +80,8 @@ type Client struct {
 	base  *url.URL
 	token string
 	http  *http.Client
+	// mediaPoll is the wait between media processing polls (#0572).
+	mediaPoll time.Duration
 }
 
 // New returns a client, or nil when baseURL or token is blank. The URL must
@@ -98,7 +103,7 @@ func New(baseURL, token string) (*Client, error) {
 		return nil, errors.New("mastodon: MASTODON_BASE_URL must be an absolute https URL")
 	}
 	u.Path = strings.TrimRight(u.Path, "/")
-	return &Client{base: u, token: token, http: &http.Client{Timeout: DefaultTimeout}}, nil
+	return &Client{base: u, token: token, http: &http.Client{Timeout: DefaultTimeout}, mediaPoll: time.Second}, nil
 }
 
 // Enabled reports whether the client is usable; safe on a nil receiver.
@@ -148,15 +153,20 @@ func trimLinkEnd(text string, start, end int) int {
 
 // PostStatus creates a public status. idempotencyKey makes a retry of the
 // same logical post return the original status instead of a duplicate (the
-// instance remembers a key for about an hour).
-func (c *Client) PostStatus(ctx context.Context, text, idempotencyKey string) (Status, error) {
+// instance remembers a key for about an hour). mediaIDs, from UploadMedia,
+// are attached when given (#0572).
+func (c *Client) PostStatus(ctx context.Context, text, idempotencyKey string, mediaIDs ...string) (Status, error) {
 	if c == nil {
 		return Status{}, &APIError{Message: "client not configured", Permanent: true, kind: ErrAuth}
 	}
 	if strings.TrimSpace(text) == "" {
 		return Status{}, &APIError{Message: "status text is empty", Permanent: true, kind: ErrInvalid}
 	}
-	payload, err := json.Marshal(map[string]string{"status": text, "visibility": "public", "language": "en"})
+	fields := map[string]any{"status": text, "visibility": "public", "language": "en"}
+	if len(mediaIDs) > 0 {
+		fields["media_ids"] = mediaIDs
+	}
+	payload, err := json.Marshal(fields)
 	if err != nil {
 		return Status{}, fmt.Errorf("mastodon: encode request: %w", err)
 	}
@@ -199,6 +209,114 @@ func (c *Client) PostStatus(ctx context.Context, text, idempotencyKey string) (S
 	}
 	st = Status{ID: out.ID, URL: out.URL, URI: out.URI}
 	return st, nil
+}
+
+// UploadMedia uploads one image with its alt text (POST /api/v2/media) and
+// returns the media id to pass to PostStatus (#0572). A 202 means the
+// instance is still processing: it polls GET /api/v1/media/{id} (206 = still
+// processing, 200 = ready) until ready or until ctx ends, so the caller's
+// context is the budget. Blank alt text or empty data is refused without a
+// request: this site never posts an image without a description.
+func (c *Client) UploadMedia(ctx context.Context, data []byte, mime, altText string) (string, error) {
+	if c == nil {
+		return "", &APIError{Message: "client not configured", Permanent: true, kind: ErrAuth}
+	}
+	if len(data) == 0 {
+		return "", &APIError{Message: "media is empty", Permanent: true, kind: ErrInvalid}
+	}
+	if strings.TrimSpace(altText) == "" {
+		return "", &APIError{Message: "media has no alt text", Permanent: true, kind: ErrInvalid}
+	}
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	name := "cover.jpg"
+	if mime == "image/png" {
+		name = "cover.png"
+	}
+	h := textproto.MIMEHeader{}
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, name))
+	h.Set("Content-Type", mime)
+	part, err := mw.CreatePart(h)
+	if err != nil {
+		return "", fmt.Errorf("mastodon: encode media: %w", err)
+	}
+	if _, err := part.Write(data); err != nil {
+		return "", fmt.Errorf("mastodon: encode media: %w", err)
+	}
+	if err := mw.WriteField("description", altText); err != nil {
+		return "", fmt.Errorf("mastodon: encode media: %w", err)
+	}
+	if err := mw.Close(); err != nil {
+		return "", fmt.Errorf("mastodon: encode media: %w", err)
+	}
+	status, body, err := c.do(ctx, http.MethodPost, "/api/v2/media", mw.FormDataContentType(), &buf)
+	if err != nil {
+		return "", err
+	}
+	if status != http.StatusOK && status != http.StatusAccepted {
+		return "", c.apiError(status, body)
+	}
+	var out struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil || out.ID == "" || strings.ContainsAny(out.ID, "/?#\\ ") {
+		return "", &APIError{Status: status, Message: "malformed response", kind: ErrServer}
+	}
+	if status == http.StatusOK {
+		return out.ID, nil
+	}
+	for {
+		t := time.NewTimer(c.mediaPoll)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return "", fmt.Errorf("mastodon: media %s still processing: %w", out.ID, ctx.Err())
+		case <-t.C:
+		}
+		status, body, err := c.do(ctx, http.MethodGet, "/api/v1/media/"+out.ID, "", nil)
+		if err != nil {
+			return "", err
+		}
+		switch status {
+		case http.StatusPartialContent:
+			continue
+		case http.StatusOK:
+			return out.ID, nil
+		default:
+			return "", c.apiError(status, body)
+		}
+	}
+}
+
+// do sends one authorized request to path and returns the status and the
+// (size-limited) body. Network errors are unwrapped from *url.Error so the
+// request URL never reaches an error string.
+func (c *Client) do(ctx context.Context, method, path, contentType string, body io.Reader) (int, []byte, error) {
+	u := *c.base
+	u.Path += path
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), body)
+	if err != nil {
+		return 0, nil, fmt.Errorf("mastodon: build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Accept", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			return 0, nil, fmt.Errorf("mastodon: %s %s: %w", method, path, ue.Err)
+		}
+		return 0, nil, fmt.Errorf("mastodon: %s %s: %w", method, path, err)
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil {
+		return 0, nil, fmt.Errorf("mastodon: read response: %w", err)
+	}
+	return resp.StatusCode, b, nil
 }
 
 func (c *Client) apiError(status int, body []byte) *APIError {

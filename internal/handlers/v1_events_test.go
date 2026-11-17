@@ -518,3 +518,36 @@ func TestV1Events_MCPListAndCreate(t *testing.T) {
 		t.Errorf("read key tools %v", names)
 	}
 }
+
+// TestV1UpdateEvent_CoverAlt is #0572: update_event sets cover_alt (an update
+// carrying only cover_alt is accepted), get_event returns it, and an over-long
+// one is a validation error naming cover_alt.
+func TestV1UpdateEvent_CoverAlt(t *testing.T) {
+	e := newV1EventsEnv(t)
+	ev := e.create(t, v1EventTitle("V1 Alt"), `,"cover_image":"/media/a.jpg"`)
+	path := fmt.Sprintf("/api/v1/events/%d", ev.ID)
+	rec := e.call(t, http.MethodPatch, path, e.write, `{"cover_alt":"A soldering iron"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update cover_alt only = %d %s", rec.Code, rec.Body)
+	}
+	rec = e.call(t, http.MethodGet, path, e.read, "")
+	got := v1Decode[eventDetailV1](t, rec)
+	if got.CoverAlt == nil || *got.CoverAlt != "A soldering iron" {
+		t.Fatalf("get_event cover_alt = %v, want the text", got.CoverAlt)
+	}
+	e.wantField(t, e.call(t, http.MethodPatch, path, e.write, fmt.Sprintf(`{"cover_alt":%q}`, strings.Repeat("a", 1501))), "cover_alt")
+}
+
+// TestV1DuplicateEvent_CopiesCoverAlt is #0572: duplicate_event copies the
+// cover's alt text along with the cover.
+func TestV1DuplicateEvent_CopiesCoverAlt(t *testing.T) {
+	e := newV1EventsEnv(t)
+	src := e.create(t, v1EventTitle("V1 Alt Dup"), `,"starts_at":"2030-07-04T18:00:00-07:00","cover_image":"/media/a.jpg","cover_alt":"A breadboard"`)
+	if src.CoverAlt == nil || *src.CoverAlt != "A breadboard" {
+		t.Fatalf("create_event cover_alt = %v", src.CoverAlt)
+	}
+	dup := e.post(t, src.ID, "duplicate", `{"starts_at":"2030-07-11T18:00:00-07:00"}`, http.StatusCreated)
+	if dup.CoverAlt == nil || *dup.CoverAlt != "A breadboard" {
+		t.Fatalf("duplicate cover_alt = %v, want copied", dup.CoverAlt)
+	}
+}

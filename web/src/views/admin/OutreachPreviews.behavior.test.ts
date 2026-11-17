@@ -108,6 +108,11 @@ describe('Mastodon preview', () => {
     // Nothing is attached, so the link preview comes back with its picture.
     expect(container.querySelector('.card img')?.getAttribute('src')).toBe('/media/cover.png');
   });
+  it('shows no attachment when the cover cannot be loaded (thumb_ok false)', () => {
+    const { container } = render(OutreachPostPreview, { view: { workshop: workshop({ cover_alt: 'A soldering iron' }), thumb_ok: false }, channel: mast, post: mPost() });
+    expect(container.querySelector('.attachment')).toBeNull();
+    expect(container.textContent).not.toContain('alt text missing');
+  });
 });
 
 describe('other channels', () => {

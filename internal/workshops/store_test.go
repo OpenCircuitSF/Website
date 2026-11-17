@@ -1023,3 +1023,36 @@ func TestUpdateRejectsEndsBeforeStart(t *testing.T) {
 		t.Errorf("start without end: %v", err)
 	}
 }
+
+// TestStore_CoverAltRoundTrip is #0572: cover_alt is written by Create, read
+// back by Get, and cleared by an Update that carries nil (UpdateInput is
+// fully resolved).
+func TestStore_CoverAltRoundTrip(t *testing.T) {
+	pool := testPool(t)
+	store := NewStore(pool)
+	ctx := context.Background()
+	alt := "A soldering iron resting on a breadboard"
+
+	w, err := store.Create(ctx, CreateInput{Title: uniqueTitle(t), CoverAlt: &alt})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM workshops WHERE id = $1`, w.ID) })
+	if w.CoverAlt == nil || *w.CoverAlt != alt {
+		t.Fatalf("Create returned CoverAlt %v, want %q", w.CoverAlt, alt)
+	}
+	got, err := store.GetByID(ctx, w.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.CoverAlt == nil || *got.CoverAlt != alt {
+		t.Fatalf("Get CoverAlt = %v, want %q", got.CoverAlt, alt)
+	}
+	updated, err := store.Update(ctx, w.ID, UpdateInput{Title: w.Title, Status: StatusDraft})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if updated.CoverAlt != nil {
+		t.Fatalf("Update with nil CoverAlt left %q, want cleared", *updated.CoverAlt)
+	}
+}

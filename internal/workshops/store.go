@@ -191,19 +191,21 @@ func slugify(title string) string {
 // loaded as a side query (never part of the base SELECT — see interestIDs),
 // mirroring mailing.Campaign's InterestIDs convention.
 type Workshop struct {
-	ID                 int64
-	Slug               string
-	Title              string
-	Summary            *string
-	BodyMD             *string
-	StartsAt           *time.Time
-	EndsAt             *time.Time
-	LocationName       *string
-	LocationAddress    *string
-	LocationNote       *string
-	Capacity           *int
-	SignupURL          *string
-	CoverImage         *string
+	ID              int64
+	Slug            string
+	Title           string
+	Summary         *string
+	BodyMD          *string
+	StartsAt        *time.Time
+	EndsAt          *time.Time
+	LocationName    *string
+	LocationAddress *string
+	LocationNote    *string
+	Capacity        *int
+	SignupURL       *string
+	CoverImage      *string
+	// CoverAlt is the cover's alt text (#0572); nil means none.
+	CoverAlt           *string
 	Status             string
 	PublishedAt        *time.Time
 	EventTypeID        int64
@@ -231,6 +233,7 @@ type CreateInput struct {
 	Capacity    *int
 	SignupURL   *string
 	CoverImage  *string
+	CoverAlt    *string
 	InterestIDs []int64
 	// EventTypeID nil means the current default type (#0613).
 	EventTypeID *int64
@@ -261,6 +264,7 @@ type UpdateInput struct {
 	Capacity    *int
 	SignupURL   *string
 	CoverImage  *string
+	CoverAlt    *string
 	Status      string
 	InterestIDs []int64
 	// EventTypeID nil keeps the listing's current type (#0613).
@@ -290,7 +294,7 @@ const workshopColumns = `id, slug, title, summary, body_md, starts_at, ends_at,
 	(SELECT slug FROM event_types et WHERE et.id = workshops.event_type_id),
 	(SELECT name FROM event_types et WHERE et.id = workshops.event_type_id),
 	(SELECT sort_order FROM event_types et WHERE et.id = workshops.event_type_id),
-	venue_id`
+	venue_id, cover_alt`
 
 func scanWorkshop(row pgx.Row) (Workshop, error) {
 	var w Workshop
@@ -299,7 +303,7 @@ func scanWorkshop(row pgx.Row) (Workshop, error) {
 		&w.LocationName, &w.LocationAddress, &w.LocationNote, &w.Capacity, &w.SignupURL,
 		&w.CoverImage, &w.Status, &w.PublishedAt, &w.CreatedAt, &w.UpdatedAt,
 		&w.EventTypeID, &w.EventTypeSlug, &w.EventTypeName, &w.EventTypeSortOrder,
-		&w.VenueID,
+		&w.VenueID, &w.CoverAlt,
 	); err != nil {
 		return Workshop{}, err
 	}
@@ -728,11 +732,11 @@ func (s *Store) Create(ctx context.Context, in CreateInput) (Workshop, error) {
 		}
 		row := sp.QueryRow(ctx,
 			`INSERT INTO workshops (slug, title, summary, body_md, starts_at, ends_at,
-				venue_id, capacity, signup_url, cover_image, event_type_id)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11::bigint, event_types_default_id()))
+				venue_id, capacity, signup_url, cover_image, event_type_id, cover_alt)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11::bigint, event_types_default_id()), $12)
 			 RETURNING `+workshopColumns,
 			candidate, title, in.Summary, in.BodyMD, in.StartsAt, in.EndsAt,
-			venueID, in.Capacity, in.SignupURL, in.CoverImage, in.EventTypeID,
+			venueID, in.Capacity, in.SignupURL, in.CoverImage, in.EventTypeID, in.CoverAlt,
 		)
 		w, insertErr = scanWorkshop(row)
 		if insertErr == nil {
@@ -849,12 +853,13 @@ func (s *Store) Update(ctx context.Context, id int64, in UpdateInput) (Workshop,
 		            ELSE published_at
 		        END,
 		        event_type_id = COALESCE($12::bigint, event_type_id),
+		        cover_alt = $13,
 		        updated_at = now()
 		  WHERE id = $1
 		  RETURNING `+workshopColumns,
 		id, title, in.Summary, in.BodyMD, in.StartsAt, in.EndsAt,
 		in.VenueID, in.Capacity, in.SignupURL, in.CoverImage,
-		in.Status, in.EventTypeID,
+		in.Status, in.EventTypeID, in.CoverAlt,
 	)
 	updated, err := scanWorkshop(row)
 	switch {

@@ -1,7 +1,7 @@
 # Database Schema & Migrations
 
 PostgreSQL, schema managed by [`golang-migrate`](https://github.com/golang-migrate/migrate)
-(`migrations/`, numbered `000001`–`000057`). No ORM — every
+(`migrations/`, numbered `000001`–`000058`). No ORM — every
 store issues hand-written SQL through `pgx/v5`.
 
 ## Applying migrations
@@ -127,6 +127,7 @@ why the activity log is not a second package of its own.
 | `000055_create_event_cadence_rules` | Creates `event_cadence_rules` (`#0678`): what a normal month of events looks like, for the coverage report (`GET /api/v1/events/coverage`, `GET /admin/event-coverage`). Each rule has a `name` (1–120 characters), matches by `event_type_id` (`ON DELETE CASCADE` from `event_types`), by a case-insensitive `title_prefix` (1–120 characters), or both (`event_cadence_rules_match_check`), optionally narrowed by `venue_id` (`ON DELETE SET NULL` from `venues`), and has a `frequency`: `weekly` with a `weekday` (0–6, Sunday first) or `monthly` with `per_month` (1–31), never both (`event_cadence_rules_frequency_check`). `active` false retires a rule. Rules are stated in America/Los_Angeles. Owned by `internal/cadence` |
 | `000056_api_tokens_outreach_scopes` | Widens `api_tokens_scopes_check` (`#0696`) with `outreach:read`, `outreach:write`, `media:read` and `media:write`, the same drop-and-re-add 000053 used. The array must match `apitokens.KnownScopes`. The down restores 000053's set and refuses while a token holds a new scope |
 | `000057_create_guide_post_engagement` | Creates `guide_post_engagement` (`#0704`), the `guide_posts` counterpart of `outreach_engagement`: one row per engagement capture of a posted guide post (`post_id` `ON DELETE CASCADE` from `guide_posts`), with non-negative `likes`, `reposts`, `replies` and `quotes`, indexed on `(post_id, captured_at DESC)`. Written by the outreach tracker through `internal/guideposts` |
+| `000058_add_workshop_cover_alt` | Adds nullable `workshops.cover_alt` (`#0572`), the cover's alt text, at most 1500 characters (Mastodon's media description limit); Mastodon posts attach the cover only when it is set. An `ALTER TABLE` because `000020` is frozen |
 
 `internal/subscribers` (`imports.go`) owns `subscriber_imports`, alongside
 every other table that package already owns — see that file's doc comment.

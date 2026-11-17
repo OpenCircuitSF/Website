@@ -1311,6 +1311,8 @@ export interface CreateWorkshopFields {
   capacity?: number;
   signup_url?: string;
   cover_image?: string;
+  /** The cover's alt text (#0572); '' clears it. */
+  cover_alt?: string;
   interest_ids?: number[];
 }
 
@@ -1339,6 +1341,8 @@ export interface PatchWorkshopFields {
   capacity?: number | null;
   signup_url?: string;
   cover_image?: string;
+  /** The cover's alt text (#0572); '' clears it. */
+  cover_alt?: string;
   status?: string;
   interest_ids?: number[];
 }

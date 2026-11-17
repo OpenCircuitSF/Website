@@ -42,6 +42,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/api"
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
@@ -181,6 +182,7 @@ type workshopView struct {
 	Capacity        *int    `json:"capacity,omitempty"`
 	SignupURL       *string `json:"signup_url,omitempty"`
 	CoverImage      *string `json:"cover_image,omitempty"`
+	CoverAlt        *string `json:"cover_alt,omitempty"`
 	Status          string  `json:"status"`
 	PublishedAt     *string `json:"published_at,omitempty"`
 	InterestIDs     []int64 `json:"interest_ids"`
@@ -221,6 +223,7 @@ func toWorkshopView(w workshops.Workshop) workshopView {
 		Capacity:        w.Capacity,
 		SignupURL:       w.SignupURL,
 		CoverImage:      w.CoverImage,
+		CoverAlt:        w.CoverAlt,
 		Status:          w.Status,
 		PublishedAt:     formatTimePtr(w.PublishedAt),
 		InterestIDs:     ids,
@@ -282,6 +285,7 @@ type createWorkshopRequest struct {
 	Capacity    *int    `json:"capacity,omitempty"`
 	SignupURL   *string `json:"signup_url,omitempty"`
 	CoverImage  *string `json:"cover_image,omitempty"`
+	CoverAlt    *string `json:"cover_alt,omitempty"`
 	InterestIDs []int64 `json:"interest_ids,omitempty"`
 	EventTypeID *int64  `json:"event_type_id,omitempty"`
 	// VenueID absent means the default venue, null means no location, and a
@@ -350,6 +354,10 @@ func (h *AdminWorkshopsHandler) createWorkshop(ctx context.Context, ip string, a
 	if coverImage != nil && !isSafeCoverImage(*coverImage) {
 		return workshops.Workshop{}, &workshopFieldError{http.StatusBadRequest, "cover_image", coverImageErrorMessage}
 	}
+	coverAlt, ok := normalizeCoverAlt(req.CoverAlt)
+	if !ok {
+		return workshops.Workshop{}, &workshopFieldError{http.StatusBadRequest, "cover_alt", coverAltErrorMessage}
+	}
 	signupURL := normalizeOptionalCampaignField(req.SignupURL)
 	if signupURL != nil && !IsSafeLinkHref(*signupURL) {
 		return workshops.Workshop{}, &workshopFieldError{http.StatusBadRequest, "signup_url", signupURLErrorMessage}
@@ -373,6 +381,7 @@ func (h *AdminWorkshopsHandler) createWorkshop(ctx context.Context, ip string, a
 		Capacity:     req.Capacity,
 		SignupURL:    signupURL,
 		CoverImage:   coverImage,
+		CoverAlt:     coverAlt,
 		InterestIDs:  req.InterestIDs,
 		EventTypeID:  req.EventTypeID,
 		VenueID:      venueID,
@@ -494,6 +503,7 @@ type patchWorkshopRequest struct {
 	Capacity    Optional[int] `json:"capacity"`
 	SignupURL   *string       `json:"signup_url,omitempty"`
 	CoverImage  *string       `json:"cover_image,omitempty"`
+	CoverAlt    *string       `json:"cover_alt,omitempty"`
 	Status      *string       `json:"status,omitempty"`
 	InterestIDs *[]int64      `json:"interest_ids,omitempty"`
 	EventTypeID *int64        `json:"event_type_id,omitempty"`
@@ -620,6 +630,19 @@ func (h *AdminWorkshopsHandler) patchWorkshop(ctx context.Context, ip string, ac
 		}
 		coverImage = normalized
 	}
+	// cover_alt (#0572): sent → normalized and length-checked. Not sent but
+	// the cover changed → cleared, since alt text written for one picture
+	// must not describe another.
+	coverAlt := current.CoverAlt
+	if req.CoverAlt != nil {
+		normalized, ok := normalizeCoverAlt(req.CoverAlt)
+		if !ok {
+			return fail("cover_alt", coverAltErrorMessage)
+		}
+		coverAlt = normalized
+	} else if derefOrEmpty(coverImage) != derefOrEmpty(current.CoverImage) {
+		coverAlt = nil
+	}
 	status := current.Status
 	if req.Status != nil {
 		status = strings.TrimSpace(*req.Status)
@@ -639,6 +662,7 @@ func (h *AdminWorkshopsHandler) patchWorkshop(ctx context.Context, ip string, ac
 		Capacity:    capacity,
 		SignupURL:   signupURL,
 		CoverImage:  coverImage,
+		CoverAlt:    coverAlt,
 		Status:      status,
 		InterestIDs: interestIDs,
 		EventTypeID: req.EventTypeID,
@@ -757,6 +781,26 @@ func parseWorkshopID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+// maxCoverAltChars is Mastodon's media description limit, mirrored by
+// migration 000058's CHECK on workshops.cover_alt (#0572).
+const maxCoverAltChars = 1500
+
+// coverAltErrorMessage is the 400 body for an over-long cover_alt.
+const coverAltErrorMessage = "cover_alt must be 1500 characters or fewer"
+
+// normalizeCoverAlt trims cover_alt (blank → nil) and reports false when it
+// exceeds maxCoverAltChars runes.
+func normalizeCoverAlt(p *string) (*string, bool) {
+	if normalizeOptionalCampaignField(p) == nil {
+		return nil, true
+	}
+	v := strings.TrimSpace(*p)
+	if utf8.RuneCountInString(v) > maxCoverAltChars {
+		return nil, false
+	}
+	return &v, true
 }
 
 // coverImageErrorMessage is the 400 body for a cover_image that fails

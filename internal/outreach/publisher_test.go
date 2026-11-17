@@ -119,6 +119,12 @@ type fakeMasto struct {
 	deleted []string // DELETE paths
 	// deleteStatus, when non-zero, is the answer to DELETE.
 	deleteStatus int
+	// uploads and uploadAlts record POST /api/v2/media (#0572); mediaStatus,
+	// when non-zero, is the answer to it. lastBody is the last status POST.
+	uploads     int
+	uploadAlts  []string
+	mediaStatus int
+	lastBody    string
 }
 
 func newFakeMasto(t *testing.T) *fakeMasto {
@@ -147,6 +153,21 @@ func newFakeMasto(t *testing.T) *fakeMasto {
 			io.WriteString(w, `{"id":"deleted"}`)
 			return
 		}
+		if r.URL.Path == "/api/v2/media" {
+			f.uploads++
+			if err := r.ParseMultipartForm(1 << 20); err == nil {
+				f.uploadAlts = append(f.uploadAlts, r.FormValue("description"))
+			}
+			if f.mediaStatus != 0 {
+				w.WriteHeader(f.mediaStatus)
+				io.WriteString(w, `{"error":"fake media failure"}`)
+				return
+			}
+			io.WriteString(w, `{"id":"m1","url":"u"}`)
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		f.lastBody = string(b)
 		f.keys = append(f.keys, r.Header.Get("Idempotency-Key"))
 		if f.status != 0 {
 			w.WriteHeader(f.status)
@@ -880,5 +901,86 @@ func TestPublisher_StartsAndStopsCompanion(t *testing.T) {
 	case <-comp.stopped:
 	default:
 		t.Fatal("companion was not stopped")
+	}
+}
+
+// seedMastodonWithCover seeds a Mastodon post whose workshop has an uploaded
+// cover in a fresh media dir, and alt text when alt is non-empty (#0572).
+func seedMastodonWithCover(t *testing.T, s *Store, alt string) (dir string, post Post) {
+	t.Helper()
+	dir = t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "cover.jpg"), []byte{0xFF, 0xD8, 0xFF, 0xD9}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	o, post := seedMastodon(t, s)
+	if _, err := s.pool.Exec(context.Background(),
+		`UPDATE workshops SET cover_image = '/media/cover.jpg', cover_alt = NULLIF($2, '') WHERE id = (SELECT workshop_id FROM outreach WHERE id = $1)`,
+		o.ID, alt); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.QueueNow(context.Background(), post.ID); err != nil {
+		t.Fatal(err)
+	}
+	return dir, post
+}
+
+func TestPublisher_MastodonAttachesCoverWithAlt(t *testing.T) {
+	s := NewStore(testPool(t))
+	masto := newFakeMasto(t)
+	dir, post := seedMastodonWithCover(t, s, "A soldering iron")
+	runPass(t, newTestPublisher(t, s, nil, masto, dir))
+	got, _ := s.GetPost(context.Background(), post.ID)
+	if masto.uploads != 1 || len(masto.uploadAlts) != 1 || masto.uploadAlts[0] != "A soldering iron" {
+		t.Errorf("uploads = %d alts = %v, want one with the alt text", masto.uploads, masto.uploadAlts)
+	}
+	if !strings.Contains(masto.lastBody, `"media_ids":["m1"]`) {
+		t.Errorf("status body lacks media_ids: %s", masto.lastBody)
+	}
+	if got.Status != "posted" || got.LastError != nil {
+		t.Errorf("post status = %q last_error = %v, want posted with no notice", got.Status, got.LastError)
+	}
+}
+
+func TestPublisher_MastodonNoAltPostsTextOnlyWithNotice(t *testing.T) {
+	s := NewStore(testPool(t))
+	masto := newFakeMasto(t)
+	dir, post := seedMastodonWithCover(t, s, "")
+	runPass(t, newTestPublisher(t, s, nil, masto, dir))
+	got, _ := s.GetPost(context.Background(), post.ID)
+	if masto.uploads != 0 || strings.Contains(masto.lastBody, "media_ids") {
+		t.Errorf("uploads = %d body = %s, want text only", masto.uploads, masto.lastBody)
+	}
+	if got.Status != "posted" || got.LastError == nil || *got.LastError != MastodonNoticeNoAlt {
+		t.Errorf("post status = %q last_error = %v, want posted with the no-alt notice", got.Status, got.LastError)
+	}
+}
+
+func TestPublisher_MastodonUploadFailurePostsTextOnly(t *testing.T) {
+	s := NewStore(testPool(t))
+	masto := newFakeMasto(t)
+	masto.mediaStatus = http.StatusInternalServerError
+	dir, post := seedMastodonWithCover(t, s, "A soldering iron")
+	runPass(t, newTestPublisher(t, s, nil, masto, dir))
+	got, _ := s.GetPost(context.Background(), post.ID)
+	if masto.uploads != 1 || strings.Contains(masto.lastBody, "media_ids") {
+		t.Errorf("uploads = %d body = %s, want one failed upload then text only", masto.uploads, masto.lastBody)
+	}
+	if got.Status != "posted" || got.LastError == nil || *got.LastError != MastodonNoticeUploadFailed {
+		t.Errorf("post status = %q last_error = %v, want posted with the upload-failed notice", got.Status, got.LastError)
+	}
+}
+
+func TestPublisher_MastodonNoCoverNoNotice(t *testing.T) {
+	s := NewStore(testPool(t))
+	ctx := context.Background()
+	masto := newFakeMasto(t)
+	_, post := seedMastodon(t, s)
+	if _, _, err := s.QueueNow(ctx, post.ID); err != nil {
+		t.Fatal(err)
+	}
+	runPass(t, newTestPublisher(t, s, nil, masto, ""))
+	got, _ := s.GetPost(ctx, post.ID)
+	if masto.uploads != 0 || got.Status != "posted" || got.LastError != nil {
+		t.Errorf("uploads = %d status = %q last_error = %v, want posted, no upload, no notice", masto.uploads, got.Status, got.LastError)
 	}
 }

@@ -21,6 +21,9 @@ const (
 	// sendBudget bounds one post end to end (login, existence check,
 	// thumbnail upload, create).
 	sendBudget = 60 * time.Second
+	// mediaBudget bounds a Mastodon image upload, processing poll included
+	// (#0572); it sits inside sendBudget and leaves room for the post itself.
+	mediaBudget = 25 * time.Second
 	// writeBudget bounds the status writes after a send. It is independent of
 	// the send context, which may be spent by then.
 	writeBudget = 10 * time.Second
@@ -344,7 +347,7 @@ func (p *Publisher) sendOne(parent context.Context, row outbox.Row) {
 		return
 	}
 
-	var remoteID, remoteURL string
+	var remoteID, remoteURL, notice string
 	switch ch.Name {
 	case "bluesky":
 		res, err := p.postBluesky(ctx, bs, job)
@@ -357,7 +360,9 @@ func (p *Publisher) sendOne(parent context.Context, row outbox.Row) {
 			p.log.Warn("outreach: thumbnail upload failed, posted without it", "post_id", job.ID, "err", res.ThumbErr)
 		}
 	case "mastodon":
-		st, adopted, err := p.postMastodon(ctx, ma, row, job)
+		var st mastodon.Status
+		var adopted bool
+		st, adopted, notice, err = p.postMastodon(ctx, ma, row, job)
 		if err != nil {
 			p.postFailed(row, job, ch, err, mastodon.IsPermanent(err))
 			return
@@ -370,7 +375,7 @@ func (p *Publisher) sendOne(parent context.Context, row outbox.Row) {
 
 	wctx, wcancel := context.WithTimeout(context.WithoutCancel(parent), writeBudget)
 	defer wcancel()
-	ok, err = p.store.MarkRemotePosted(wctx, job.ID, remoteID, remoteURL, time.Now())
+	ok, err = p.store.MarkRemotePosted(wctx, job.ID, remoteID, remoteURL, notice, time.Now())
 	switch {
 	case err != nil:
 		// The post exists remotely; the retry finds it (Bluesky getRecord,
@@ -403,22 +408,57 @@ func (p *Publisher) priorAttemptUnknown(ctx context.Context, row outbox.Row) (bo
 // link and adopts it (#0553). The instance forgets an Idempotency-Key after
 // about an hour, so the key alone cannot make a late retry safe. If the look
 // fails, the error is returned and the row retries rather than posting blind.
-func (p *Publisher) postMastodon(ctx context.Context, masto *mastodon.Client, row outbox.Row, job SendJob) (st mastodon.Status, adopted bool, err error) {
+// A fresh post attaches the cover when it has alt text (#0572); notice says
+// why it went out without one, for the card.
+func (p *Publisher) postMastodon(ctx context.Context, masto *mastodon.Client, row outbox.Row, job SendJob) (st mastodon.Status, adopted bool, notice string, err error) {
 	prior, perr := p.priorAttemptUnknown(ctx, row)
 	if perr != nil {
-		return mastodon.Status{}, false, perr
+		return mastodon.Status{}, false, "", perr
 	}
 	if prior && job.ShortURL != nil {
 		found, ok, ferr := masto.FindRecentStatusWithURL(ctx, *job.ShortURL)
 		if ferr != nil {
-			return mastodon.Status{}, false, ferr
+			return mastodon.Status{}, false, "", ferr
 		}
 		if ok {
-			return found, true, nil
+			return found, true, "", nil
 		}
 	}
-	st, err = masto.PostStatus(ctx, job.Body, MastodonIdempotencyKey(job.ID, job.AttemptGeneration))
-	return st, false, err
+	ids, notice := p.mastodonMedia(ctx, masto, job)
+	st, err = masto.PostStatus(ctx, job.Body, MastodonIdempotencyKey(job.ID, job.AttemptGeneration), ids...)
+	return st, false, notice, err
+}
+
+// MastodonNoticeNoAlt and MastodonNoticeUploadFailed are the card notices for
+// a Mastodon post that went out as text only although the event has a cover
+// (#0572).
+const (
+	MastodonNoticeNoAlt        = "Posted without image: no alt text. Add an image description under the event's cover so the picture goes out next time."
+	MastodonNoticeUploadFailed = "Posted without image: the upload to Mastodon failed."
+)
+
+// mastodonMedia uploads the cover for a Mastodon post: the same bytes as the
+// Bluesky thumbnail, and only with alt text (#0572). No cover means no media
+// and no notice; otherwise a text-only post carries a notice saying why.
+func (p *Publisher) mastodonMedia(ctx context.Context, masto *mastodon.Client, job SendJob) ([]string, string) {
+	if job.CoverImage == nil || strings.TrimSpace(*job.CoverImage) == "" {
+		return nil, ""
+	}
+	if job.CoverAlt == nil || strings.TrimSpace(*job.CoverAlt) == "" {
+		return nil, MastodonNoticeNoAlt
+	}
+	data, mime, reason := p.thumbnail(job.CoverImage)
+	if data == nil {
+		return nil, reason
+	}
+	mctx, cancel := context.WithTimeout(ctx, mediaBudget)
+	defer cancel()
+	id, err := masto.UploadMedia(mctx, data, mime, *job.CoverAlt)
+	if err != nil {
+		p.log.Warn("outreach: Mastodon image upload failed, posting without it", "post_id", job.ID, "err", err)
+		return nil, MastodonNoticeUploadFailed
+	}
+	return []string{id}, ""
 }
 
 func label(ch Channel, name string) string {

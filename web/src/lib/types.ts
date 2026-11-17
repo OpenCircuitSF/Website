@@ -636,6 +636,8 @@ export interface AdminWorkshop {
   capacity?: number;
   signup_url?: string;
   cover_image?: string;
+  /** The cover's alt text (#0572). */
+  cover_alt?: string | null;
   status: string; // draft | published | canceled
   published_at?: string;
   interest_ids: number[];

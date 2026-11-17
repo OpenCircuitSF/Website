@@ -747,6 +747,7 @@ CREATE TABLE workshops (
     capacity         INT,                   -- display only in v1
     signup_url       TEXT,                  -- external RSVP link if used
     cover_image      TEXT,                  -- path under /media
+    cover_alt        TEXT,                  -- cover's alt text, <= 1500 chars (#0572)
     status           TEXT NOT NULL DEFAULT 'draft',  -- draft | published | canceled
     published_at     TIMESTAMPTZ,
     event_type_id    BIGINT NOT NULL DEFAULT event_types_default_id()

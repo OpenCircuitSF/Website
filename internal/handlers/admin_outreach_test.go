@@ -891,3 +891,23 @@ func TestAdminOutreach_AutomaticPostHasNoFreshBody(t *testing.T) {
 		t.Errorf("fresh_body = %q on an automatic post", *got.FreshBody)
 	}
 }
+
+// TestAdminOutreach_WorkshopViewCarriesCoverAlt is #0572: the panel's workshop
+// view always carries cover_alt — "" when unset, the text when set — since the
+// Mastodon preview keys on its presence.
+func TestAdminOutreach_WorkshopViewCarriesCoverAlt(t *testing.T) {
+	e := newOutreachEnv(t, false)
+	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
+	path := fmt.Sprintf("/admin/workshops/%d/outreach", w.ID)
+	code, b := e.do(t, http.MethodGet, path, "")
+	if code != http.StatusOK || !strings.Contains(string(b), `"cover_alt":""`) {
+		t.Fatalf("unset: status = %d, body lacks \"cover_alt\":\"\": %s", code, b)
+	}
+	if _, err := e.pool.Exec(context.Background(), `UPDATE workshops SET cover_alt = 'A breadboard' WHERE id = $1`, w.ID); err != nil {
+		t.Fatalf("set cover_alt: %v", err)
+	}
+	code, b = e.do(t, http.MethodGet, path, "")
+	if code != http.StatusOK || !strings.Contains(string(b), `"cover_alt":"A breadboard"`) {
+		t.Fatalf("set: status = %d, body lacks the alt text: %s", code, b)
+	}
+}

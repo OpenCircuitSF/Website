@@ -113,6 +113,7 @@
     cloneDefaultEndLocal,
     cloneWorkshopFields,
     type WorkshopFormFields,
+    MAX_COVER_ALT_CHARS,
   } from '../../lib/workshopAdmin';
   import { sortedInterests } from '../../lib/admin';
   import { assignableEventTypes, eventTypeOptionLabel } from '../../lib/eventTypes';
@@ -161,6 +162,7 @@
     capacity: '',
     signupUrl: '',
     coverImage: '',
+    coverAlt: '',
     interestIds: [],
     eventTypeId: null,
   });
@@ -715,6 +717,20 @@
           type a site-relative path (e.g. "/media/soldering-101.jpg") to an image already on
           the server via the documented <code>scp</code> workflow. External image URLs are not
           accepted.
+        </p>
+      </div>
+      <div class="field">
+        <label for="workshop-cover-alt">Image description (alt text)</label>
+        <textarea
+          id="workshop-cover-alt"
+          rows="2"
+          maxlength={MAX_COVER_ALT_CHARS}
+          bind:value={fields.coverAlt}
+          disabled={saving}
+        ></textarea>
+        <p class="text-muted">
+          Describe the picture for people who can't see it. Mastodon posts include the cover only
+          when this is filled in.
         </p>
       </div>
     </Panel>

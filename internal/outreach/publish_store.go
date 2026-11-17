@@ -318,6 +318,9 @@ type SendJob struct {
 	Slug           string
 	Summary        *string
 	CoverImage     *string
+	// CoverAlt is the cover's alt text (#0572); Mastodon attaches the cover
+	// only when it is set.
+	CoverAlt *string
 }
 
 // LoadForSend re-reads a post and its workshop at send time. ErrNotFound when
@@ -325,13 +328,13 @@ type SendJob struct {
 func (s *Store) LoadForSend(ctx context.Context, postID int64) (SendJob, error) {
 	var j SendJob
 	err := s.pool.QueryRow(ctx,
-		`SELECT `+qualifiedPostColumns+`, w.status, w.title, w.slug, w.summary, w.cover_image
+		`SELECT `+qualifiedPostColumns+`, w.status, w.title, w.slug, w.summary, w.cover_image, w.cover_alt
 		   FROM outreach_posts p JOIN outreach o ON o.id = p.outreach_id JOIN workshops w ON w.id = o.workshop_id
 		  WHERE p.id = $1`, postID).Scan(
 		&j.ID, &j.OutreachID, &j.Channel, &j.Wave, &j.Body, &j.Status, &j.SourceFingerprint, &j.Customized,
 		&j.ShortLinkKey, &j.ShortURL, &j.RemoteID, &j.RemoteURL, &j.LastError,
 		&j.ScheduledAt, &j.PostedAt, &j.UpdatedAt, &j.CreatedAt, &j.AttemptGeneration,
-		&j.WorkshopStatus, &j.Title, &j.Slug, &j.Summary, &j.CoverImage)
+		&j.WorkshopStatus, &j.Title, &j.Slug, &j.Summary, &j.CoverImage, &j.CoverAlt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return SendJob{}, ErrNotFound
 	}
@@ -342,11 +345,13 @@ func (s *Store) LoadForSend(ctx context.Context, postID int64) (SendJob, error) 
 }
 
 // MarkRemotePosted records a successful automatic post. false means the post
-// was no longer queued (edited or deleted meanwhile).
-func (s *Store) MarkRemotePosted(ctx context.Context, id int64, remoteID, remoteURL string, now time.Time) (bool, error) {
+// was no longer queued (edited or deleted meanwhile). A non-empty notice is
+// kept in last_error so the card shows it under the Posted line, as when a
+// Mastodon post went out without its image (#0572); "" clears it.
+func (s *Store) MarkRemotePosted(ctx context.Context, id int64, remoteID, remoteURL, notice string, now time.Time) (bool, error) {
 	tag, err := s.pool.Exec(ctx,
-		`UPDATE outreach_posts SET status = 'posted', posted_at = $4, remote_id = $2, remote_url = $3, last_error = NULL, updated_at = now()
-		 WHERE id = $1 AND status = 'queued'`, id, remoteID, remoteURL, now)
+		`UPDATE outreach_posts SET status = 'posted', posted_at = $5, remote_id = $2, remote_url = $3, last_error = NULLIF($4, ''), updated_at = now()
+		 WHERE id = $1 AND status = 'queued'`, id, remoteID, remoteURL, notice, now)
 	if err != nil {
 		return false, fmt.Errorf("outreach: mark remote posted: %w", err)
 	}

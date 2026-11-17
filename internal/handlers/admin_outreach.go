@@ -538,8 +538,11 @@ type outreachWorkshopView struct {
 	Status   string  `json:"status"`
 	StartsAt *string `json:"starts_at"`
 	// Summary and CoverImage let the previews draw the link card (#0583).
+	// CoverAlt is always present ("" when unset): the Mastodon preview keys
+	// on it to draw the attachment or the missing-alt notice (#0572).
 	Summary    *string `json:"summary"`
 	CoverImage *string `json:"cover_image"`
+	CoverAlt   string  `json:"cover_alt"`
 }
 
 type outreachPanelView struct {
@@ -578,7 +581,7 @@ type outreachPanelView struct {
 
 // workshopView is the workshop part of the panel and of a timeline event.
 func (h *AdminOutreachHandler) workshopView(wk workshops.Workshop) outreachWorkshopView {
-	return outreachWorkshopView{ID: wk.ID, Slug: wk.Slug, Title: wk.Title, Status: wk.Status, StartsAt: rfc3339(wk.StartsAt), Summary: nonEmptyPtr(wk.Summary), CoverImage: nonEmptyPtr(wk.CoverImage)}
+	return outreachWorkshopView{ID: wk.ID, Slug: wk.Slug, Title: wk.Title, Status: wk.Status, StartsAt: rfc3339(wk.StartsAt), Summary: nonEmptyPtr(wk.Summary), CoverImage: nonEmptyPtr(wk.CoverImage), CoverAlt: derefOrEmpty(wk.CoverAlt)}
 }
 
 // waveViews lists every section with its suggested time for wk.
