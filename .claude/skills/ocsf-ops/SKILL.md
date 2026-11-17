@@ -16,14 +16,19 @@ scopes. The tools you see are exactly the ones those scopes allow.
 
 ## House rules
 
-1. **Confirm before anything public.** Show what will happen and get a clear
-   yes before calling `send_guide_post`, `publish_event` or `cancel_event`.
-   Do the same before any other call the server flags PUBLIC or DESTRUCTIVE:
-   `create_guide_posts` or `update_guide_post` with a schedule time,
-   `schedule_guide_post`, `delete_guide_post`, or `update_event` on a
-   published event. One confirmation can cover a batch the user has seen in
-   full, such as a table of 14 scheduled posts. It never carries over to
-   different work.
+1. **Confirm before anything public or destructive.** Show what will happen
+   and get a clear yes first. The full list:
+   - PUBLIC: `send_guide_post`, `schedule_guide_post`, `create_guide_posts`
+     or `update_guide_post` with a schedule time, `publish_event`,
+     `cancel_event`, `update_event` on a published event,
+     `schedule_outreach_wave`, `send_outreach_post`.
+   - DESTRUCTIVE: `delete_guide_post`, `delete_outreach_post`,
+     `reset_event_outreach`, `delete_outreach_location`, `delete_flyer`,
+     and `takedown_outreach_post` (also PUBLIC).
+
+   One confirmation can cover a batch the user has seen in full, such as a
+   table of 14 scheduled posts or one outreach wave. It never carries over to
+   different work. Under `bypass-permissions` nothing else stops these calls.
 2. **Pacific time.** The site's zone is America/Los_Angeles.
    - Write times with their real offset: `-08:00` from early November to
      mid-March, `-07:00` otherwise. Check the date against the DST change.
@@ -36,7 +41,8 @@ scopes. The tools you see are exactly the ones those scopes allow.
    Never leave the campaign blank, which would put the posts in the catch-all
    `guide-posts`.
 4. **Give every create an `idempotency_key`.** That means `create_guide_posts`,
-   `create_event` and `duplicate_event`. Build the key from the request, so a
+   `create_event`, `duplicate_event`, `create_outreach_post`,
+   `create_outreach_location` and `create_flyer`. Build the key from the request, so a
    retry rebuilds the same one:
    - `guides-<campaign-month>-<slug>-<date>`;
    - `dup-<source id>-<date>`;
@@ -107,3 +113,32 @@ the second Saturday."
 Cadence rules themselves are managed with `list_cadence_rules` and
 `set_cadence_rule`. `active: false` retires a rule, and there is no delete
 tool.
+
+### Announce an event (outreach)
+
+1. The event must be published. `outreach_connections_status`, then
+   `start_event_outreach {id}` (safe to repeat).
+2. `draft_event_outreach {id}` drafts the `announce` wave (`waves` adds
+   `reminder`, `last-call`). `get_event_outreach` and show every draft; edit
+   with `update_outreach_post`.
+3. **Waves are scheduled as a whole.** **Confirm**, then
+   `schedule_outreach_wave {id, wave, scheduled_at}`: all automatic posts of
+   the wave, one time, all or nothing. Report `left_alone`. Undo with
+   `unschedule_outreach_wave`.
+4. Hand-posted channels: `ensure_outreach_hand_links`, the user posts, then
+   `mark_outreach_post_posted` with the `remote_url`.
+
+### Add a cover image
+
+1. `create_media_upload` → run its `curl` with the file → `{path}`. Never echo
+   the `upload_token`.
+2. **Confirm** if the event is published, then
+   `update_event {id, cover_image: path, cover_alt}`. Always write alt text:
+   Mastodon posts attach the cover only with it.
+
+### How did the posts do?
+
+`get_post_performance {}` (last 7 days; `since`/`until`, `kind`). Lead with its
+summary, then the best posts by clicks and reactions. `clicks: null` with
+`clicks_error` means ShortLinks was down, not zero clicks. One event in depth:
+`get_outreach_results`.

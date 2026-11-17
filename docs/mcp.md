@@ -11,11 +11,10 @@ limit are the same too: one key has one budget across REST and MCP.
 
 Follow [`api.md` → Creating a key](api.md#creating-a-key). For an agent:
 
-- **Scopes.** Choose **Agent (all guide and event scopes)**: `guides:read`,
-  `guide_posts:read`, `guide_posts:write`, `events:read`, `events:write` and
-  `venues:read`. For an agent that should only look, tick only `guides:read`,
-  `guide_posts:read`, `events:read` and `venues:read`. Leave `engagement:read` to Home
-  Assistant's own key.
+- **Scopes.** Choose **Agent (every scope)**, which ticks every scope,
+  `outreach:*`, `media:*` and `engagement:read` included. For an agent that
+  should only look, choose **Read-only**, which ticks every `:read` scope.
+  Home Assistant keeps its own key.
 - **One key per client.** Use separate keys for your laptop's Claude Code,
   Claude Desktop and any CI job, named so the audit log says which one acted.
 - **Expiry.** Keep the 90-day default, and rotate before it runs out.
@@ -52,6 +51,11 @@ repository. To share the server definition without the key, check in a
 Check the connection with `claude mcp list`, or `/mcp` inside a session. Then
 ask "call whoami". It answers with the key's name, scopes and expiry.
 
+`scripts/mcp-connect.sh` does all of this: it asks for the key (hidden),
+checks it against `/api/v1/me`, and adds the server at **user** scope. Pass
+`--scope local --dir <path>` to add it for one directory instead (see
+[§7](#7-more-than-one-agent-on-one-machine)).
+
 For a local server, use `http://localhost:8080/mcp` with a key made in your
 local admin console. The mailing list and these tools need Postgres; they are
 not served under `STORAGE=json`.
@@ -87,6 +91,7 @@ key in plain text, so keep it out of anything synced or shared.
   `claude mcp remove ocsf` and `claude mcp add …` with the new key, or edit
   Claude Desktop's `env`. Call `whoami` and check the prefix is the new key's.
   Then **Revoke** the old key under Settings → API tokens.
+  `scripts/mcp-connect.sh` replaces the entry in one step.
 - **Revoke** right away if a key may have leaked. Revocation applies to the
   next request. A revoked or expired key gets the same `401` as an unknown one,
   and an MCP client shows that as a failed connection.
@@ -312,3 +317,78 @@ house rules.
 5. `event_coverage {"month": "2026-12"}` again. Those rules should now show
    `state: "drafts"`. List the drafts with their `admin_url`s, and **ask**
    before publishing any.
+
+### D. Announce an event
+
+> Announce the December 12 Programming LEDs workshop.
+
+1. `get_event` checks it is `published`; outreach needs a published event.
+   `outreach_connections_status {}` shows which channels are connected.
+2. `start_event_outreach {"id": 42}` makes its ShortLinks campaign and tracked
+   links. Repeating it returns the existing outreach.
+3. `draft_event_outreach {"id": 42}` drafts every switched-on channel in the
+   `announce` wave (add `"waves": ["reminder", "last-call"]` for the others).
+   Posts that already exist are skipped.
+4. `get_event_outreach {"id": 42}` and show every draft. Edit with
+   `update_outreach_post`; `prepare_outreach_post` puts each post's tracked
+   link in its body, and `ensure_outreach_hand_links` makes the links for the
+   hand-posted channels.
+5. **Ask**, then `schedule_outreach_wave {"id": 42, "wave": "announce", "scheduled_at": "2026-11-20T09:00:00-08:00"}`.
+   A wave is scheduled as a whole, all or nothing; posts it skipped are in
+   `left_alone`. `unschedule_outreach_wave` puts the whole wave back to draft.
+6. Hand-posted channels: post them yourself, then `mark_outreach_post_posted`
+   with the `remote_url`.
+
+### E. Put up flyers
+
+1. `list_outreach_locations {}`; add a new place with
+   `create_outreach_location` (with an `idempotency_key`).
+2. `create_flyer {"outreach_id": …, "idempotency_key": …}`, then
+   `set_flyer_locations` with each place and its copies.
+3. `generate_flyer` makes each location's tracked link and QR code. Call it
+   again while `remaining` is above 0.
+4. `get_flyer` gives `print_url`, the admin page a person prints from. After
+   the walk, `set_flyer_link_put_up {"put_up": true}` for each place.
+
+### F. Add a cover image
+
+1. `create_media_upload {}` returns a single-use ticket valid 10 minutes, and a
+   ready-to-run `curl`. The URL holds only the ticket id; the secret goes in
+   the `Authorization` header (see [`api.md` → Media](api.md#media-mediaread-mediawrite)).
+2. Run the `curl` with the image file. It answers `{"path": "/media/…"}`.
+3. `update_event {"id": 42, "cover_image": "/media/…", "cover_alt": "…"}`.
+   Always send `cover_alt`: Mastodon posts attach the cover only when it has
+   alt text. On a published event this is PUBLIC, so **ask** first.
+
+### G. How did last week's posts do?
+
+`get_post_performance {}` covers the last 7 days of event and guide posts
+(`since`/`until` for another window, `kind` to narrow it). Report its summary,
+the per-channel totals, and the best posts by clicks and reactions. Clicks are
+`null` with a `clicks_error` when ShortLinks is unreachable. For one event in
+depth, use `get_outreach_results`.
+
+## 7. More than one agent on one machine
+
+- **User scope is inherited.** An `ocsf` entry at user scope in
+  `~/.claude.json` is seen by every Claude Code or Agent SDK process the same
+  OS user runs, Buzz agents included. They all act with that one key.
+- **Local scope overrides it.** A local-scope entry belongs to one working
+  directory and wins over the user entry there. Give each agent its own key
+  this way, so the audit log names which agent acted:
+
+  ```sh
+  scripts/mcp-connect.sh --scope local --dir ~/Agents/buzz
+  ```
+
+  Check it from that directory with `claude mcp get ocsf`.
+- **Bypass-permissions means no confirmation.** An agent running with
+  `bypass-permissions` (Buzz does) calls PUBLIC and DESTRUCTIVE tools without
+  asking a human. The server's "confirm first" instruction is advice to the
+  model, not a gate. Buzz has full access by the user's choice (2026-11-17).
+  If you want an agent that can only look, give it a **Read-only** key; its
+  tool list then has no write tools at all.
+- **Revoke one agent** by revoking its key under Settings → API tokens. The
+  other agents' keys keep working.
+- **Never use project scope with a key.** `--scope project` writes the key
+  into `.mcp.json`, which may be committed. The script refuses it.

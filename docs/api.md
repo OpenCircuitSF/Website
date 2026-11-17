@@ -50,8 +50,9 @@ B=https://www.opencircuitsf.com/api/v1
 3. Choose **Expires**: 7 days, 30 days, **90 days** (the default), 1 year,
    Never, or a custom date. A custom date expires at 23:59:59 that day in your
    browser's time zone. From then on the key gets `401`.
-4. Choose the **scopes**. At least one is required. **Agent (all guide and
-   event scopes)** ticks the set an MCP agent needs.
+4. Choose the **scopes**. At least one is required. **Agent (every scope)**
+   ticks every scope, which is what an MCP agent needs; **Read-only** ticks
+   every `:read` scope, for an agent that should only look.
 5. Select **Create token** and copy the key. **It is shown once.** Only its
    hash is stored, and the list afterwards shows only the 12-character prefix.
 
@@ -64,11 +65,15 @@ B=https://www.opencircuitsf.com/api/v1
 | `events:read` | events, event types, interests, and the coverage report |
 | `events:write` | creating, changing, publishing, cancelling and duplicating events |
 | `venues:read` | venues |
+| `outreach:read` | event outreach, results, the timeline, Luma, flyer locations and flyers |
+| `outreach:write` | starting outreach, drafting, scheduling, sending and taking down posts; flyers and their locations |
+| `media:read` | the media directory listing |
+| `media:write` | upload tickets for images |
 
-A `:write` scope also grants the `:read` scope of the same resource. The Agent
-preset is `guides:read`, `guide_posts:read`, `guide_posts:write`,
-`events:read`, `events:write` and `venues:read`. It leaves out
-`engagement:read`.
+`engagement:read` also covers `get_post_performance`. A `:write` scope also
+grants the `:read` scope of the same resource. The Agent preset is every scope
+above, `engagement:read` included; the Read-only preset is every `:read`
+scope.
 
 To revoke a key, select **Revoke** in its row. Anything using it gets `401` on
 its next request.
@@ -557,7 +562,32 @@ curl -s -X POST $B/cadence-rules \
 
 - **`create_media_upload`**, `POST /media/uploads`: a single-use upload ticket valid 10 minutes: `{upload_url, upload_token, expires_at, max_bytes, curl}`; `201`. `503` when no media directory is set.
 - **`list_media`**, `GET /media`: files in the media directory, `{name, path, size_bytes, modified_at}`, newest first (paged).
-- *(REST only)* `POST /media/uploads/{id}`, the `upload_url`: send the ticket as `Authorization: Bearer <upload_token>` and the image as multipart field `file` (JPEG or PNG, 5 MiB). Answers `{path}`, a `/media/…` path for `update_event` `cover_image` or `update_flyer` `photo`. An unknown, used or expired ticket is `401`; the ticket is never in the URL.
+- *(REST only)* `POST /media/uploads/{id}`, the `upload_url`: send the ticket as `Authorization: Bearer <upload_token>` and the image as multipart field `file` (JPEG or PNG, 5 MiB). Answers `{path}`, a `/media/…` path for `update_event` `cover_image` or `update_flyer` `photo`. An unknown, used or expired ticket is `401`. The URL carries only the ticket's id; the secret `upload_token` travels only in the `Authorization` header, so it stays out of access logs.
+
+Adding a cover image to an event, end to end:
+
+```sh
+# 1. Ask for a ticket (needs media:write).
+curl -s -X POST -H "Authorization: Bearer $OCSF_API_KEY" \
+  https://www.opencircuitsf.com/api/v1/media/uploads
+# → {"upload_url": "https://www.opencircuitsf.com/api/v1/media/uploads/<ticket-id>",
+#    "upload_token": "<redacted>", "expires_at": "…", "max_bytes": 5242880, "curl": "…"}
+
+# 2. Upload the file within 10 minutes. The secret goes in the header only.
+curl -H "Authorization: Bearer <redacted>" -F file=@cover.jpg \
+  https://www.opencircuitsf.com/api/v1/media/uploads/<ticket-id>
+# → {"path": "/media/…"}
+
+# 3. Set it on the event, with alt text (needs events:write).
+curl -X PATCH -H "Authorization: Bearer $OCSF_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"cover_image": "/media/…", "cover_alt": "Two people soldering at a bench"}' \
+  https://www.opencircuitsf.com/api/v1/events/<id>
+```
+
+Through MCP, `create_media_upload`'s `curl` field is step 2 ready to run. Set
+`cover_alt` whenever you set a cover: Mastodon outreach posts attach the cover
+only when it has alt text, and post text-only without it.
 
 ### Engagement (`engagement:read`)
 
