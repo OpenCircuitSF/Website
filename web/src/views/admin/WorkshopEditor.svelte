@@ -107,6 +107,7 @@
     deleteConfirmMessage,
     toggleInterestId,
     validateWorkshopForm,
+    coverAltForSave,
     isDeleteConflict,
     workshopToFormFields,
     isPreviewStale,
@@ -202,6 +203,7 @@
     try {
       const result = await mediaUpload(file);
       fields.coverImage = result.path;
+      fields.coverAlt = ''; // #0572: the old description is for the old picture
     } catch (err) {
       uploadCoverError = messageForUploadError(err);
     } finally {
@@ -385,7 +387,9 @@
     saveNotice = null;
     try {
       const { title, ...rest } = validated;
-      workshop = await updateWorkshop(workshopId, { title, ...rest });
+      // #0572: a new cover must not keep the old picture's alt text.
+      const cover_alt = coverAltForSave(workshop, validated);
+      workshop = await updateWorkshop(workshopId, { title, ...rest, cover_alt });
       fields = workshopToFormFields(workshop);
       saveNotice = 'Saved.';
       await refreshPreview();

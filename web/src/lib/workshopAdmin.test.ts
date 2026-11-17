@@ -27,6 +27,7 @@ import {
   isPreviewStale,
   cloneDefaultEndLocal,
   cloneWorkshopFields,
+  coverAltForSave,
   type WorkshopFormFields,
 } from './workshopAdmin';
 import type { AdminWorkshop } from './types';
@@ -818,5 +819,29 @@ describe('event type on the form (#0613)', () => {
   it('carries the source event type into a clone', () => {
     const got = cloneWorkshopFields(workshop({ event_type_id: 5 }), '2027-01-01T18:00', '');
     expect(got).toHaveProperty('event_type_id', 5);
+  });
+});
+
+describe('coverAltForSave', () => {
+  const original = { cover_image: '/media/old.jpg', cover_alt: 'An old picture' };
+
+  it('clears cover_alt when the cover changes and the alt text does not', () => {
+    expect(coverAltForSave(original, { cover_image: '/media/new.jpg', cover_alt: 'An old picture' })).toBe('');
+  });
+
+  it('keeps new alt text written for a new cover', () => {
+    expect(coverAltForSave(original, { cover_image: '/media/new.jpg', cover_alt: 'A new picture' })).toBe(
+      'A new picture',
+    );
+  });
+
+  it('keeps the alt text when neither the cover nor the alt text changes', () => {
+    expect(coverAltForSave(original, { cover_image: '/media/old.jpg', cover_alt: 'An old picture' })).toBe(
+      'An old picture',
+    );
+  });
+
+  it('sends an empty alt text when the cover is unchanged and the alt text was cleared', () => {
+    expect(coverAltForSave(original, { cover_image: '/media/old.jpg', cover_alt: '' })).toBe('');
   });
 });

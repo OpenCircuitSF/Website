@@ -734,6 +734,22 @@ export function isDeleteConflict(status: number): boolean {
   return status === 409;
 }
 
+/**
+ * The cover_alt the editor should send on Save (#0572). The server clears
+ * cover_alt on a cover change only when the PATCH omits it, and the editor
+ * always sends it -- so when the cover changed but the alt text did not, the
+ * old picture's description would ride along with the new picture. Returns ''
+ * in exactly that case; otherwise the validated alt text unchanged.
+ */
+export function coverAltForSave(
+  original: { cover_image?: string | null; cover_alt?: string | null } | null,
+  validated: { cover_image: string; cover_alt: string },
+): string {
+  const coverChanged = validated.cover_image !== (original?.cover_image ?? '').trim();
+  const altUnchanged = validated.cover_alt === (original?.cover_alt ?? '').trim();
+  return coverChanged && altUnchanged ? '' : validated.cover_alt;
+}
+
 /** Build a WorkshopFormFields from a loaded AdminWorkshop, for populating the edit form. */
 export function workshopToFormFields(w: AdminWorkshop): WorkshopFormFields {
   return {
