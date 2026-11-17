@@ -130,6 +130,9 @@ for DESTRUCTIVE, and `readOnlyHint` for every read.
 | Coverage | `event_coverage` | | `events:read` | |
 | | `list_cadence_rules` | | `events:read` | |
 | | `set_cadence_rule` | | `events:write` | |
+| Outreach | `list_outreach` | | `outreach:read` | |
+| | `get_event_outreach` | | `outreach:read` | |
+| | `outreach_connections_status` | | `outreach:read` | |
 | Engagement | `get_engagement` | | `engagement:read` | |
 
 A failed tool call is a tool error (`isError`) whose text is the v1 error

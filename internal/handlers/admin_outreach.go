@@ -661,15 +661,24 @@ type outreachSummaryView struct {
 
 // List handles GET /admin/outreach: every workshop with outreach.
 func (h *AdminOutreachHandler) List(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.store.ListSummaries(r.Context())
+	views, err := h.listSummaries(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	postsBy, err := h.postsByOutreach(r.Context(), rows)
+	writeJSON(w, http.StatusOK, map[string]any{"outreach": views, "enabled_channels": h.enabledChannelNames()})
+}
+
+// listSummaries is List without the transport (#0697): every workshop with
+// outreach, with per-status post counts. list_outreach calls it too.
+func (h *AdminOutreachHandler) listSummaries(ctx context.Context) ([]outreachSummaryView, error) {
+	rows, err := h.store.ListSummaries(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return nil, err
+	}
+	postsBy, err := h.postsByOutreach(ctx, rows)
+	if err != nil {
+		return nil, err
 	}
 	views := make([]outreachSummaryView, 0, len(rows))
 	for _, s := range rows {
@@ -686,7 +695,7 @@ func (h *AdminOutreachHandler) List(w http.ResponseWriter, r *http.Request) {
 			StartsAt: rfc3339(s.StartsAt), Counts: s.Counts, CreatedAt: s.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"outreach": views, "enabled_channels": h.enabledChannelNames()})
+	return views, nil
 }
 
 // postsByOutreach loads every summary's posts in one query.
@@ -719,26 +728,36 @@ func (h *AdminOutreachHandler) Get(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	wk, ok := h.loadWorkshop(w, r, id)
-	if !ok {
+	v, err := h.panelFor(r.Context(), id)
+	switch {
+	case err == nil:
+	case errors.Is(err, workshops.ErrNotFound):
+		writeError(w, http.StatusNotFound, "event not found")
+		return
+	default:
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+// panelFor is Get without the transport (#0697): the outreach panel for
+// workshop id, or workshops.ErrNotFound. get_event_outreach calls it too.
+func (h *AdminOutreachHandler) panelFor(ctx context.Context, id int64) (outreachPanelView, error) {
+	wk, err := h.ws.GetByID(ctx, id)
+	if err != nil {
+		return outreachPanelView{}, err
+	}
 	var op *outreach.Outreach
-	o, err := h.store.GetByWorkshop(r.Context(), id)
+	o, err := h.store.GetByWorkshop(ctx, id)
 	switch {
 	case err == nil:
 		op = &o
 	case errors.Is(err, outreach.ErrNotFound):
 	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreachPanelView{}, err
 	}
-	v, err := h.panel(r.Context(), wk, op)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-	writeJSON(w, http.StatusOK, v)
+	return h.panel(ctx, wk, op)
 }
 
 // Start handles POST /admin/workshops/{id}/outreach: ensure the ShortLinks

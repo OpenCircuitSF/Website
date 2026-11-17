@@ -26,6 +26,9 @@ type V1Deps struct {
 	// Cadence is the #0678 event coverage service (cadence rules and the
 	// coverage report), shared with /admin/event-cadence.
 	Cadence *EventCadenceHandler
+	// Outreach is the admin outreach handler; the #0697 outreach operations
+	// run its transport-free methods, shared with /admin/outreach.
+	Outreach *AdminOutreachHandler
 }
 
 // BuildV1Registry is the one place the v1 operations are listed (#0675).
@@ -39,5 +42,6 @@ func BuildV1Registry(cfg api.Config, d V1Deps) *api.Registry {
 	reg.Add(guideOperations(d.BaseURL, d.GuidePosts)...)
 	reg.Add(eventOperations(d)...)
 	reg.Add(coverageOperations(d.Cadence)...)
+	reg.Add(outreachOperations(d.Outreach)...)
 	return reg
 }

@@ -514,6 +514,12 @@ curl -s -X POST $B/cadence-rules \
   -d '{"name":"Hack Night","event_type_id":2,"frequency":"weekly","weekday":"tuesday"}'
 ```
 
+### Outreach (`outreach:read`, `outreach:write`)
+
+- **`list_outreach`**, `GET /outreach`: every event with outreach, with post counts by status (paged).
+- **`get_event_outreach`**, `GET /events/{id}/outreach`: the event's outreach panel, plus `started`.
+- **`outreach_connections_status`**, `GET /outreach/connections`: connection status, booleans and sources only.
+
 ### Engagement (`engagement:read`)
 
 `get_engagement`, `GET /engagement`, returns new Bluesky and Mastodon
