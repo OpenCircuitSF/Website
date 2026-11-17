@@ -8,8 +8,10 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -284,6 +286,9 @@ func writeRaw(w http.ResponseWriter, status int, body []byte) {
 func writeError(w http.ResponseWriter, e *Error) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
+	if e.RetryAfter > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(e.RetryAfter.Seconds()))))
+	}
 	w.WriteHeader(e.Status)
 	_ = json.NewEncoder(w).Encode(e.Body())
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 )
 
 // The stable error codes of the v1 error envelope. Clients branch on these,
@@ -29,6 +30,9 @@ type Error struct {
 	Code    string
 	Message string
 	Fields  map[string]string
+	// RetryAfter, when positive, is sent as the Retry-After header (whole
+	// seconds, rounded up). It is not part of the envelope.
+	RetryAfter time.Duration
 }
 
 func (e *Error) Error() string { return e.Code + ": " + e.Message }
@@ -63,6 +67,12 @@ func Forbidden(scope string) *Error {
 // it, so the OpenAPI document lists the 503.
 func Unavailable(msg string) *Error {
 	return &Error{Status: http.StatusServiceUnavailable, Code: CodeUnavailable, Message: msg}
+}
+
+// RateLimited is a 429 "rate_limited" with msg; retryAfter, when positive,
+// becomes the Retry-After header.
+func RateLimited(msg string, retryAfter time.Duration) *Error {
+	return &Error{Status: http.StatusTooManyRequests, Code: CodeRateLimited, Message: msg, RetryAfter: retryAfter}
 }
 
 // internalError is the one 500 every unexpected failure gets.

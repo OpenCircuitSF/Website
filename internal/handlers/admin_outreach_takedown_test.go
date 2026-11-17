@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
+	"github.com/brennanMKE/OpenCircuitSF/internal/bluesky"
+	"github.com/brennanMKE/OpenCircuitSF/internal/mastodon"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outreach"
 )
 
@@ -223,4 +225,26 @@ func outreachIDForWorkshop(t *testing.T, e *outreachEnv, workshopID int64) int64
 		t.Fatal(err)
 	}
 	return id
+}
+
+// TestTakedownFailureReason (#0708): every remote delete failure maps to a
+// reason code, never to its text.
+func TestTakedownFailureReason(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("x: %w", bluesky.ErrRateLimited), "rate_limited"},
+		{fmt.Errorf("x: %w", mastodon.ErrRateLimited), "rate_limited"},
+		{fmt.Errorf("x: %w", bluesky.ErrAuth), "rejected"},
+		{fmt.Errorf("x: %w", mastodon.ErrAuth), "rejected"},
+		{fmt.Errorf("x: %w", context.DeadlineExceeded), "timeout"},
+		{fmt.Errorf("x: %w", bluesky.ErrServer), "network_error"},
+		{fmt.Errorf("x: %w", mastodon.ErrServer), "network_error"},
+		{errors.New("something else"), "failed"},
+	} {
+		if got := takedownFailureReason(c.err); got != c.want {
+			t.Errorf("takedownFailureReason(%v) = %q, want %q", c.err, got, c.want)
+		}
+	}
 }

@@ -148,7 +148,7 @@ wrong with it.
 | 404 | `not_found` | no such object (`event not found`, `guide post not found`) |
 | 405 | `method_not_allowed` | wrong method for the path |
 | 409 | `conflict` | a state conflict (for example, deleting a guide post that isn't a draft), or an `Idempotency-Key` problem |
-| 429 | `rate_limited` | over the per-key budget, or this IP made too many failed authentication attempts; wait `Retry-After` seconds |
+| 429 | `rate_limited` | over the per-key budget, this IP made too many failed authentication attempts, or ShortLinks is rate limiting the site; wait `Retry-After` seconds |
 | 503 | `unavailable` | a dependency failed, such as ShortLinks not making a short link |
 | 500 | `internal` | a server bug; the detail goes to the server log, never the response |
 
@@ -540,7 +540,7 @@ curl -s -X POST $B/cadence-rules \
 - **`send_outreach_post`**, `POST /outreach-posts/{id}/send`: public; queues a prepared post to go out now, or retries a failed one; `202`. `503` when the channel is not configured.
 - **`mark_outreach_post_posted`**, `POST /outreach-posts/{id}/posted`: records a hand post, with an optional `remote_url`.
 - **`unmark_outreach_post_posted`**, `POST /outreach-posts/{id}/unmark`: takes back a mark-posted; `409` for a post the site sent.
-- **`takedown_outreach_post`**, `POST /outreach-posts/{id}/takedown`: destructive and public; deletes the post from its network and returns it to draft. Safe to retry; `503` when the network refuses.
+- **`takedown_outreach_post`**, `POST /outreach-posts/{id}/takedown`: destructive and public; deletes the post from its network and returns it to draft. Safe to retry; `503` when the network refuses, with a message naming the reason: `rate_limited`, `rejected`, `timeout`, `network_error` or `failed`.
 - **`get_outreach_results`**, `GET /events/{id}/outreach/results`: clicks per post and channel, each post's latest likes/reposts/replies/quotes, flyers and mentions. Always `200` for a known event; `status` says whether the clicks are real (`ok`, `not_configured`, `not_started`, `campaign_missing`, `rejected`, `unreachable`).
 - **`outreach_results_summary`**, `GET /outreach/results`: one row per event with outreach (posts, clicks, reactions) plus recent mentions; `status` as above.
 - **`outreach_timeline`**, `GET /outreach/timeline`: published events starting in the next 30 days with their outreach and posts; no network call.

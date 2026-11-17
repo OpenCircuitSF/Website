@@ -491,6 +491,26 @@ func TestServeUnavailableAndClientIP(t *testing.T) {
 	}
 }
 
+// TestWriteError_RetryAfter (#0708): a RateLimited error is a 429 with
+// Retry-After rounded up to whole seconds; an Unavailable one has none.
+func TestWriteError_RetryAfter(t *testing.T) {
+	serve := func(err error) *httptest.ResponseRecorder {
+		op := Define(Operation{Name: "r", Method: http.MethodGet, Path: "/api/v1/r", Scope: apitokens.ScopeEngagementRead, Summary: "s", MayBeUnavailable: true},
+			func(context.Context, emptyIn) (okOut, error) { return okOut{}, err })
+		rec := httptest.NewRecorder()
+		Serve(op).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/r", nil))
+		return rec
+	}
+	rec := serve(RateLimited("x", 1500*time.Millisecond))
+	if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") != "2" || errBody(t, rec.Body.Bytes()).Code != CodeRateLimited {
+		t.Fatalf("rate limited: %d Retry-After=%q %s", rec.Code, rec.Header().Get("Retry-After"), rec.Body)
+	}
+	rec = serve(Unavailable("down"))
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") != "" {
+		t.Fatalf("unavailable: %d Retry-After=%q", rec.Code, rec.Header().Get("Retry-After"))
+	}
+}
+
 // TestRouterIdempotencyQueryIsPartOfRequest (#0675 review): the request hash
 // covers the query string, so a reused key with a different query is a
 // mismatch rather than a replay of the first response.

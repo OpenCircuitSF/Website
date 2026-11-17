@@ -48,7 +48,7 @@ func guidePostAPIError(err error) error {
 	}
 	var sl errShortLinks
 	if errors.As(err, &sl) {
-		return api.Unavailable("short link could not be made: " + linkFailureReason(sl.err))
+		return shortLinksAPIError("short link could not be made: ", sl.err)
 	}
 	status, field, msg := guidePostErrInfo(err)
 	switch status {

@@ -1,16 +1,22 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/api"
+	"github.com/brennanMKE/OpenCircuitSF/internal/api/apitest"
 	"github.com/brennanMKE/OpenCircuitSF/internal/apitokens"
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
+	"github.com/brennanMKE/OpenCircuitSF/internal/shortlinks"
 )
 
 // newV1OutreachLinksEnv serves the #0700 operations over an outreach env
@@ -114,4 +120,48 @@ func TestV1OutreachLinks_ShortLinksUnconfigured(t *testing.T) {
 	e.v1(t, http.MethodPost, fmt.Sprintf("/api/v1/events/%d/outreach/hand-links", w.ID), e.write, "", http.StatusServiceUnavailable)
 	// Drafting makes no ShortLinks call, so it still works.
 	e.v1(t, http.MethodPost, fmt.Sprintf("/api/v1/events/%d/outreach/draft-all", w.ID), e.write, "", http.StatusOK)
+}
+
+// TestV1OutreachLinks_RateLimitedIs429 (#0708): a ShortLinks rate limit is a
+// 429 with Retry-After on v1, as on the admin, falling back to 60 seconds
+// when ShortLinks gave none; the wrapped error text stays out.
+func TestV1OutreachLinks_RateLimitedIs429(t *testing.T) {
+	e := newV1OutreachLinksEnv(t, true)
+	o := e.start(t, e.published(t)).Outreach
+	p := e.createPost(t, o.ID, "bluesky", "announce")
+	e.links.linkErr = fmt.Errorf("create link: %w", shortlinks.ErrRateLimited)
+	rec := apitest.Do(t, e.api, http.MethodPost, fmt.Sprintf("/api/v1/outreach-posts/%d/prepare", p.ID), e.write, "")
+	if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") != "60" {
+		t.Fatalf("prepare = %d Retry-After=%q: %s", rec.Code, rec.Header().Get("Retry-After"), rec.Body)
+	}
+	b := rec.Body.String()
+	if !strings.Contains(b, `"rate_limited"`) || !strings.Contains(b, "60 seconds") || strings.Contains(b, "create link") {
+		t.Errorf("prepare body %s", b)
+	}
+}
+
+// TestShortLinksAPIError_RetryAfterFromShortLinks (#0708): a real
+// *shortlinks.APIError's Retry-After is carried through; any other failure
+// stays a 503.
+func TestShortLinksAPIError_RetryAfterFromShortLinks(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", "7")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+	c, err := shortlinks.New(srv.URL, "tok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.CreateLink(context.Background(), shortlinks.CreateLinkRequest{})
+	if !errors.Is(err, shortlinks.ErrRateLimited) {
+		t.Fatalf("CreateLink err = %v, want a rate limit", err)
+	}
+	var ae *api.Error
+	if !errors.As(shortLinksAPIError("p: ", err), &ae) || ae.Status != http.StatusTooManyRequests || ae.RetryAfter != 7*time.Second || !strings.Contains(ae.Message, "7 seconds") {
+		t.Fatalf("mapped %+v", ae)
+	}
+	if !errors.As(shortLinksAPIError("p: ", errors.New("boom")), &ae) || ae.Status != http.StatusServiceUnavailable || ae.Message != "p: failed" {
+		t.Fatalf("mapped other %+v", ae)
+	}
 }

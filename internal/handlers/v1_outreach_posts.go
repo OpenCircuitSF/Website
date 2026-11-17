@@ -3,11 +3,35 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/api"
 	"github.com/brennanMKE/OpenCircuitSF/internal/apitokens"
+	"github.com/brennanMKE/OpenCircuitSF/internal/shortlinks"
 )
+
+// shortLinksRetryAfterFallback is the wait sent when ShortLinks rate limits
+// the site without a usable Retry-After.
+const shortLinksRetryAfterFallback = 60 * time.Second
+
+// shortLinksAPIError maps a ShortLinks failure to the v1 envelope (#0708): a
+// rate limit is a 429 with Retry-After, the way the admin answers it; the
+// seconds are in the message too, since an MCP tool error has no headers.
+// Anything else is a 503 naming a reason code, never ShortLinks' text.
+func shortLinksAPIError(prefix string, err error) error {
+	if errors.Is(err, shortlinks.ErrRateLimited) {
+		wait := shortLinksRetryAfterFallback
+		var se *shortlinks.APIError
+		if errors.As(err, &se) && se.RetryAfter > 0 {
+			wait = se.RetryAfter
+		}
+		secs := int((wait + time.Second - 1) / time.Second)
+		return api.RateLimited(fmt.Sprintf("ShortLinks is rate limiting requests; try again in %d seconds", secs), wait)
+	}
+	return api.Unavailable(prefix + linkFailureReason(err))
+}
 
 // outreachAPIError maps an outreach write's error to the v1 envelope, the
 // way guidePostAPIError does for guide posts (#0699). An unrecognised error
@@ -22,25 +46,29 @@ func outreachAPIError(err error) error {
 	}
 	var le outreachLinksError
 	if errors.As(err, &le) {
-		return api.Unavailable("ShortLinks request failed: " + linkFailureReason(le.err))
+		return shortLinksAPIError("ShortLinks request failed: ", le.err)
 	}
 	var oe *outreachOpError
 	if !errors.As(err, &oe) {
 		return err
 	}
+	msg := oe.msg
+	if oe.v1msg != "" {
+		msg = oe.v1msg
+	}
 	switch oe.status {
 	case http.StatusNotFound:
-		return api.NotFound(notFoundWhat(oe.msg))
+		return api.NotFound(notFoundWhat(msg))
 	case http.StatusConflict:
-		return api.Conflict(oe.msg)
+		return api.Conflict(msg)
 	case http.StatusServiceUnavailable, http.StatusBadGateway:
-		return api.Unavailable(oe.msg)
+		return api.Unavailable(msg)
 	case http.StatusBadRequest:
 		field := oe.field
 		if field == "" {
 			field = "body"
 		}
-		return api.Validation(map[string]string{field: oe.msg})
+		return api.Validation(map[string]string{field: msg})
 	}
 	return err
 }

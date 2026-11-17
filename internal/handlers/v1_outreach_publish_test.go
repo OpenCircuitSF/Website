@@ -12,6 +12,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/api"
 	"github.com/brennanMKE/OpenCircuitSF/internal/apitokens"
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
+	"github.com/brennanMKE/OpenCircuitSF/internal/bluesky"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 )
 
@@ -180,5 +181,21 @@ func TestV1OutreachPublish_Takedown(t *testing.T) {
 	e.v1(t, http.MethodPost, path, e.write, "", http.StatusConflict)
 	if len(fp.calls) != 2 {
 		t.Errorf("retry reached the network: %d calls", len(fp.calls))
+	}
+}
+
+// TestV1OutreachPublish_TakedownRefusalHidesNetworkText (#0708): the v1 503
+// names a reason code and leaves the network's own text out.
+func TestV1OutreachPublish_TakedownRefusalHidesNetworkText(t *testing.T) {
+	fp := &fakeTakedownPosting{fakePosting: fakePosting{"bluesky": true}, existed: true}
+	e := newV1OutreachPublishEnv(t, fp)
+	_, id, _, _ := seedPostedBluesky(t, e.outreachEnv, "bluesky")
+	fp.err = fmt.Errorf("bluesky: HTTP 429: secret-upstream-0708: %w", bluesky.ErrRateLimited)
+	b := e.v1(t, http.MethodPost, fmt.Sprintf("/api/v1/outreach-posts/%d/takedown", id), e.write, "", http.StatusServiceUnavailable)
+	if !strings.Contains(string(b), "rate_limited") || strings.Contains(string(b), "secret-upstream-0708") {
+		t.Errorf("takedown refusal body %s", b)
+	}
+	if st, _ := e.postStatus(t, id); st != "posted" {
+		t.Fatalf("after refusal status %s", st)
 	}
 }

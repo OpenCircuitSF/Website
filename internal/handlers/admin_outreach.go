@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
+	"github.com/brennanMKE/OpenCircuitSF/internal/bluesky"
+	"github.com/brennanMKE/OpenCircuitSF/internal/mastodon"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outreach"
 	"github.com/brennanMKE/OpenCircuitSF/internal/shortlinks"
@@ -771,6 +773,9 @@ type outreachOpError struct {
 	status int
 	field  string
 	msg    string
+	// v1msg, when set, replaces msg on the v1 API, which never carries an
+	// underlying error's text (api.AsError).
+	v1msg string
 }
 
 func (e *outreachOpError) Error() string { return e.msg }
@@ -1375,7 +1380,11 @@ func (h *AdminOutreachHandler) takedown(ctx context.Context, ip string, actorID 
 	existed, err := h.posting.DeleteRemote(dctx, checked)
 	if err != nil {
 		slog.Warn("outreach: remote delete failed", "post_id", id, "channel", p.Channel, "err", err)
-		return outreachPostView{}, outreachRefusal(http.StatusBadGateway, "", ch.Label+" would not delete the post, so it is still marked posted: "+err.Error())
+		return outreachPostView{}, &outreachOpError{
+			status: http.StatusBadGateway,
+			msg:    ch.Label + " would not delete the post, so it is still marked posted: " + err.Error(),
+			v1msg:  ch.Label + " would not delete the post, so it is still marked posted (reason: " + takedownFailureReason(err) + ")",
+		}
 	}
 	updated, err := h.store.CompleteTakedown(ctx, id, *checked.RemoteID)
 	if err != nil {
@@ -1407,6 +1416,23 @@ func takedownRefusal(err error) error {
 		return outreachRefusal(http.StatusConflict, "", "this post changed while it was being deleted; reload and check it")
 	}
 	return err
+}
+
+// takedownFailureReason names a remote delete failure without its text, for
+// the v1 API (#0708), the way linkFailureReason does for ShortLinks.
+func takedownFailureReason(err error) string {
+	switch {
+	case errors.Is(err, bluesky.ErrRateLimited), errors.Is(err, mastodon.ErrRateLimited):
+		return "rate_limited"
+	case errors.Is(err, bluesky.ErrAuth), errors.Is(err, mastodon.ErrAuth):
+		return "rejected"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	case errors.Is(err, bluesky.ErrServer), errors.Is(err, mastodon.ErrServer):
+		return "network_error"
+	default:
+		return "failed"
+	}
 }
 
 // DeletePost handles DELETE /admin/outreach-posts/{id}.
