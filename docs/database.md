@@ -1,7 +1,7 @@
 # Database Schema & Migrations
 
 PostgreSQL, schema managed by [`golang-migrate`](https://github.com/golang-migrate/migrate)
-(`migrations/`, numbered `000001`–`000056`). No ORM — every
+(`migrations/`, numbered `000001`–`000057`). No ORM — every
 store issues hand-written SQL through `pgx/v5`.
 
 ## Applying migrations
@@ -126,6 +126,7 @@ why the activity log is not a second package of its own.
 | `000054_create_api_idempotency_keys` | Creates `api_idempotency_keys` (`#0675`): one `Idempotency-Key` per API token (primary key `token_id`, `idem_key`; `ON DELETE CASCADE` from `api_tokens`), with the `operation` name, the SHA-256 `request_hash` (32 bytes), and the stored success `status_code` and `response_body` (`BYTEA`, so a replay returns the original bytes; both `NULL` while the first request runs). Kept 24 hours, swept by the next `Begin` and once at startup (`#0684`), indexed on `created_at`. A failed request deletes its row so a retry runs again, and a row still in flight after 5 minutes (a failed `Complete`, or a process that died mid-operation) is taken over by the next retry with the same request (`#0684`). Owned by `internal/api` |
 | `000055_create_event_cadence_rules` | Creates `event_cadence_rules` (`#0678`): what a normal month of events looks like, for the coverage report (`GET /api/v1/events/coverage`, `GET /admin/event-coverage`). Each rule has a `name` (1–120 characters), matches by `event_type_id` (`ON DELETE CASCADE` from `event_types`), by a case-insensitive `title_prefix` (1–120 characters), or both (`event_cadence_rules_match_check`), optionally narrowed by `venue_id` (`ON DELETE SET NULL` from `venues`), and has a `frequency`: `weekly` with a `weekday` (0–6, Sunday first) or `monthly` with `per_month` (1–31), never both (`event_cadence_rules_frequency_check`). `active` false retires a rule. Rules are stated in America/Los_Angeles. Owned by `internal/cadence` |
 | `000056_api_tokens_outreach_scopes` | Widens `api_tokens_scopes_check` (`#0696`) with `outreach:read`, `outreach:write`, `media:read` and `media:write`, the same drop-and-re-add 000053 used. The array must match `apitokens.KnownScopes`. The down restores 000053's set and refuses while a token holds a new scope |
+| `000057_create_guide_post_engagement` | Creates `guide_post_engagement` (`#0704`), the `guide_posts` counterpart of `outreach_engagement`: one row per engagement capture of a posted guide post (`post_id` `ON DELETE CASCADE` from `guide_posts`), with non-negative `likes`, `reposts`, `replies` and `quotes`, indexed on `(post_id, captured_at DESC)`. Written by the outreach tracker through `internal/guideposts` |
 
 `internal/subscribers` (`imports.go`) owns `subscriber_imports`, alongside
 every other table that package already owns — see that file's doc comment.

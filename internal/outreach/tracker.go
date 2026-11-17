@@ -35,9 +35,21 @@ type TrackerDeps struct {
 	Bluesky  *bluesky.Client
 	Mastodon *mastodon.Client
 	Clients  ClientSource
+	// Guides, when set, is a second engagement target source polled with the
+	// same due rule and window and recorded to its own table (#0704). Nil
+	// leaves the tracker as it was. Mentions stay event-only.
+	Guides   EngagementSource
 	Interval time.Duration    // default 15 minutes
 	Now      func() time.Time // default time.Now; tests pin it
 	Log      *slog.Logger
+}
+
+// EngagementSource lists posted posts due a capture and records snapshots.
+// *Store is one; guideposts.Store is the other (#0704). Post ids are only
+// unique within a source.
+type EngagementSource interface {
+	EngagementTargets(ctx context.Context, channels []string) ([]EngagementTarget, error)
+	RecordEngagement(ctx context.Context, postID int64, at time.Time, c Counts) error
 }
 
 // Tracker polls engagement counts for posted Bluesky and Mastodon posts and
@@ -46,6 +58,7 @@ type TrackerDeps struct {
 // insert is idempotent and a position is stored only after the work it covers.
 type Tracker struct {
 	store    *Store
+	guides   EngagementSource
 	clients  ClientSource
 	bsky     *bluesky.Client // refreshed from clients at the top of every pass; only the run goroutine touches it
 	masto    *mastodon.Client
@@ -57,6 +70,8 @@ type Tracker struct {
 	// remote post is not re-fetched and re-logged every tick. Only pass reads
 	// or writes it, and passes never overlap.
 	attempted map[int64]time.Time
+	// guideAttempted is attempted for the guide source; ids may collide.
+	guideAttempted map[int64]time.Time
 
 	stopCh   chan struct{}
 	doneCh   chan struct{}
@@ -81,9 +96,9 @@ func NewTracker(d TrackerDeps) *Tracker {
 		d.Clients = staticClients{d.Bluesky, d.Mastodon}
 	}
 	return &Tracker{
-		store: d.Store, clients: d.Clients, bsky: d.Clients.Bluesky(), masto: d.Clients.Mastodon(), interval: d.Interval, now: d.Now, log: d.Log,
-		attempted: map[int64]time.Time{},
-		stopCh:    make(chan struct{}), doneCh: make(chan struct{}),
+		store: d.Store, guides: d.Guides, clients: d.Clients, bsky: d.Clients.Bluesky(), masto: d.Clients.Mastodon(), interval: d.Interval, now: d.Now, log: d.Log,
+		attempted: map[int64]time.Time{}, guideAttempted: map[int64]time.Time{},
+		stopCh: make(chan struct{}), doneCh: make(chan struct{}),
 	}
 }
 
@@ -464,9 +479,23 @@ func (t *Tracker) engagement(ctx context.Context) (written, failed int) {
 	if t.masto.Enabled() {
 		channels = append(channels, "mastodon")
 	}
-	targets, err := t.store.EngagementTargets(ctx, channels)
+	written, failed = t.engagementFrom(ctx, t.store, t.attempted, channels, "engagement targets")
+	if t.guides != nil && ctx.Err() == nil {
+		w, f := t.engagementFrom(ctx, t.guides, t.guideAttempted, channels, "guide engagement targets")
+		written, failed = written+w, failed+f
+	}
+	return written, failed
+}
+
+// engagementFrom captures every due target of one source. attempted is that
+// source's own last-attempt map.
+func (t *Tracker) engagementFrom(ctx context.Context, src EngagementSource, attempted map[int64]time.Time, channels []string, op string) (written, failed int) {
+	if len(channels) == 0 {
+		return 0, 0
+	}
+	targets, err := src.EngagementTargets(ctx, channels)
 	if err != nil {
-		t.failed(ctx, "", "engagement targets", err, "")
+		t.failed(ctx, "", op, err, "")
 		return 0, 0
 	}
 	now := t.now()
@@ -475,7 +504,7 @@ func (t *Tracker) engagement(ctx context.Context) (written, failed int) {
 	for _, tg := range targets {
 		live[tg.PostID] = true
 		last := tg.LastCaptured
-		if a, ok := t.attempted[tg.PostID]; ok && (last == nil || a.After(*last)) {
+		if a, ok := attempted[tg.PostID]; ok && (last == nil || a.After(*last)) {
 			a := a
 			last = &a
 		}
@@ -488,13 +517,13 @@ func (t *Tracker) engagement(ctx context.Context) (written, failed int) {
 			mastoDue = append(mastoDue, tg)
 		}
 	}
-	for id := range t.attempted {
+	for id := range attempted {
 		if !live[id] {
-			delete(t.attempted, id)
+			delete(attempted, id)
 		}
 	}
 	record := func(tg EngagementTarget, c Counts) {
-		if err := t.store.RecordEngagement(ctx, tg.PostID, now, c); err != nil {
+		if err := src.RecordEngagement(ctx, tg.PostID, now, c); err != nil {
 			failed++
 			t.failed(ctx, tg.Channel, "store snapshot", err, "")
 			return
@@ -509,7 +538,7 @@ func (t *Tracker) engagement(ctx context.Context) (written, failed int) {
 		uris := make([]string, len(bskyDue))
 		for i, tg := range bskyDue {
 			uris[i] = tg.RemoteID
-			t.attempted[tg.PostID] = now
+			attempted[tg.PostID] = now
 		}
 		counts, err := t.bsky.GetPostCounts(ctx, uris)
 		if err != nil {
@@ -529,7 +558,7 @@ func (t *Tracker) engagement(ctx context.Context) (written, failed int) {
 		if ctx.Err() != nil {
 			break
 		}
-		t.attempted[tg.PostID] = now
+		attempted[tg.PostID] = now
 		c, err := t.masto.GetStatusCounts(ctx, tg.RemoteID)
 		switch {
 		case err == nil:

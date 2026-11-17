@@ -27,7 +27,7 @@ func guidePostsTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	pool := outreachTestPool(t)
 	ctx := context.Background()
-	if _, err := pool.Exec(ctx, `TRUNCATE guide_posts RESTART IDENTITY`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE guide_posts, guide_post_engagement RESTART IDENTITY`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := pool.Exec(ctx, `DELETE FROM outbound_queue WHERE kind = 'guide_post'`); err != nil {

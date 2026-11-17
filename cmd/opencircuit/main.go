@@ -373,8 +373,11 @@ func servePostgres(cfg *config.Config) error {
 	outreachStore := outreach.NewStore(pool)
 	// The tracker (#0547) polls engagement and mentions for whichever of the
 	// two channels is configured; the publisher starts and stops it.
+	// Guide posts' engagement is captured too (#0704).
+	guideStore := guideposts.NewStore(pool, outbox.NewStore(pool))
 	outreachTracker := outreach.NewTracker(outreach.TrackerDeps{
 		Store:    outreachStore,
+		Guides:   guideStore,
 		Clients:  conns,
 		Interval: devTrackerInterval(cfg.BaseURL, os.Getenv("OUTREACH_TRACKER_INTERVAL"), slog.Default()),
 		Log:      slog.Default(),
@@ -382,7 +385,6 @@ func servePostgres(cfg *config.Config) error {
 	// Guide posts (#0658): a second social publisher over the same accounts,
 	// started and stopped by the Outreach publisher as its Companion. Its
 	// Linker is built below, for the admin handler (#0659).
-	guideStore := guideposts.NewStore(pool, outbox.NewStore(pool))
 	guidePublisher := guideposts.NewPublisher(guideposts.PublisherDeps{
 		Store:    guideStore,
 		Outbox:   outbox.NewStore(pool),
@@ -475,7 +477,7 @@ func servePostgres(cfg *config.Config) error {
 		handlers.V1Deps{
 			Engagement: outreachStore, BaseURL: cfg.BaseURL, GuidePosts: adminGuidePostsH,
 			Workshops: adminWorkshopsH, Venues: venuesStore, EventTypes: eventTypesStore, Interests: interestsStore,
-			Cadence: eventCadenceH,
+			Cadence: eventCadenceH, Outreach: adminOutreachH,
 		},
 	))
 

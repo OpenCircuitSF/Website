@@ -765,3 +765,109 @@ func TestPublisher_StopsItsTracker(t *testing.T) {
 		t.Error("Publisher.Stop returned but its tracker is still running")
 	}
 }
+
+// fakeGuides is an in-memory EngagementSource standing in for guideposts.
+type fakeGuides struct {
+	mu       sync.Mutex
+	targets  []EngagementTarget
+	recorded map[int64][]Counts
+	channels [][]string
+}
+
+func (f *fakeGuides) EngagementTargets(_ context.Context, channels []string) ([]EngagementTarget, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.channels = append(f.channels, channels)
+	out := make([]EngagementTarget, 0, len(f.targets))
+	for _, tg := range f.targets {
+		if n := len(f.recorded[tg.PostID]); n > 0 {
+			at := time.Now()
+			tg.LastCaptured = &at
+		}
+		out = append(out, tg)
+	}
+	return out, nil
+}
+
+func (f *fakeGuides) RecordEngagement(_ context.Context, postID int64, _ time.Time, c Counts) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.recorded == nil {
+		f.recorded = map[int64][]Counts{}
+	}
+	f.recorded[postID] = append(f.recorded[postID], c)
+	return nil
+}
+
+// TestTracker_GuideSourceIsPolledAndRecorded proves a second target source
+// is captured with the same due rule and recorded to itself, not to
+// outreach_engagement (#0704).
+func TestTracker_GuideSourceIsPolledAndRecorded(t *testing.T) {
+	s := NewStore(testPool(t))
+	resetCursors(t, s)
+	ctx := context.Background()
+	tag := uniq()
+	bf, mf := newTrackerBsky(t), newTrackerMasto(t)
+	gb := "at://did:plc:testtesttesttest/app.bsky.feed.post/guide" + tag
+	bf.counts[gb] = [4]int{5, 4, 3, 2}
+	mf.statuses["8001"+tag] = `{"favourites_count":1,"reblogs_count":1,"replies_count":0,"quotes_count":0}`
+	// The guide post ids deliberately reuse an outreach post's id: the two
+	// sources' ids are independent, so neither may shadow the other.
+	_, ev := seedPosted(t, s, "bluesky", "at://did:plc:testtesttesttest/app.bsky.feed.post/ev"+tag, time.Now().Add(-2*time.Hour))
+	bf.counts["at://did:plc:testtesttesttest/app.bsky.feed.post/ev"+tag] = [4]int{1, 0, 0, 0}
+	old := time.Now().Add(-31 * 24 * time.Hour)
+	recent := time.Now().Add(-10 * time.Minute)
+	g := &fakeGuides{targets: []EngagementTarget{
+		{PostID: ev.ID, Channel: "bluesky", RemoteID: gb, PostedAt: time.Now().Add(-2 * time.Hour)},
+		{PostID: ev.ID + 1_000_000, Channel: "mastodon", RemoteID: "8001" + tag, PostedAt: time.Now().Add(-3 * time.Hour)},
+		{PostID: ev.ID + 2_000_000, Channel: "bluesky", RemoteID: "at://old" + tag, PostedAt: old},
+		{PostID: ev.ID + 3_000_000, Channel: "bluesky", RemoteID: "at://recent" + tag, PostedAt: time.Now().Add(-time.Hour), LastCaptured: &recent},
+	}}
+	log, buf := captureLog()
+	tr := NewTracker(TrackerDeps{Store: s, Guides: g, Bluesky: bf.client(t), Mastodon: mf.client(t), Now: time.Now, Log: log})
+	tr.pass(ctx)
+
+	if got := g.recorded[ev.ID]; len(got) != 1 || got[0] != (Counts{5, 4, 3, 2}) {
+		t.Errorf("guide bluesky snapshot = %+v", got)
+	}
+	if got := g.recorded[ev.ID+1_000_000]; len(got) != 1 || got[0] != (Counts{1, 1, 0, 0}) {
+		t.Errorf("guide mastodon snapshot = %+v", got)
+	}
+	if len(g.recorded[ev.ID+2_000_000]) != 0 || len(g.recorded[ev.ID+3_000_000]) != 0 {
+		t.Errorf("a not-due guide post was captured: %+v", g.recorded)
+	}
+	if n := snapshots(t, s, ev.ID); n != 1 {
+		t.Errorf("the event post sharing the id got %d snapshots, want 1", n)
+	}
+	if len(g.channels) != 1 || strings.Join(g.channels[0], ",") != "bluesky,mastodon" {
+		t.Errorf("guide source asked for channels %v", g.channels)
+	}
+	if !strings.Contains(buf.String(), "snapshots_written=3") {
+		t.Errorf("pass summary missing or wrong:\n%s", buf.String())
+	}
+
+	tr.pass(ctx)
+	if len(g.recorded[ev.ID]) != 1 || len(g.recorded[ev.ID+1_000_000]) != 1 {
+		t.Error("a second immediate pass captured a guide post again")
+	}
+}
+
+// TestTracker_NilGuidesLeavesEngagementUnchanged: without a guide source the
+// tracker polls event posts only, exactly as before (#0704).
+func TestTracker_NilGuidesLeavesEngagementUnchanged(t *testing.T) {
+	s := NewStore(testPool(t))
+	resetCursors(t, s)
+	tag := uniq()
+	bf := newTrackerBsky(t)
+	uri := "at://did:plc:testtesttesttest/app.bsky.feed.post/nil" + tag
+	bf.counts[uri] = [4]int{2, 0, 0, 0}
+	_, p := seedPosted(t, s, "bluesky", uri, time.Now().Add(-2*time.Hour))
+	tr, _ := newTracker(t, s, bf.client(t), nil)
+	if tr.guides != nil {
+		t.Fatal("tracker built without Guides has a guide source")
+	}
+	tr.pass(context.Background())
+	if n := snapshots(t, s, p.ID); n != 1 {
+		t.Errorf("event post snapshots = %d, want 1", n)
+	}
+}
