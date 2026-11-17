@@ -158,6 +158,7 @@ for DESTRUCTIVE, and `readOnlyHint` for every read.
 | Media | `create_media_upload` | | `media:write` | |
 | | `list_media` | | `media:read` | |
 | Engagement | `get_engagement` | | `engagement:read` | |
+| | `get_post_performance` | | `engagement:read` | |
 
 A failed tool call is a tool error (`isError`) whose text is the v1 error
 envelope, `{"error":{"code":…,"message":…,"fields":…}}`, so the model can read

@@ -555,3 +555,5 @@ engagement in a window. Its times are UTC, unlike the rest of v1: Home
 Assistant's sensor reads this response as it shipped, so it stays byte for byte
 unchanged. It is documented in
 [`home-assistant.md`](home-assistant.md).
+
+- **`get_post_performance`**, `GET /posts/performance`: the cumulative results of the event and guide posts posted in a window (`since`/`until`, default the last 7 days, at most 90; `kind` `event`, `guide` or `all`): each post's latest likes/reposts/replies/quotes and clicks, totals per channel and per kind, and a one-sentence summary. Times are Pacific. A ShortLinks failure still answers `200`, with clicks `null` and `clicks_error` set.

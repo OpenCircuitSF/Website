@@ -80,6 +80,7 @@ var specTools = map[string]string{
 	"create_outreach_location":    "#0702",
 	"update_outreach_location":    "#0702",
 	"delete_outreach_location":    "#0702",
+	"get_post_performance":        "#0706",
 	"create_media_upload":         "#0705",
 	"list_media":                  "#0705",
 }
