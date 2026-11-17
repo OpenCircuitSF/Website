@@ -667,6 +667,16 @@ func (h *AdminOutreachHandler) auditFlyerLink(r *http.Request, actorID int64, ac
 	})
 }
 
+// auditFlyerLinkCtx is auditFlyerLink without the request (#0699), for
+// ensureLinksFor; recordCtx attributes an API-token request to its token.
+func (h *AdminOutreachHandler) auditFlyerLinkCtx(ctx context.Context, ip string, actorID *int64, action string, linkID, outreachID, locationID int64, extra map[string]any) {
+	meta := map[string]any{"outreach_id": outreachID, "location_id": locationID}
+	for k, v := range extra {
+		meta[k] = v
+	}
+	h.recordCtx(ctx, ip, audit.TargetOutreachFlyerLink, linkID, audit.Entry{ActorID: actorID, Action: action, Metadata: meta})
+}
+
 // generateLink creates the ShortLinks link for one (workshop, location) and
 // records it. The upstream call comes first because an HTTP call cannot sit
 // inside the transaction InsertFlyerLink opens.

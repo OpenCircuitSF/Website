@@ -519,6 +519,11 @@ curl -s -X POST $B/cadence-rules \
 - **`list_outreach`**, `GET /outreach`: every event with outreach, with post counts by status (paged).
 - **`get_event_outreach`**, `GET /events/{id}/outreach`: the event's outreach panel, plus `started`.
 - **`outreach_connections_status`**, `GET /outreach/connections`: connection status, booleans and sources only.
+- **`start_event_outreach`**, `POST /events/{id}/outreach`: start outreach for a published event (its campaign and tracked links); repeating it returns the existing outreach.
+- **`create_outreach_post`**, `POST /outreach/{id}/posts`: a draft post for one `channel` and `wave`; `body` omitted is drafted from the template. Takes `Idempotency-Key`; `201`.
+- **`update_outreach_post`**, `PATCH /outreach-posts/{id}`: exactly one of `body` or `regenerate: true`. `409` once posted or sending.
+- **`delete_outreach_post`**, `DELETE /outreach-posts/{id}`: destructive; `409` once posted or sending.
+- **`reset_event_outreach`**, `POST /events/{id}/outreach/reset`: destructive; removes every post and flyer, refused (`409`) once anything is public.
 
 ### Engagement (`engagement:read`)
 

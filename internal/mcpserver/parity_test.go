@@ -58,6 +58,11 @@ var specTools = map[string]string{
 	"list_outreach":               "#0697",
 	"get_event_outreach":          "#0697",
 	"outreach_connections_status": "#0697",
+	"start_event_outreach":        "#0699",
+	"create_outreach_post":        "#0699",
+	"update_outreach_post":        "#0699",
+	"delete_outreach_post":        "#0699",
+	"reset_event_outreach":        "#0699",
 }
 
 // pendingTools are the spec names whose issue has not landed. The issue that

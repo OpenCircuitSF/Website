@@ -133,6 +133,11 @@ for DESTRUCTIVE, and `readOnlyHint` for every read.
 | Outreach | `list_outreach` | | `outreach:read` | |
 | | `get_event_outreach` | | `outreach:read` | |
 | | `outreach_connections_status` | | `outreach:read` | |
+| | `start_event_outreach` | | `outreach:write` | |
+| | `create_outreach_post` | | `outreach:write` | yes |
+| | `update_outreach_post` | | `outreach:write` | |
+| | `delete_outreach_post` | DESTRUCTIVE | `outreach:write` | |
+| | `reset_event_outreach` | DESTRUCTIVE | `outreach:write` | |
 | Engagement | `get_engagement` | | `engagement:read` | |
 
 A failed tool call is a tool error (`isError`) whose text is the v1 error

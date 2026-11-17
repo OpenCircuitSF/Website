@@ -124,12 +124,13 @@ func (h *AdminOutreachHandler) EnsureHandLinks(w http.ResponseWriter, r *http.Re
 	}
 	r = r.WithContext(context.WithoutCancel(r.Context()))
 	ctx := r.Context()
+	actorID := actor.ID
 	posts, err := h.store.ListPosts(ctx, o.ID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	report, err := h.ensureLinksFor(r, actor.ID, *o, wk, h.handPostedChannels(), false)
+	report, err := h.ensureLinksFor(ctx, clientIP(r), &actorID, *o, wk, h.handPostedChannels(), false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return

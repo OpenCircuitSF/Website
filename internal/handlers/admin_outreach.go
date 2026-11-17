@@ -760,6 +760,67 @@ func (h *AdminOutreachHandler) panelFor(ctx context.Context, id int64) (outreach
 	return h.panel(ctx, wk, op)
 }
 
+// outreachOpError is a refusal from a transport-free outreach write
+// (#0699): the admin routes write status and msg as they always have, and
+// /api/v1 maps it through outreachAPIError. field names the input at fault
+// for a 400.
+type outreachOpError struct {
+	status int
+	field  string
+	msg    string
+}
+
+func (e *outreachOpError) Error() string { return e.msg }
+
+func outreachRefusal(status int, field, msg string) error {
+	return &outreachOpError{status: status, field: field, msg: msg}
+}
+
+// outreachLinksError carries a ShortLinks failure out of a transport-free
+// outreach write, so the admin route can still answer writeShortLinksError.
+type outreachLinksError struct{ err error }
+
+func (e outreachLinksError) Error() string { return "outreach short links: " + e.err.Error() }
+func (e outreachLinksError) Unwrap() error { return e.err }
+
+// writeOutreachError answers an admin request with err from a
+// transport-free outreach write.
+func writeOutreachError(w http.ResponseWriter, op string, err error) {
+	var oe *outreachOpError
+	var le outreachLinksError
+	switch {
+	case errors.As(err, &oe):
+		writeError(w, oe.status, oe.msg)
+	case errors.As(err, &le):
+		writeShortLinksError(w, op, le.err)
+	default:
+		writeError(w, http.StatusInternalServerError, "internal server error")
+	}
+}
+
+// postErrorRefusal maps the store's post sentinels to refusals; any other
+// error is returned as is.
+func postErrorRefusal(err error) error {
+	switch {
+	case errors.Is(err, outreach.ErrPostLocked):
+		return outreachRefusal(http.StatusConflict, "", "post is already posted")
+	case errors.Is(err, outreach.ErrPostInFlight):
+		return outreachRefusal(http.StatusConflict, "", "post is being sent")
+	case errors.Is(err, outreach.ErrNotFound):
+		return outreachRefusal(http.StatusNotFound, "", "post not found")
+	}
+	return err
+}
+
+// workshopFor loads workshop id, turning not-found into a refusal.
+func (h *AdminOutreachHandler) workshopFor(ctx context.Context, id int64) (workshops.Workshop, error) {
+	wk, err := h.ws.GetByID(ctx, id)
+	if errors.Is(err, workshops.ErrNotFound) {
+		return wk, outreachRefusal(http.StatusNotFound, "", "event not found")
+	}
+	return wk, err
+}
+
 // Start handles POST /admin/workshops/{id}/outreach: ensure the ShortLinks
 // campaign and create the outreach row. 503 when ShortLinks is not
 // configured, 409 unless the workshop is published, 200 when outreach already
@@ -774,76 +835,69 @@ func (h *AdminOutreachHandler) Start(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.linksEnabled() {
-		writeError(w, http.StatusServiceUnavailable, "ShortLinks is not configured")
-		return
-	}
-	wk, ok := h.loadWorkshop(w, r, id)
-	if !ok {
-		return
-	}
-	if wk.Status != "published" {
-		writeError(w, http.StatusConflict, "outreach can only start for a published event")
-		return
-	}
-	if existing, err := h.store.GetByWorkshop(r.Context(), id); err == nil {
-		v, perr := h.panel(r.Context(), wk, &existing)
-		if perr != nil {
-			writeError(w, http.StatusInternalServerError, "internal server error")
-			return
-		}
-		writeJSON(w, http.StatusOK, v)
-		return
-	} else if !errors.Is(err, outreach.ErrNotFound) {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-
-	// No StartsAt/EndsAt (#0651): a date window on the ShortLinks campaign
-	// hides every click made while promoting the event before it starts.
-	req := shortlinks.CreateCampaignRequest{Description: wk.Title, DefaultUTMCampaign: wk.Slug}
-	camp, err := h.links.EnsureCampaign(r.Context(), wk.Slug, req)
+	actorID := actor.ID
+	v, created, err := h.startOutreach(r.Context(), clientIP(r), &actorID, id)
 	if err != nil {
-		writeShortLinksError(w, "ensure campaign", err)
-		return
-	}
-	o, created, err := h.store.Create(r.Context(), id, camp.Slug)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeOutreachError(w, "ensure campaign", err)
 		return
 	}
 	status := http.StatusOK
 	if created {
 		status = http.StatusCreated
-		if h.auditor != nil {
-			actorID := actor.ID
-			targetID := o.ID
-			h.auditor.Record(r.Context(), audit.Entry{
-				ActorID:    &actorID,
-				Action:     audit.ActionOutreachStarted,
-				TargetType: audit.TargetOutreach,
-				TargetID:   &targetID,
-				Metadata:   map[string]any{"workshop_id": o.WorkshopID, "campaign_slug": o.CampaignSlug},
-				IP:         clientIP(r),
-			})
-		}
+	}
+	writeJSON(w, status, v)
+}
+
+// startOutreach is Start without the transport (#0699); created reports a
+// new outreach row. start_event_outreach calls it too.
+func (h *AdminOutreachHandler) startOutreach(ctx context.Context, ip string, actorID *int64, id int64) (outreachPanelView, bool, error) {
+	if !h.linksEnabled() {
+		return outreachPanelView{}, false, outreachRefusal(http.StatusServiceUnavailable, "", "ShortLinks is not configured")
+	}
+	wk, err := h.workshopFor(ctx, id)
+	if err != nil {
+		return outreachPanelView{}, false, err
+	}
+	if wk.Status != "published" {
+		return outreachPanelView{}, false, outreachRefusal(http.StatusConflict, "", "outreach can only start for a published event")
+	}
+	if existing, err := h.store.GetByWorkshop(ctx, id); err == nil {
+		v, perr := h.panel(ctx, wk, &existing)
+		return v, false, perr
+	} else if !errors.Is(err, outreach.ErrNotFound) {
+		return outreachPanelView{}, false, err
+	}
+
+	// No StartsAt/EndsAt (#0651): a date window on the ShortLinks campaign
+	// hides every click made while promoting the event before it starts.
+	req := shortlinks.CreateCampaignRequest{Description: wk.Title, DefaultUTMCampaign: wk.Slug}
+	camp, err := h.links.EnsureCampaign(ctx, wk.Slug, req)
+	if err != nil {
+		return outreachPanelView{}, false, outreachLinksError{err}
+	}
+	o, created, err := h.store.Create(ctx, id, camp.Slug)
+	if err != nil {
+		return outreachPanelView{}, false, err
 	}
 	var report *outreachLinkReport
 	if created {
-		rep, lerr := h.ensureLinks(r, actor.ID, o, wk)
+		h.recordCtx(ctx, ip, audit.TargetOutreach, o.ID, audit.Entry{
+			ActorID:  actorID,
+			Action:   audit.ActionOutreachStarted,
+			Metadata: map[string]any{"workshop_id": o.WorkshopID, "campaign_slug": o.CampaignSlug},
+		})
+		rep, lerr := h.ensureLinks(ctx, ip, actorID, o, wk)
 		if lerr != nil {
-			writeError(w, http.StatusInternalServerError, "internal server error")
-			return
+			return outreachPanelView{}, false, lerr
 		}
 		report = &rep
 	}
-	v, err := h.panel(r.Context(), wk, &o)
+	v, err := h.panel(ctx, wk, &o)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreachPanelView{}, false, err
 	}
 	v.LinkReport = report
-	writeJSON(w, status, v)
+	return v, created, nil
 }
 
 type createOutreachPostRequest struct {
@@ -869,84 +923,81 @@ func (h *AdminOutreachHandler) CreatePost(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	actorID := actor.ID
+	v, err := h.createPost(r.Context(), clientIP(r), &actorID, id, req)
+	if err != nil {
+		writeOutreachError(w, "create post", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, v)
+}
+
+// createPost is CreatePost without the transport (#0699).
+func (h *AdminOutreachHandler) createPost(ctx context.Context, ip string, actorID *int64, id int64, req createOutreachPostRequest) (outreachPostView, error) {
 	ch, chOK := outreach.ChannelByName(req.Channel)
 	wv, wvOK := outreach.WaveByName(req.Wave)
 	if !chOK || !wvOK {
-		writeError(w, http.StatusBadRequest, "unknown channel or wave")
-		return
+		field := "channel"
+		if chOK {
+			field = "wave"
+		}
+		return outreachPostView{}, outreachRefusal(http.StatusBadRequest, field, "unknown channel or wave")
 	}
 	if !h.channelEnabled(ch.Name) {
-		writeError(w, http.StatusConflict, ch.Label+" is switched off in Settings")
-		return
+		return outreachPostView{}, outreachRefusal(http.StatusConflict, "", ch.Label+" is switched off in Settings")
 	}
 	if len(req.Body) > maxOutreachBodyBytes {
-		writeError(w, http.StatusBadRequest, "body is too long")
-		return
+		return outreachPostView{}, outreachRefusal(http.StatusBadRequest, "body", "body is too long")
 	}
-	o, err := h.store.GetByID(r.Context(), id)
+	o, err := h.store.GetByID(ctx, id)
 	if errors.Is(err, outreach.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "outreach not found")
-		return
+		return outreachPostView{}, outreachRefusal(http.StatusNotFound, "", "outreach not found")
 	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreachPostView{}, err
 	}
-	wk, ok := h.loadWorkshop(w, r, o.WorkshopID)
-	if !ok {
-		return
+	wk, err := h.workshopFor(ctx, o.WorkshopID)
+	if err != nil {
+		return outreachPostView{}, err
 	}
 	f := h.facts(wk)
 	body := req.Body
 	if strings.TrimSpace(body) == "" {
 		body = outreach.Draft(ch, wv, f)
 	}
-	p, err := h.store.CreatePost(r.Context(), o.ID, ch.Name, wv.Name, body, outreach.Fingerprint(f))
+	p, err := h.store.CreatePost(ctx, o.ID, ch.Name, wv.Name, body, outreach.Fingerprint(f))
 	switch {
 	case err == nil:
 	case errors.Is(err, outreach.ErrPostExists):
-		writeError(w, http.StatusConflict, "a post already exists for that channel and wave")
-		return
+		return outreachPostView{}, outreachRefusal(http.StatusConflict, "", "a post already exists for that channel and wave")
 	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreachPostView{}, err
 	}
 	// A slot whose link was created up front (#0568) opens already prepared.
 	linkApplied := false
-	switch pl, lerr := h.store.GetPostLink(r.Context(), o.ID, p.Channel, p.Wave); {
+	switch pl, lerr := h.store.GetPostLink(ctx, o.ID, p.Channel, p.Wave); {
 	case lerr == nil:
 		status := p.Status
 		if !ch.Automatic {
 			status = "manual"
 		}
-		prepared, _, perr := h.store.SetPrepared(r.Context(), p.ID, pl.Key, pl.ShortURL, status)
+		prepared, _, perr := h.store.SetPrepared(ctx, p.ID, pl.Key, pl.ShortURL, status)
 		if perr != nil {
-			writeError(w, http.StatusInternalServerError, "internal server error")
-			return
+			return outreachPostView{}, perr
 		}
 		p = prepared
 		linkApplied = true
 	case errors.Is(lerr, outreach.ErrNotFound):
 	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreachPostView{}, lerr
 	}
-	if h.auditor != nil {
-		actorID := actor.ID
-		targetID := p.ID
-		meta := map[string]any{"outreach_id": o.ID, "channel": p.Channel, "wave": p.Wave}
-		if linkApplied {
-			meta["link_applied"] = true
-		}
-		h.auditor.Record(r.Context(), audit.Entry{
-			ActorID:    &actorID,
-			Action:     audit.ActionOutreachPostCreated,
-			TargetType: audit.TargetOutreachPost,
-			TargetID:   &targetID,
-			Metadata:   meta,
-			IP:         clientIP(r),
-		})
+	meta := map[string]any{"outreach_id": o.ID, "channel": p.Channel, "wave": p.Wave}
+	if linkApplied {
+		meta["link_applied"] = true
 	}
-	writeJSON(w, http.StatusCreated, h.postView(p, f, wk.Status))
+	h.recordCtx(ctx, ip, audit.TargetOutreachPost, p.ID, audit.Entry{
+		ActorID: actorID, Action: audit.ActionOutreachPostCreated, Metadata: meta,
+	})
+	return h.postView(p, f, wk.Status), nil
 }
 
 // postContext loads a post, its outreach and its workshop; ok=false means the
@@ -994,65 +1045,60 @@ func (h *AdminOutreachHandler) PatchPost(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	actorID := actor.ID
+	v, err := h.updatePost(r.Context(), clientIP(r), &actorID, id, req)
+	if err != nil {
+		writeOutreachError(w, "update post", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+// updatePost is PatchPost without the transport (#0699).
+func (h *AdminOutreachHandler) updatePost(ctx context.Context, ip string, actorID *int64, id int64, req patchOutreachPostRequest) (outreachPostView, error) {
 	regen := req.Regenerate != nil && *req.Regenerate
 	if (req.Body != nil) == regen {
-		writeError(w, http.StatusBadRequest, "send exactly one of body or regenerate")
-		return
+		return outreachPostView{}, outreachRefusal(http.StatusBadRequest, "body", "send exactly one of body or regenerate")
 	}
 	if regen && req.Customized != nil {
-		writeError(w, http.StatusBadRequest, "customized goes with body, not regenerate")
-		return
+		return outreachPostView{}, outreachRefusal(http.StatusBadRequest, "customized", "customized goes with body, not regenerate")
 	}
-	p, wk, ok := h.postContext(w, r, id)
-	if !ok {
-		return
+	p, err := h.store.GetPost(ctx, id)
+	if err != nil {
+		return outreachPostView{}, postErrorRefusal(err)
+	}
+	o, err := h.store.GetByID(ctx, p.OutreachID)
+	if err != nil {
+		return outreachPostView{}, err
+	}
+	wk, err := h.workshopFor(ctx, o.WorkshopID)
+	if err != nil {
+		return outreachPostView{}, err
 	}
 	f := h.facts(wk)
 	var updated outreach.Post
-	var err error
 	if regen {
 		body := regeneratedBody(p, f)
 		fp := outreach.Fingerprint(f)
-		updated, err = h.store.UpdatePostBody(r.Context(), id, body, &fp, nil)
+		updated, err = h.store.UpdatePostBody(ctx, id, body, &fp, nil)
 	} else {
 		if strings.TrimSpace(*req.Body) == "" {
-			writeError(w, http.StatusBadRequest, "body cannot be empty")
-			return
+			return outreachPostView{}, outreachRefusal(http.StatusBadRequest, "body", "body cannot be empty")
 		}
 		if len(*req.Body) > maxOutreachBodyBytes {
-			writeError(w, http.StatusBadRequest, "body is too long")
-			return
+			return outreachPostView{}, outreachRefusal(http.StatusBadRequest, "body", "body is too long")
 		}
-		updated, err = h.store.UpdatePostBody(r.Context(), id, *req.Body, nil, req.Customized)
+		updated, err = h.store.UpdatePostBody(ctx, id, *req.Body, nil, req.Customized)
 	}
-	switch {
-	case err == nil:
-	case errors.Is(err, outreach.ErrPostLocked):
-		writeError(w, http.StatusConflict, "post is already posted")
-		return
-	case errors.Is(err, outreach.ErrPostInFlight):
-		writeError(w, http.StatusConflict, "post is being sent")
-		return
-	case errors.Is(err, outreach.ErrNotFound):
-		writeError(w, http.StatusNotFound, "post not found")
-		return
-	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+	if err != nil {
+		return outreachPostView{}, postErrorRefusal(err)
 	}
-	if h.auditor != nil {
-		actorID := actor.ID
-		targetID := updated.ID
-		h.auditor.Record(r.Context(), audit.Entry{
-			ActorID:    &actorID,
-			Action:     audit.ActionOutreachPostUpdated,
-			TargetType: audit.TargetOutreachPost,
-			TargetID:   &targetID,
-			Metadata:   map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave, "regenerated": regen, "customized": updated.Customized},
-			IP:         clientIP(r),
-		})
-	}
-	writeJSON(w, http.StatusOK, h.postView(updated, f, wk.Status))
+	h.recordCtx(ctx, ip, audit.TargetOutreachPost, updated.ID, audit.Entry{
+		ActorID:  actorID,
+		Action:   audit.ActionOutreachPostUpdated,
+		Metadata: map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave, "regenerated": regen, "customized": updated.Customized},
+	})
+	return h.postView(updated, f, wk.Status), nil
 }
 
 // Prepare handles POST /admin/outreach-posts/{id}/prepare: create the tagged
@@ -1374,42 +1420,29 @@ func (h *AdminOutreachHandler) DeletePost(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	p, err := h.store.GetPost(r.Context(), id)
-	if errors.Is(err, outreach.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "post not found")
+	actorID := actor.ID
+	if err := h.deletePost(r.Context(), clientIP(r), &actorID, id); err != nil {
+		writeOutreachError(w, "delete post", err)
 		return
-	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-	switch err := h.store.DeletePost(r.Context(), id); {
-	case err == nil:
-	case errors.Is(err, outreach.ErrPostLocked):
-		writeError(w, http.StatusConflict, "post is already posted")
-		return
-	case errors.Is(err, outreach.ErrPostInFlight):
-		writeError(w, http.StatusConflict, "post is being sent")
-		return
-	case errors.Is(err, outreach.ErrNotFound):
-		writeError(w, http.StatusNotFound, "post not found")
-		return
-	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-	if h.auditor != nil {
-		actorID := actor.ID
-		targetID := p.ID
-		h.auditor.Record(r.Context(), audit.Entry{
-			ActorID:    &actorID,
-			Action:     audit.ActionOutreachPostDeleted,
-			TargetType: audit.TargetOutreachPost,
-			TargetID:   &targetID,
-			Metadata:   map[string]any{"outreach_id": p.OutreachID, "channel": p.Channel, "wave": p.Wave},
-			IP:         clientIP(r),
-		})
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// deletePost is DeletePost without the transport (#0699).
+func (h *AdminOutreachHandler) deletePost(ctx context.Context, ip string, actorID *int64, id int64) error {
+	p, err := h.store.GetPost(ctx, id)
+	if err != nil {
+		return postErrorRefusal(err)
+	}
+	if err := h.store.DeletePost(ctx, id); err != nil {
+		return postErrorRefusal(err)
+	}
+	h.recordCtx(ctx, ip, audit.TargetOutreachPost, p.ID, audit.Entry{
+		ActorID:  actorID,
+		Action:   audit.ActionOutreachPostDeleted,
+		Metadata: map[string]any{"outreach_id": p.OutreachID, "channel": p.Channel, "wave": p.Wave},
+	})
+	return nil
 }
 
 // Reset handles POST /admin/workshops/{id}/outreach/reset (#0592): remove the
@@ -1426,50 +1459,43 @@ func (h *AdminOutreachHandler) Reset(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	wk, ok := h.loadWorkshop(w, r, id)
-	if !ok {
-		return
-	}
-	o, err := h.store.GetByWorkshop(r.Context(), id)
-	if errors.Is(err, outreach.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "outreach has not started for this event")
-		return
-	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-	res, err := h.store.Reset(r.Context(), o.ID)
-	switch {
-	case err == nil:
-	case errors.Is(err, outreach.ErrResetPosted):
-		writeError(w, http.StatusConflict, "Something has already been posted, so outreach cannot be reset.")
-		return
-	case errors.Is(err, outreach.ErrResetInFlight):
-		writeError(w, http.StatusConflict, "A post is queued or being sent, so outreach cannot be reset.")
-		return
-	case errors.Is(err, outreach.ErrResetFlyerPutUp):
-		writeError(w, http.StatusConflict, "A flyer is marked put up, so outreach cannot be reset.")
-		return
-	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-	if h.auditor != nil {
-		actorID := actor.ID
-		targetID := o.ID
-		h.auditor.Record(r.Context(), audit.Entry{
-			ActorID:    &actorID,
-			Action:     audit.ActionOutreachReset,
-			TargetType: audit.TargetOutreach,
-			TargetID:   &targetID,
-			Metadata:   map[string]any{"workshop_id": o.WorkshopID, "posts_removed": res.Posts, "flyers_removed": res.Flyers},
-			IP:         clientIP(r),
-		})
-	}
-	v, err := h.panel(r.Context(), wk, &o)
+	actorID := actor.ID
+	v, err := h.resetOutreach(r.Context(), clientIP(r), &actorID, id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		writeOutreachError(w, "reset", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
+}
+
+// resetOutreach is Reset without the transport (#0699).
+func (h *AdminOutreachHandler) resetOutreach(ctx context.Context, ip string, actorID *int64, id int64) (outreachPanelView, error) {
+	wk, err := h.workshopFor(ctx, id)
+	if err != nil {
+		return outreachPanelView{}, err
+	}
+	o, err := h.store.GetByWorkshop(ctx, id)
+	if errors.Is(err, outreach.ErrNotFound) {
+		return outreachPanelView{}, outreachRefusal(http.StatusNotFound, "", "outreach has not started for this event")
+	} else if err != nil {
+		return outreachPanelView{}, err
+	}
+	res, err := h.store.Reset(ctx, o.ID)
+	switch {
+	case err == nil:
+	case errors.Is(err, outreach.ErrResetPosted):
+		return outreachPanelView{}, outreachRefusal(http.StatusConflict, "", "Something has already been posted, so outreach cannot be reset.")
+	case errors.Is(err, outreach.ErrResetInFlight):
+		return outreachPanelView{}, outreachRefusal(http.StatusConflict, "", "A post is queued or being sent, so outreach cannot be reset.")
+	case errors.Is(err, outreach.ErrResetFlyerPutUp):
+		return outreachPanelView{}, outreachRefusal(http.StatusConflict, "", "A flyer is marked put up, so outreach cannot be reset.")
+	default:
+		return outreachPanelView{}, err
+	}
+	h.recordCtx(ctx, ip, audit.TargetOutreach, o.ID, audit.Entry{
+		ActorID:  actorID,
+		Action:   audit.ActionOutreachReset,
+		Metadata: map[string]any{"workshop_id": o.WorkshopID, "posts_removed": res.Posts, "flyers_removed": res.Flyers},
+	})
+	return h.panel(ctx, wk, &o)
 }

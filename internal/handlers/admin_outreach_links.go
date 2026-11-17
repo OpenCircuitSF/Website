@@ -115,7 +115,7 @@ func sortedLocations(locs []outreach.Location) []outreach.Location {
 // ShortLinks failures are reported per link and never abort the pass, except a
 // rate limit or the deadline, which stop it with the rest reported as not
 // tried.
-func (h *AdminOutreachHandler) ensureLinks(r *http.Request, actorID int64, o outreach.Outreach, wk workshops.Workshop) (outreachLinkReport, error) {
+func (h *AdminOutreachHandler) ensureLinks(ctx context.Context, ip string, actorID *int64, o outreach.Outreach, wk workshops.Workshop) (outreachLinkReport, error) {
 	chs := h.enabledChannels()
 	if h.eventStarted(wk) {
 		var auto []outreach.Channel
@@ -126,14 +126,14 @@ func (h *AdminOutreachHandler) ensureLinks(r *http.Request, actorID int64, o out
 		}
 		chs = auto
 	}
-	return h.ensureLinksFor(r, actorID, o, wk, chs, true)
+	return h.ensureLinksFor(ctx, ip, actorID, o, wk, chs, true)
 }
 
 // ensureLinksFor is ensureLinks limited to the given channels, with or without
 // the flyer locations.
-func (h *AdminOutreachHandler) ensureLinksFor(r *http.Request, actorID int64, o outreach.Outreach, wk workshops.Workshop, chs []outreach.Channel, withFlyers bool) (outreachLinkReport, error) {
+func (h *AdminOutreachHandler) ensureLinksFor(parent context.Context, ip string, actorID *int64, o outreach.Outreach, wk workshops.Workshop, chs []outreach.Channel, withFlyers bool) (outreachLinkReport, error) {
 	report := outreachLinkReport{Failed: []outreachLinkFailure{}}
-	ctx, cancel := context.WithTimeout(r.Context(), outreachLinksTimeout)
+	ctx, cancel := context.WithTimeout(parent, outreachLinksTimeout)
 	defer cancel()
 
 	postLinks, err := h.store.ListPostLinks(ctx, o.ID)
@@ -240,14 +240,10 @@ func (h *AdminOutreachHandler) ensureLinksFor(r *http.Request, actorID int64, o 
 			}
 			report.Created++
 			report.createdLinks = append(report.createdLinks, row)
-			if h.auditor != nil {
-				id := row.ID
-				h.auditor.Record(r.Context(), audit.Entry{
-					ActorID: &actorID, Action: audit.ActionOutreachLinkCreated, TargetType: audit.TargetOutreachLink, TargetID: &id,
-					Metadata: map[string]any{"outreach_id": o.ID, "channel": t.channel.Name, "wave": t.wave.Name, "short_link_key": row.Key},
-					IP:       clientIP(r),
-				})
-			}
+			h.recordCtx(parent, ip, audit.TargetOutreachLink, row.ID, audit.Entry{
+				ActorID: actorID, Action: audit.ActionOutreachLinkCreated,
+				Metadata: map[string]any{"outreach_id": o.ID, "channel": t.channel.Name, "wave": t.wave.Name, "short_link_key": row.Key},
+			})
 		case "flyer":
 			sel := outreach.FlyerSelection{LocationID: t.location.ID, Name: t.location.Name, Code: t.location.Code}
 			l, created, err := h.generateLink(ctx, o, wk, sel, base)
@@ -260,7 +256,7 @@ func (h *AdminOutreachHandler) ensureLinksFor(r *http.Request, actorID int64, o 
 				break
 			}
 			report.Created++
-			h.auditFlyerLink(r, actorID, audit.ActionOutreachFlyerLinkCreated, l.ID, o.ID, t.location.ID, map[string]any{
+			h.auditFlyerLinkCtx(parent, ip, actorID, audit.ActionOutreachFlyerLinkCreated, l.ID, o.ID, t.location.ID, map[string]any{
 				"code": t.location.Code, "short_link_key": l.Key,
 			})
 		}
