@@ -66,6 +66,8 @@ var specTools = map[string]string{
 	"draft_event_outreach":        "#0700",
 	"prepare_outreach_post":       "#0700",
 	"ensure_outreach_hand_links":  "#0700",
+	"create_media_upload":         "#0705",
+	"list_media":                  "#0705",
 }
 
 // pendingTools are the spec names whose issue has not landed. The issue that

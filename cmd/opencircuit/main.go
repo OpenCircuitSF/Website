@@ -472,12 +472,15 @@ func servePostgres(cfg *config.Config) error {
 	// adminWorkshopsH's routes and to v1 below.
 	eventCadenceH := handlers.NewEventCadenceHandler(cadence.NewStore(pool), workshopsStore, eventTypesStore, venuesStore, lumaChecker, auditLogger, cfg.BaseURL)
 	adminWorkshopsH.SetCadence(eventCadenceH)
+	// #0705: the v1 media operations and their ticket upload route.
+	mediaV1 := handlers.NewMediaV1(serverSettings.MediaDir, cfg.BaseURL, auditLogger)
+	apiTokensH.SetMediaUpload(mediaV1)
 	apiTokensH.SetV1(handlers.BuildV1Registry(
 		api.Config{Version: version, Idempotency: api.NewIdempotencyStore(pool)},
 		handlers.V1Deps{
 			Engagement: outreachStore, BaseURL: cfg.BaseURL, GuidePosts: adminGuidePostsH,
 			Workshops: adminWorkshopsH, Venues: venuesStore, EventTypes: eventTypesStore, Interests: interestsStore,
-			Cadence: eventCadenceH, Outreach: adminOutreachH,
+			Cadence: eventCadenceH, Outreach: adminOutreachH, Media: mediaV1,
 		},
 	))
 
@@ -1904,6 +1907,11 @@ func mountAndServe(
 		apiTokenLimiter := middleware.NewAPITokenRateLimiter()
 		// #0683: one per-IP failed-authentication limiter, shared by both.
 		authFailLimiter := middleware.NewAPIAuthFailureLimiter()
+		// #0705: the media upload route authenticates with its single-use
+		// ticket, not an API key, so it sits outside the registry.
+		if m := t.MediaUpload(); m != nil {
+			mux.Handle(handlers.MediaUploadPattern, http.HandlerFunc(m.Upload))
+		}
 		api.Mount(mux, api.NewHTTPRouter(t.V1(), api.RouterDeps{Resolver: t.Resolver(), Limiter: apiTokenLimiter, AuthFailLimiter: authFailLimiter, BaseURL: cfg.BaseURL}))
 		// MCP (#0679): Streamable HTTP, stateless JSON, over the same
 		// registry and the same per-key limiter as /api/v1/. Bearer only;

@@ -528,6 +528,12 @@ curl -s -X POST $B/cadence-rules \
 - **`prepare_outreach_post`**, `POST /outreach-posts/{id}/prepare`: makes the post's tracked link and puts it in the body; repeating it makes no ShortLinks call. `503` when ShortLinks is not configured.
 - **`ensure_outreach_hand_links`**, `POST /events/{id}/outreach/hand-links`: makes every missing link for the hand-posted channels; per-slot failures are listed in `failed`. `503` when ShortLinks is not configured.
 
+### Media (`media:read`, `media:write`)
+
+- **`create_media_upload`**, `POST /media/uploads`: a single-use upload ticket valid 10 minutes: `{upload_url, upload_token, expires_at, max_bytes, curl}`; `201`. `503` when no media directory is set.
+- **`list_media`**, `GET /media`: files in the media directory, `{name, path, size_bytes, modified_at}`, newest first (paged).
+- *(REST only)* `POST /media/uploads/{id}`, the `upload_url`: send the ticket as `Authorization: Bearer <upload_token>` and the image as multipart field `file` (JPEG or PNG, 5 MiB). Answers `{path}`, a `/media/…` path for `update_event` `cover_image` or `update_flyer` `photo`. An unknown, used or expired ticket is `401`; the ticket is never in the URL.
+
 ### Engagement (`engagement:read`)
 
 `get_engagement`, `GET /engagement`, returns new Bluesky and Mastodon

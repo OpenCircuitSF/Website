@@ -29,6 +29,9 @@ type V1Deps struct {
 	// Outreach is the admin outreach handler; the #0697 outreach operations
 	// run its transport-free methods, shared with /admin/outreach.
 	Outreach *AdminOutreachHandler
+	// Media backs the #0705 media operations; its Upload route is mounted
+	// by cmd/opencircuit outside the registry.
+	Media *MediaV1
 }
 
 // BuildV1Registry is the one place the v1 operations are listed (#0675).
@@ -45,5 +48,6 @@ func BuildV1Registry(cfg api.Config, d V1Deps) *api.Registry {
 	reg.Add(outreachOperations(d.Outreach)...)
 	reg.Add(outreachWriteOperations(d.Outreach)...)
 	reg.Add(outreachLinkOperations(d.Outreach)...)
+	reg.Add(mediaOperations(d.Media)...)
 	return reg
 }

@@ -28,10 +28,11 @@ type apiTokenStore interface {
 // /api/v1 operation registry (#0652, #0675) to mountAndServe. Nothing here
 // logs a request body or a token secret.
 type APITokensHandler struct {
-	store   apiTokenStore
-	auditor *audit.Logger
-	now     func() time.Time
-	v1      *api.Registry
+	store       apiTokenStore
+	auditor     *audit.Logger
+	now         func() time.Time
+	v1          *api.Registry
+	mediaUpload *MediaV1
 }
 
 // NewAPITokensHandler returns a handler over store. A nil auditor disables
@@ -42,6 +43,13 @@ func NewAPITokensHandler(store apiTokenStore, auditor *audit.Logger) *APITokensH
 
 // SetV1 attaches the /api/v1 operation registry (BuildV1Registry).
 func (h *APITokensHandler) SetV1(reg *api.Registry) { h.v1 = reg }
+
+// SetMediaUpload attaches the #0705 ticket upload route, which
+// cmd/opencircuit mounts at MediaUploadPattern beside the v1 router.
+func (h *APITokensHandler) SetMediaUpload(m *MediaV1) { h.mediaUpload = m }
+
+// MediaUpload returns the MediaV1 SetMediaUpload attached, or nil.
+func (h *APITokensHandler) MediaUpload() *MediaV1 { return h.mediaUpload }
 
 // V1 returns the registry SetV1 attached, or nil.
 func (h *APITokensHandler) V1() *api.Registry { return h.v1 }

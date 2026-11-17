@@ -98,6 +98,9 @@ const heicErrorMessage = `this looks like an HEIC/HEIF photo, which this server 
 // deliberately refused format (GIF, WebP, SVG).
 const mediaUnsupportedFormatMessage = "unsupported image format — only JPEG and PNG are accepted"
 
+// mediaNotConfiguredMessage is the 503 body when no media directory is set.
+const mediaNotConfiguredMessage = "image uploads are not configured: set the media directory under Settings → Server settings. The directory must also be writable by the service (scripts/enable-media-upload.sh). The cover image path field and the scp workflow still work."
+
 // mediaUnrecognizedFormatMessage is the 415 body when the bytes match no
 // known image format signature at all.
 const mediaUnrecognizedFormatMessage = "not a recognized image file"
@@ -161,8 +164,7 @@ func (h *AdminMediaHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	dir := h.mediaDir()
 	if dir == "" {
-		writeError(w, http.StatusServiceUnavailable,
-			"image uploads are not configured: set the media directory under Settings → Server settings. The directory must also be writable by the service (scripts/enable-media-upload.sh). The cover image path field and the scp workflow still work.")
+		writeError(w, http.StatusServiceUnavailable, mediaNotConfiguredMessage)
 		return
 	}
 
@@ -189,73 +191,12 @@ func (h *AdminMediaHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	format, err := media.Sniff(body)
-	switch {
-	case errors.Is(err, media.ErrHEICUnsupported):
-		writeError(w, http.StatusUnsupportedMediaType, heicErrorMessage)
-		return
-	case errors.Is(err, media.ErrUnsupportedFormat):
-		writeError(w, http.StatusUnsupportedMediaType, mediaUnsupportedFormatMessage)
-		return
-	case errors.Is(err, media.ErrUnrecognizedFormat):
-		writeError(w, http.StatusUnsupportedMediaType, mediaUnrecognizedFormatMessage)
-		return
-	case err != nil:
-		writeError(w, http.StatusInternalServerError, "internal server error")
+	stored, serr := storeImage(dir, header.Filename, body)
+	if serr != nil {
+		writeError(w, serr.status, serr.msg)
 		return
 	}
-
-	// image.DecodeConfig only, never image.Decode — see internal/media's
-	// package doc comment for why a full decode is a memory hazard here.
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(body))
-	if err != nil {
-		writeError(w, http.StatusUnsupportedMediaType, "could not read image header — the file may be corrupt")
-		return
-	}
-	if err := media.CheckDimensions(cfg.Width, cfg.Height); err != nil {
-		writeError(w, http.StatusUnsupportedMediaType, fmt.Sprintf("image dimensions %dx%d exceed the allowed maximum", cfg.Width, cfg.Height))
-		return
-	}
-
-	stripped, err := media.Strip(format, body)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "could not process image")
-		return
-	}
-	if err := media.VerifyStripped(format, stripped); err != nil {
-		// The strip's own output still carries something it should have
-		// dropped -- a bug in internal/media, not a client error. Refuse
-		// rather than write a file we can't stand behind.
-		slog.Default().Error("admin_media_upload: stripped output failed verification", "err", err)
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-
-	filename := media.Filename(header.Filename, stripped, format)
-	storedPath := "/media/" + filename
-	if !isSafeCoverImage(storedPath) {
-		// Cannot happen by construction (see media.Filename's doc
-		// comment) -- this is the endpoint's own post-condition check,
-		// not an input filter (issues/0433.md Plan §3).
-		slog.Default().Error("admin_media_upload: generated path failed isSafeCoverImage", "path", storedPath)
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-
-	if err := media.WriteAtomic(dir, filename, stripped); err != nil {
-		if media.IsOutOfSpace(err) {
-			writeError(w, http.StatusInsufficientStorage, "no space left on the media directory — the image was not saved")
-			return
-		}
-		slog.Default().Error("admin_media_upload: write failed", "err", err, "dir", dir)
-		if errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.EROFS) {
-			writeError(w, http.StatusServiceUnavailable,
-				"the media directory is not writable by the service: run scripts/enable-media-upload.sh on the server, or choose another directory under Settings → Server settings")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
+	filename, storedPath, format, stripped, cfg := stored.filename, stored.path, stored.format, stored.data, stored.cfg
 
 	if h.auditor != nil {
 		actorID := actor.ID
@@ -275,4 +216,90 @@ func (h *AdminMediaHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, mediaUploadResponse{Path: storedPath})
+}
+
+// storedImage is what storeImage wrote.
+type storedImage struct {
+	filename string
+	path     string // "/media/<filename>"
+	format   media.Format
+	data     []byte // the stripped bytes written
+	cfg      image.Config
+}
+
+// storeImageError is a refused or failed store: the status and message the
+// caller answers with.
+type storeImageError struct {
+	status int
+	msg    string
+}
+
+func (e *storeImageError) Error() string { return e.msg }
+
+// storeImage is the validation-and-write pipeline shared by
+// POST /admin/media/upload and the v1 upload route (#0705): sniff,
+// DecodeConfig, CheckDimensions, Strip, VerifyStripped, Filename and
+// WriteAtomic, in that order (see the package doc comment). clientName is
+// the client's filename, used only for the sanitised stem.
+func storeImage(dir, clientName string, body []byte) (storedImage, *storeImageError) {
+	fail := func(status int, msg string) (storedImage, *storeImageError) {
+		return storedImage{}, &storeImageError{status: status, msg: msg}
+	}
+	format, err := media.Sniff(body)
+	switch {
+	case errors.Is(err, media.ErrHEICUnsupported):
+		return fail(http.StatusUnsupportedMediaType, heicErrorMessage)
+	case errors.Is(err, media.ErrUnsupportedFormat):
+		return fail(http.StatusUnsupportedMediaType, mediaUnsupportedFormatMessage)
+	case errors.Is(err, media.ErrUnrecognizedFormat):
+		return fail(http.StatusUnsupportedMediaType, mediaUnrecognizedFormatMessage)
+	case err != nil:
+		return fail(http.StatusInternalServerError, "internal server error")
+	}
+
+	// image.DecodeConfig only, never image.Decode — see internal/media's
+	// package doc comment for why a full decode is a memory hazard here.
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(body))
+	if err != nil {
+		return fail(http.StatusUnsupportedMediaType, "could not read image header — the file may be corrupt")
+	}
+	if err := media.CheckDimensions(cfg.Width, cfg.Height); err != nil {
+		return fail(http.StatusUnsupportedMediaType, fmt.Sprintf("image dimensions %dx%d exceed the allowed maximum", cfg.Width, cfg.Height))
+	}
+
+	stripped, err := media.Strip(format, body)
+	if err != nil {
+		return fail(http.StatusBadRequest, "could not process image")
+	}
+	if err := media.VerifyStripped(format, stripped); err != nil {
+		// The strip's own output still carries something it should have
+		// dropped -- a bug in internal/media, not a client error. Refuse
+		// rather than write a file we can't stand behind.
+		slog.Default().Error("admin_media_upload: stripped output failed verification", "err", err)
+		return fail(http.StatusInternalServerError, "internal server error")
+	}
+
+	filename := media.Filename(clientName, stripped, format)
+	storedPath := "/media/" + filename
+	if !isSafeCoverImage(storedPath) {
+		// Cannot happen by construction (see media.Filename's doc
+		// comment) -- this is the endpoint's own post-condition check,
+		// not an input filter (issues/0433.md Plan §3).
+		slog.Default().Error("admin_media_upload: generated path failed isSafeCoverImage", "path", storedPath)
+		return fail(http.StatusInternalServerError, "internal server error")
+	}
+
+	if err := media.WriteAtomic(dir, filename, stripped); err != nil {
+		if media.IsOutOfSpace(err) {
+			return fail(http.StatusInsufficientStorage, "no space left on the media directory — the image was not saved")
+		}
+		slog.Default().Error("admin_media_upload: write failed", "err", err, "dir", dir)
+		if errors.Is(err, fs.ErrPermission) || errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.EROFS) {
+			return fail(http.StatusServiceUnavailable,
+				"the media directory is not writable by the service: run scripts/enable-media-upload.sh on the server, or choose another directory under Settings → Server settings")
+		}
+		return fail(http.StatusInternalServerError, "internal server error")
+	}
+
+	return storedImage{filename: filename, path: storedPath, format: format, data: stripped, cfg: cfg}, nil
 }

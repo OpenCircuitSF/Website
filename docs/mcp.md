@@ -141,6 +141,8 @@ for DESTRUCTIVE, and `readOnlyHint` for every read.
 | | `draft_event_outreach` | | `outreach:write` | |
 | | `prepare_outreach_post` | | `outreach:write` | |
 | | `ensure_outreach_hand_links` | | `outreach:write` | |
+| Media | `create_media_upload` | | `media:write` | |
+| | `list_media` | | `media:read` | |
 | Engagement | `get_engagement` | | `engagement:read` | |
 
 A failed tool call is a tool error (`isError`) whose text is the v1 error
