@@ -113,9 +113,42 @@ func TestV1Outreach_PanelMatchesAdmin(t *testing.T) {
 		t.Errorf("started = %v", v1["started"])
 	}
 	delete(v1, "started")
+	ws, _ := v1["workshop"].(map[string]any)
+	posts, _ := v1["posts"].([]any)
+	if len(posts) == 0 {
+		t.Fatal("v1 panel has no posts")
+	}
+	post, _ := posts[0].(map[string]any)
+	for name, v := range map[string]any{"workshop.starts_at": ws["starts_at"], "posts[0].created_at": post["created_at"]} {
+		s, _ := v.(string)
+		if !strings.HasSuffix(s, "-08:00") && !strings.HasSuffix(s, "-07:00") {
+			t.Errorf("v1 %s = %q, want a Pacific offset", name, s)
+		}
+	}
+	// The admin panel is UTC and v1 is Pacific: compare instants.
+	admin, v1 = utcTimes(admin).(map[string]any), utcTimes(v1).(map[string]any)
 	if !reflect.DeepEqual(admin, v1) {
 		t.Errorf("v1 panel differs from admin:\nadmin %v\nv1    %v", admin, v1)
 	}
+}
+
+// utcTimes rewrites every RFC 3339 string in a decoded JSON value to UTC.
+func utcTimes(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, e := range x {
+			x[k] = utcTimes(e)
+		}
+	case []any:
+		for i, e := range x {
+			x[i] = utcTimes(e)
+		}
+	case string:
+		if t, err := time.Parse(time.RFC3339, x); err == nil {
+			return t.UTC().Format(time.RFC3339)
+		}
+	}
+	return v
 }
 
 func TestV1Outreach_UnknownEventAndScope(t *testing.T) {

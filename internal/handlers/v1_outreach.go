@@ -53,7 +53,7 @@ func outreachOperations(h *AdminOutreachHandler) []api.Operation {
 			Name: "get_event_outreach", Method: http.MethodGet, Path: "/api/v1/events/{id}/outreach",
 			Scope:       apitokens.ScopeOutreachRead,
 			Summary:     "Get an event's outreach panel: availability, channels, waves, posts and hand-posted links.",
-			Description: "The same panel the admin Outreach screen shows. started is false when outreach has not been started for the event.",
+			Description: "The same panel the admin Outreach screen shows. started is false when outreach has not been started for the event. Times have a Pacific offset.",
 		}, func(ctx context.Context, in eventOutreachIn) (eventOutreachV1, error) {
 			v, err := h.panelFor(ctx, in.ID)
 			if errors.Is(err, workshops.ErrNotFound) {
@@ -62,7 +62,7 @@ func outreachOperations(h *AdminOutreachHandler) []api.Operation {
 			if err != nil {
 				return eventOutreachV1{}, err
 			}
-			return eventOutreachV1{Started: v.Outreach != nil, outreachPanelView: v}, nil
+			return eventOutreachV1{Started: v.Outreach != nil, outreachPanelView: pacificPanel(v)}, nil
 		}),
 		api.Define(api.Operation{
 			Name: "outreach_connections_status", Method: http.MethodGet, Path: "/api/v1/outreach/connections",
@@ -135,12 +135,55 @@ type outreachFieldStatusV1 struct {
 	Source string `json:"source" jsonschema:"environment, database, default or unset"`
 }
 
+// pacificRFC3339 rewrites an RFC 3339 string with a Pacific offset through
+// inPacific, the one rule every v1 op's times follow. A string that does not
+// parse comes back unchanged.
 func pacificRFC3339(s string) string {
 	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
 		return s
 	}
-	return t.In(announceLocation).Format(time.RFC3339)
+	return inPacific(&t).Format(time.RFC3339)
+}
+
+// pacificRFC3339Ptr is pacificRFC3339 for an optional time; nil stays nil.
+func pacificRFC3339Ptr(s *string) *string {
+	if s == nil {
+		return nil
+	}
+	p := pacificRFC3339(*s)
+	return &p
+}
+
+// pacificPanel is v with every time in Pacific, for get_event_outreach. The
+// admin panel stays UTC, so v's shared pointer and slices are copied before
+// any write.
+func pacificPanel(v outreachPanelView) outreachPanelView {
+	v.Workshop.StartsAt = pacificRFC3339Ptr(v.Workshop.StartsAt)
+	if v.Outreach != nil {
+		o := *v.Outreach
+		o.CreatedAt = pacificRFC3339(o.CreatedAt)
+		v.Outreach = &o
+	}
+	if v.Waves != nil {
+		waves := slices.Clone(v.Waves)
+		for i := range waves {
+			waves[i].SuggestedAt = pacificRFC3339Ptr(waves[i].SuggestedAt)
+		}
+		v.Waves = waves
+	}
+	if v.Posts != nil {
+		posts := slices.Clone(v.Posts)
+		for i := range posts {
+			p := &posts[i]
+			p.ScheduledAt = pacificRFC3339Ptr(p.ScheduledAt)
+			p.PostedAt = pacificRFC3339Ptr(p.PostedAt)
+			p.CreatedAt = pacificRFC3339(p.CreatedAt)
+			p.UpdatedAt = pacificRFC3339Ptr(p.UpdatedAt)
+		}
+		v.Posts = posts
+	}
+	return v
 }
 
 func (h *AdminOutreachHandler) listOutreachV1(ctx context.Context, in listOutreachIn) (api.List[outreachSummaryV1], error) {
@@ -151,10 +194,7 @@ func (h *AdminOutreachHandler) listOutreachV1(ctx context.Context, in listOutrea
 	items := make([]outreachSummaryV1, 0, len(views))
 	for _, v := range views {
 		s := outreachSummaryV1(v)
-		if s.StartsAt != nil {
-			p := pacificRFC3339(*s.StartsAt)
-			s.StartsAt = &p
-		}
+		s.StartsAt = pacificRFC3339Ptr(s.StartsAt)
 		s.CreatedAt = pacificRFC3339(s.CreatedAt)
 		items = append(items, s)
 	}
