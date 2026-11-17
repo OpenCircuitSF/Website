@@ -44,7 +44,7 @@ func TestV1OutreachLinks_DraftAll(t *testing.T) {
 	}
 	e.assertTokenAudit(t, audit.ActionOutreachPostCreated, len(first.Created))
 	var second draftAllReport
-	if err := json.Unmarshal(e.v1(t, http.MethodPost, path, e.write, `{"waves":["reminder"]}`, http.StatusOK), &second); err != nil {
+	if err := json.Unmarshal(e.v1(t, http.MethodPost, path, e.write, `{"waves":["reminder","last-call"]}`, http.StatusOK), &second); err != nil {
 		t.Fatal(err)
 	}
 	if second.Skipped != len(first.Created) || len(second.Created) == 0 {

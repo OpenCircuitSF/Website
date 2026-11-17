@@ -10,7 +10,7 @@ import (
 
 type draftEventOutreachIn struct {
 	ID    int64    `json:"id" path:"id"`
-	Waves []string `json:"waves,omitempty" jsonschema:"optional waves to draft besides announce, e.g. reminder, last_call"`
+	Waves []string `json:"waves,omitempty" jsonschema:"optional waves to draft besides announce: reminder, last-call"`
 }
 
 // outreachLinkOperations are the /api/v1 outreach drafting and link writes
