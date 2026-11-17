@@ -133,25 +133,7 @@ derived from the workshop's own venue fields.
 
 **Canceled workshops diverge from the social-card fallback on purpose.**
 `workshopRouteMeta` still serves a canceled workshop's `<title>`/`og:*`
-tags from the generic site fallback (see `## Guide unfurl images (`#0709`)
-
-A guide's `og:image` is `/guides/{slug}/og.png`. When a hand-made image exists
-at `internal/seo/cardassets/guides/<slug>.png`, that URL serves it (and so does
-`Site.GuideCard`, the Bluesky post thumbnail); otherwise it serves the
-generated title card. Images can land one at a time.
-
-- Each image must be a **1200×630 PNG of at most 1,000,000 bytes** (Bluesky's
-  thumbnail limit) named for a catalog slug. The images are embedded, and the
-  loader panics at startup on a violation; `TestGuideArt_EmbeddedSetIsValid`
-  catches it first.
-- With art present, `og:image` carries `?v=` plus the first 8 hex digits of the
-  image's SHA-256, so previews cached by URL pick up new or replaced art.
-- The generator prompts, plus the crop and compress recipe, are in
-  `assets/og/guides/PROMPTS.md`. `TestGuidePromptsCoverCatalog` fails when a
-  catalog guide has no `### <slug>` section there, so **a new guide needs a
-  prompt section** naming its output path.
-
-## Deliberate limits` below),
+tags from the generic site fallback (see `## Deliberate limits` below),
 but its JSON-LD is real and per-workshop, using schema.org's
 `EventCancelled` status — the field schema.org designed specifically so a
 search result can say "this was scheduled and got canceled" rather than
@@ -428,6 +410,24 @@ per eligible workshop, server-side, at request time.
   `Site.Invalidate` alongside the other two caches. Served with
   `Cache-Control: public, max-age=3600`, a strong `ETag`
   (SHA-256 of the PNG bytes), and `304` on a matching `If-None-Match`.
+
+## Guide unfurl images (`#0709`)
+
+A guide's `og:image` is `/guides/{slug}/og.png`. When a hand-made image exists
+at `internal/seo/cardassets/guides/<slug>.png`, that URL serves it (and so does
+`Site.GuideCard`, the Bluesky post thumbnail); otherwise it serves the
+generated title card. Images can land one at a time.
+
+- Each image must be a **1200×630 PNG of at most 1,000,000 bytes** (Bluesky's
+  thumbnail limit) named for a catalog slug. The images are embedded, and the
+  loader panics at startup on a violation; `TestGuideArt_EmbeddedSetIsValid`
+  catches it first.
+- With art present, `og:image` carries `?v=` plus the first 8 hex digits of the
+  image's SHA-256, so previews cached by URL pick up new or replaced art.
+- The generator prompts, plus the crop and compress recipe, are in
+  `assets/og/guides/PROMPTS.md`. `TestGuidePromptsCoverCatalog` fails when a
+  catalog guide has no `### <slug>` section there, so **a new guide needs a
+  prompt section** naming its output path.
 
 ## Deliberate limits
 
