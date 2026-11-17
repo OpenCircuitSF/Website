@@ -2,7 +2,10 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"log"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +18,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/api"
 	"github.com/brennanMKE/OpenCircuitSF/internal/api/apitest"
 	"github.com/brennanMKE/OpenCircuitSF/internal/apitokens"
+	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/media"
 )
 
@@ -190,5 +194,61 @@ func TestV1ListMedia_NewestFirstPaged(t *testing.T) {
 	page = v1Decode[api.List[mediaFileV1]](t, rec)
 	if len(page.Items) != 1 || page.Items[0].Name != "a.png" || page.NextCursor != nil {
 		t.Fatalf("page 2 = %+v", page)
+	}
+}
+
+// TestV1MediaUpload_TicketNeverLoggedOrAudited (#0705 review): across a
+// mint, a wrong-secret attempt, a HEIC refusal and a successful upload, the
+// ticket secret reaches no slog/log line and not the audit row; the audit
+// row is media.image_uploaded with a null actor, attributed to the minting
+// API key.
+func TestV1MediaUpload_TicketNeverLoggedOrAudited(t *testing.T) {
+	pool := adminMediaTestPool(t)
+	var buf bytes.Buffer
+	prevSlog, prevOut := slog.Default(), log.Writer()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	log.SetOutput(&buf)
+	t.Cleanup(func() {
+		slog.SetDefault(prevSlog)
+		log.SetOutput(prevOut)
+	})
+
+	f := newMediaV1Fixture(t, t.TempDir())
+	f.m.auditor = audit.New(pool)
+	tk := f.mint(t)
+	if rec := f.sendUpload(t, tk.UploadURL, tk.UploadToken+"x", buildTestPNG(4, 4, false), "a.png"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong secret: %d", rec.Code)
+	}
+	heic := make([]byte, 20)
+	heic[3] = 20
+	copy(heic[4:8], "ftyp")
+	copy(heic[8:12], "heic")
+	other := f.mint(t)
+	if rec := f.sendUpload(t, other.UploadURL, other.UploadToken, heic, "x.heic"); rec.Code != http.StatusUnsupportedMediaType || strings.Contains(rec.Body.String(), other.UploadToken) {
+		t.Fatalf("HEIC: %d %s", rec.Code, rec.Body)
+	}
+	rec := f.sendUpload(t, tk.UploadURL, tk.UploadToken, buildTestPNG(4, 4, true), "a.png")
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), tk.UploadToken) {
+		t.Fatalf("upload: %d %s", rec.Code, rec.Body)
+	}
+	for _, s := range []string{tk.UploadToken, other.UploadToken} {
+		if strings.Contains(buf.String(), s) {
+			t.Fatalf("ticket secret was logged: %s", buf.String())
+		}
+	}
+
+	ctx := context.Background()
+	var n int
+	var actorNull bool
+	var meta, tokID string
+	if err := pool.QueryRow(ctx, `SELECT count(*) OVER (), actor_id IS NULL, metadata::text, metadata->'api_token'->>'id'
+		FROM audit_log WHERE action = $1`, audit.ActionMediaImageUploaded).Scan(&n, &actorNull, &meta, &tokID); err != nil {
+		t.Fatalf("audit row: %v", err)
+	}
+	if n != 1 || !actorNull || tokID != "1" {
+		t.Fatalf("audit: count %d, actor null %v, api_token.id %q, meta %s", n, actorNull, tokID, meta)
+	}
+	if strings.Contains(meta, tk.UploadToken) || strings.Contains(meta, strings.TrimPrefix(tk.UploadToken, "oup_")) {
+		t.Fatalf("ticket secret in audit metadata: %s", meta)
 	}
 }
