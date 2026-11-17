@@ -239,9 +239,21 @@ func (h *AdminOutreachHandler) ResultsForWorkshop(w http.ResponseWriter, r *http
 	if !ok {
 		return
 	}
-	wk, ok := h.loadWorkshop(w, r, id)
-	if !ok {
+	v, err := h.resultsFor(r.Context(), id)
+	if err != nil {
+		writeOutreachError(w, "results for workshop", err)
 		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+// resultsFor is ResultsForWorkshop without the transport, shared with the
+// v1 get_outreach_results op (#0698). Only a missing event or a store error
+// is an error; a ShortLinks failure is reported in the view's status.
+func (h *AdminOutreachHandler) resultsFor(ctx context.Context, id int64) (outreachResultsView, error) {
+	wk, err := h.workshopFor(ctx, id)
+	if err != nil {
+		return outreachResultsView{}, err
 	}
 	v := outreachResultsView{
 		Workshop: outreachWorkshopView{ID: wk.ID, Slug: wk.Slug, Title: wk.Title, Status: wk.Status, StartsAt: rfc3339(wk.StartsAt)},
@@ -251,22 +263,19 @@ func (h *AdminOutreachHandler) ResultsForWorkshop(w http.ResponseWriter, r *http
 	for _, c := range outreach.Channels() {
 		v.Channels = append(v.Channels, resultsChannelView{Name: c.Name, Label: c.Label})
 	}
-	o, err := h.store.GetByWorkshop(r.Context(), id)
+	o, err := h.store.GetByWorkshop(ctx, id)
 	switch {
 	case err == nil:
 	case errors.Is(err, outreach.ErrNotFound):
 		v.Status = resultsNotStarted
 		h.hideDisabledChannels(&v)
-		writeJSON(w, http.StatusOK, v)
-		return
+		return v, nil
 	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreachResultsView{}, err
 	}
-	posts, err := h.store.ListPosts(r.Context(), o.ID)
+	posts, err := h.store.ListPosts(ctx, o.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreachResultsView{}, err
 	}
 	posts = sortPostsForDisplay(posts)
 	slug := o.CampaignSlug
@@ -288,14 +297,13 @@ func (h *AdminOutreachHandler) ResultsForWorkshop(w http.ResponseWriter, r *http
 			}
 		}
 	}
-	if !h.fillEngagement(w, r, &v, posts, o.ID) {
-		return
+	if err := h.fillEngagement(ctx, &v, posts, o.ID); err != nil {
+		return outreachResultsView{}, err
 	}
 
-	allLinks, err := h.flyers.ListAllFlyerLinks(r.Context())
+	allLinks, err := h.flyers.ListAllFlyerLinks(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreachResultsView{}, err
 	}
 	var ownLinks []outreach.FlyerLink
 	for _, l := range allLinks {
@@ -313,16 +321,14 @@ func (h *AdminOutreachHandler) ResultsForWorkshop(w http.ResponseWriter, r *http
 		v.Status = resultsNotConfigured
 		v.FlyerAllStatus = resultsNotConfigured
 		h.hideDisabledChannels(&v)
-		writeJSON(w, http.StatusOK, v)
-		return
+		return v, nil
 	}
-	rollup, fetchedAt, err := h.statsCache().Get(r.Context(), o.CampaignSlug, from, to)
+	rollup, fetchedAt, err := h.statsCache().Get(ctx, o.CampaignSlug, from, to)
 	if err != nil {
 		v.Status = classifyResultsError("results for workshop", err)
 		v.FlyerAllStatus = v.Status
 		h.hideDisabledChannels(&v)
-		writeJSON(w, http.StatusOK, v)
-		return
+		return v, nil
 	}
 	res := outreach.BuildResults(posts, rollup)
 	flyerClicks := outreach.FlyerClicksByKey(ownLinks, rollup)
@@ -339,7 +345,7 @@ func (h *AdminOutreachHandler) ResultsForWorkshop(w http.ResponseWriter, r *http
 	// Flyer links are not posts, so BuildResults counted their clicks as
 	// unmatched; they are matched now.
 	res.UnmatchedClicks = max(0, res.UnmatchedClicks-flyerTotal)
-	v.FlyerAllStatus = h.flyerAllWorkshops(r.Context(), v.FlyerLocations, allLinks, now)
+	v.FlyerAllStatus = h.flyerAllWorkshops(ctx, v.FlyerLocations, allLinks, now)
 	atLocation := map[int64]map[int64]bool{}
 	for _, l := range allLinks {
 		if atLocation[l.LocationID] == nil {
@@ -381,22 +387,20 @@ func (h *AdminOutreachHandler) ResultsForWorkshop(w http.ResponseWriter, r *http
 		v.Series = append(v.Series, resultsSeriesView{ID: s.ID, Label: s.Label, Channels: chs, IsOther: s.IsOther, Days: days})
 	}
 	h.hideDisabledChannels(&v)
-	writeJSON(w, http.StatusOK, v)
+	return v, nil
 }
 
 // fillEngagement adds each post's latest snapshot, the channel and workshop
 // reaction totals, and the mentions feed (#0547). It runs before any
-// ShortLinks call, because none of it depends on ShortLinks. It writes the
-// 500 itself and returns false on a store error.
-func (h *AdminOutreachHandler) fillEngagement(w http.ResponseWriter, r *http.Request, v *outreachResultsView, posts []outreach.Post, outreachID int64) bool {
+// ShortLinks call, because none of it depends on ShortLinks.
+func (h *AdminOutreachHandler) fillEngagement(ctx context.Context, v *outreachResultsView, posts []outreach.Post, outreachID int64) error {
 	ids := make([]int64, 0, len(posts))
 	for _, p := range posts {
 		ids = append(ids, p.ID)
 	}
-	latest, err := h.store.LatestEngagement(r.Context(), ids)
+	latest, err := h.store.LatestEngagement(ctx, ids)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return false
+		return err
 	}
 	var total outreach.Counts
 	haveTotal := false
@@ -418,13 +422,12 @@ func (h *AdminOutreachHandler) fillEngagement(w http.ResponseWriter, r *http.Req
 	if haveTotal {
 		v.Reactions = toReactions(total)
 	}
-	mentions, err := h.store.ListMentionsForOutreach(r.Context(), outreachID, maxResultsMentions)
+	mentions, err := h.store.ListMentionsForOutreach(ctx, outreachID, maxResultsMentions)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return false
+		return err
 	}
 	v.Mentions = toMentionViews(mentions)
-	return true
+	return nil
 }
 
 func outreachUTCDate(t time.Time) time.Time {
@@ -458,25 +461,39 @@ type resultsSummaryRow struct {
 // first rejected or unreachable answer it is not asked again, so one dead
 // upstream costs one timeout rather than one per row.
 func (h *AdminOutreachHandler) ResultsSummary(w http.ResponseWriter, r *http.Request) {
-	sums, err := h.store.ListSummaries(r.Context())
+	v, err := h.resultsSummary(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	totals, err := h.store.ReactionTotalsByOutreach(r.Context())
+	writeJSON(w, http.StatusOK, map[string]any{"status": v.Status, "rows": v.Rows, "mentions": v.Mentions, "enabled_channels": v.EnabledChannels})
+}
+
+// resultsSummaryView is ResultsSummary's body.
+type resultsSummaryView struct {
+	Status          string              `json:"status"`
+	Rows            []resultsSummaryRow `json:"rows"`
+	Mentions        []mentionView       `json:"mentions"`
+	EnabledChannels []string            `json:"enabled_channels"`
+}
+
+// resultsSummary is ResultsSummary without the transport (#0698).
+func (h *AdminOutreachHandler) resultsSummary(ctx context.Context) (resultsSummaryView, error) {
+	sums, err := h.store.ListSummaries(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return resultsSummaryView{}, err
 	}
-	recent, err := h.store.ListRecentMentions(r.Context(), maxSummaryMentions)
+	totals, err := h.store.ReactionTotalsByOutreach(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return resultsSummaryView{}, err
 	}
-	postsBy, err := h.postsByOutreach(r.Context(), sums)
+	recent, err := h.store.ListRecentMentions(ctx, maxSummaryMentions)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return resultsSummaryView{}, err
+	}
+	postsBy, err := h.postsByOutreach(ctx, sums)
+	if err != nil {
+		return resultsSummaryView{}, err
 	}
 	status := resultsOK
 	if !h.linksEnabled() {
@@ -522,7 +539,7 @@ func (h *AdminOutreachHandler) ResultsSummary(w http.ResponseWriter, r *http.Req
 		case stopped != "":
 			row.Status = stopped
 		default:
-			row.Status = h.summaryClicks(r.Context(), &row, s, now)
+			row.Status = h.summaryClicks(ctx, &row, s, now)
 			if row.Status == resultsUnreachable || row.Status == resultsRejected {
 				stopped = row.Status
 				if status == resultsOK {
@@ -532,7 +549,7 @@ func (h *AdminOutreachHandler) ResultsSummary(w http.ResponseWriter, r *http.Req
 		}
 		rows = append(rows, row)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": status, "rows": rows, "mentions": toMentionViews(recent), "enabled_channels": h.enabledChannelNames()})
+	return resultsSummaryView{Status: status, Rows: rows, Mentions: toMentionViews(recent), EnabledChannels: h.enabledChannelNames()}, nil
 }
 
 // summaryClicks fills row.Clicks from the campaign's rollup and returns the

@@ -533,6 +533,10 @@ curl -s -X POST $B/cadence-rules \
 - **`mark_outreach_post_posted`**, `POST /outreach-posts/{id}/posted`: records a hand post, with an optional `remote_url`.
 - **`unmark_outreach_post_posted`**, `POST /outreach-posts/{id}/unmark`: takes back a mark-posted; `409` for a post the site sent.
 - **`takedown_outreach_post`**, `POST /outreach-posts/{id}/takedown`: destructive and public; deletes the post from its network and returns it to draft. Safe to retry; `503` when the network refuses.
+- **`get_outreach_results`**, `GET /events/{id}/outreach/results`: clicks per post and channel, each post's latest likes/reposts/replies/quotes, flyers and mentions. Always `200` for a known event; `status` says whether the clicks are real (`ok`, `not_configured`, `not_started`, `campaign_missing`, `rejected`, `unreachable`).
+- **`outreach_results_summary`**, `GET /outreach/results`: one row per event with outreach (posts, clicks, reactions) plus recent mentions; `status` as above.
+- **`outreach_timeline`**, `GET /outreach/timeline`: published events starting in the next 30 days with their outreach and posts; no network call.
+- **`outreach_luma`**, `GET /outreach/luma`: each upcoming event against the Luma calendar (`on_luma`, `differs` with the fields, `not_on_luma`) and unmatched Luma events; `status` is `off`, `ok` or a failure.
 
 ### Media (`media:read`, `media:write`)
 

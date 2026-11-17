@@ -147,6 +147,10 @@ for DESTRUCTIVE, and `readOnlyHint` for every read.
 | | `mark_outreach_post_posted` |  | `outreach:write` | |
 | | `unmark_outreach_post_posted` |  | `outreach:write` | |
 | | `takedown_outreach_post` | DESTRUCTIVE, PUBLIC | `outreach:write` | |
+| | `get_outreach_results` | | `outreach:read` | |
+| | `outreach_results_summary` | | `outreach:read` | |
+| | `outreach_timeline` | | `outreach:read` | |
+| | `outreach_luma` | | `outreach:read` | |
 | Media | `create_media_upload` | | `media:write` | |
 | | `list_media` | | `media:read` | |
 | Engagement | `get_engagement` | | `engagement:read` | |

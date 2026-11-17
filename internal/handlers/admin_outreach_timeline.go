@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -33,12 +34,26 @@ type outreachTimelineEvent struct {
 // thumbnail check, unlike the panel), so the home stays fast and survives an
 // outage.
 func (h *AdminOutreachHandler) Timeline(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	now := h.now()
-	upcoming, _, err := h.ws.ListVisible(ctx, now)
+	v, err := h.timeline(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"now": v.Now, "events": v.Events})
+}
+
+// outreachTimelineView is Timeline's body.
+type outreachTimelineView struct {
+	Now    string                  `json:"now"`
+	Events []outreachTimelineEvent `json:"events"`
+}
+
+// timeline is Timeline without the transport (#0698).
+func (h *AdminOutreachHandler) timeline(ctx context.Context) (outreachTimelineView, error) {
+	now := h.now()
+	upcoming, _, err := h.ws.ListVisible(ctx, now)
+	if err != nil {
+		return outreachTimelineView{}, err
 	}
 	limit := now.Add(timelineWindow)
 	var picked []workshops.Workshop
@@ -50,8 +65,7 @@ func (h *AdminOutreachHandler) Timeline(w http.ResponseWriter, r *http.Request) 
 	}
 	sums, err := h.store.ListSummaries(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreachTimelineView{}, err
 	}
 	byWorkshop := map[int64]outreach.Summary{}
 	for _, wk := range picked {
@@ -67,8 +81,7 @@ func (h *AdminOutreachHandler) Timeline(w http.ResponseWriter, r *http.Request) 
 	}
 	postsBy, err := h.store.ListPostsByOutreach(ctx, ids)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreachTimelineView{}, err
 	}
 	events := make([]outreachTimelineEvent, 0, len(picked))
 	for _, wk := range picked {
@@ -87,5 +100,5 @@ func (h *AdminOutreachHandler) Timeline(w http.ResponseWriter, r *http.Request) 
 		}
 		events = append(events, ev)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"now": now.UTC().Format(time.RFC3339), "events": events})
+	return outreachTimelineView{Now: now.UTC().Format(time.RFC3339), Events: events}, nil
 }

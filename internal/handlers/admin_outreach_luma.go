@@ -73,24 +73,30 @@ func lumaWorkshopFor(wk workshops.Workshop) luma.Workshop {
 // calls Luma. It is a route of its own, apart from Timeline, because Timeline
 // makes no network call and must stay fast when Luma is slow or down.
 func (h *AdminOutreachHandler) Luma(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	view, err := h.lumaReport(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+// lumaReport is Luma without the transport (#0698).
+func (h *AdminOutreachHandler) lumaReport(ctx context.Context) (outreachLumaView, error) {
 	view := outreachLumaView{Status: luma.StatusOff, Events: []outreachLumaEventView{}, Leftovers: []outreachLumaLeftoverView{}}
 	if h.luma == nil {
-		writeJSON(w, http.StatusOK, view)
-		return
+		return view, nil
 	}
 	snap := h.luma.Feed(ctx)
 	view.Status, view.LastGoodAt = snap.Status, rfc3339OrNil(snap.LastGoodAt)
 	if snap.Status != luma.StatusOK {
-		writeJSON(w, http.StatusOK, view)
-		return
+		return view, nil
 	}
 	view.ReadAt = rfc3339OrNil(snap.ReadAt)
 	now := h.now()
 	upcoming, _, err := h.ws.ListVisible(ctx, now)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreachLumaView{}, err
 	}
 	var list []luma.Workshop
 	for _, wk := range upcoming {
@@ -110,5 +116,5 @@ func (h *AdminOutreachHandler) Luma(w http.ResponseWriter, r *http.Request) {
 	for _, e := range left {
 		view.Leftovers = append(view.Leftovers, outreachLumaLeftoverView{Title: e.Summary, StartsAt: e.Start.UTC().Format(time.RFC3339), LumaURL: strOrNil(e.URL)})
 	}
-	writeJSON(w, http.StatusOK, view)
+	return view, nil
 }

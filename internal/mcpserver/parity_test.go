@@ -72,6 +72,10 @@ var specTools = map[string]string{
 	"mark_outreach_post_posted":   "#0701",
 	"unmark_outreach_post_posted": "#0701",
 	"takedown_outreach_post":      "#0701",
+	"get_outreach_results":        "#0698",
+	"outreach_results_summary":    "#0698",
+	"outreach_timeline":           "#0698",
+	"outreach_luma":               "#0698",
 	"create_media_upload":         "#0705",
 	"list_media":                  "#0705",
 }
