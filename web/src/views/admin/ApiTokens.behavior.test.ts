@@ -107,21 +107,33 @@ describe('ApiTokens (#0652)', () => {
     expect(days).toBeLessThan(90.01);
   });
 
-  it('the Agent preset ticks every guide and event scope and Never sends null', async () => {
+  it('the Agent preset ticks every scope and Never sends null', async () => {
     listApiTokens.mockResolvedValue({ tokens: [] });
     createApiToken.mockResolvedValue({ token: tok(), secret: SECRET });
     render(ApiTokensView);
     await screen.findByText('No API tokens yet.');
     await fireEvent.input(screen.getByLabelText('Name'), { target: { value: 'Claude Code' } });
-    await fireEvent.click(screen.getByRole('button', { name: 'Agent (all guide and event scopes)' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Agent (every scope)' }));
     expect((screen.getByLabelText(/Write events/) as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByLabelText(/Read engagement/) as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByLabelText(/Read engagement/) as HTMLInputElement).checked).toBe(true);
     await fireEvent.change(screen.getByLabelText('Expires'), { target: { value: 'never' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Create token' }));
     await waitFor(() =>
       expect(createApiToken).toHaveBeenCalledWith(
         'Claude Code',
-        ['guides:read', 'guide_posts:read', 'guide_posts:write', 'events:read', 'events:write', 'venues:read'],
+        [
+          'engagement:read',
+          'guides:read',
+          'guide_posts:read',
+          'guide_posts:write',
+          'events:read',
+          'events:write',
+          'venues:read',
+          'outreach:read',
+          'outreach:write',
+          'media:read',
+          'media:write',
+        ],
         null,
       ),
     );

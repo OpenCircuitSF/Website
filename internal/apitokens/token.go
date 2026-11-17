@@ -46,9 +46,17 @@ const (
 	ScopeEventsWrite = "events:write"
 	// ScopeVenuesRead lets a token read venues.
 	ScopeVenuesRead = "venues:read"
+	// ScopeOutreachRead lets a token read outreach (#0696).
+	ScopeOutreachRead = "outreach:read"
+	// ScopeOutreachWrite lets a token change outreach (#0696).
+	ScopeOutreachWrite = "outreach:write"
+	// ScopeMediaRead lets a token read media (#0696).
+	ScopeMediaRead = "media:read"
+	// ScopeMediaWrite lets a token upload and change media (#0696).
+	ScopeMediaWrite = "media:write"
 )
 
-// KnownScopes is every scope a token may carry. migrations/000053's
+// KnownScopes is every scope a token may carry. the latest scopes migration's (000056)
 // api_tokens_scopes_check array must hold exactly this set (internal/db's
 // TestAPITokenScopesMatchMigration).
 var KnownScopes = []string{
@@ -59,6 +67,10 @@ var KnownScopes = []string{
 	ScopeEventsRead,
 	ScopeEventsWrite,
 	ScopeVenuesRead,
+	ScopeOutreachRead,
+	ScopeOutreachWrite,
+	ScopeMediaRead,
+	ScopeMediaWrite,
 }
 
 var (

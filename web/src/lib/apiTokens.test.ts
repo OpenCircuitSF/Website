@@ -3,6 +3,7 @@ import { formatDateTime } from './admin';
 import {
   AGENT_PRESET,
   KNOWN_SCOPES,
+  READONLY_PRESET,
   expiresLabel,
   expiryFromChoice,
   isExpired,
@@ -46,7 +47,7 @@ describe('apiTokens (#0652)', () => {
 
 describe('apiTokens v2 (#0674)', () => {
   const now = new Date('2026-11-15T12:00:00Z');
-  it('knows the seven scopes the server knows', () => {
+  it('knows the eleven scopes the server knows', () => {
     expect(KNOWN_SCOPES).toEqual([
       'engagement:read',
       'guides:read',
@@ -55,6 +56,10 @@ describe('apiTokens v2 (#0674)', () => {
       'events:read',
       'events:write',
       'venues:read',
+      'outreach:read',
+      'outreach:write',
+      'media:read',
+      'media:write',
     ]);
   });
   // #0682: internal/db's TestAPITokenScopesMatchWeb ties the SCOPE_*
@@ -68,10 +73,15 @@ describe('apiTokens v2 (#0674)', () => {
     expect([...KNOWN_SCOPES].sort()).toEqual([...new Set(constants)].sort());
     expect(new Set(KNOWN_SCOPES).size).toBe(KNOWN_SCOPES.length);
   });
-  it('the Agent preset is every guide and event scope, not engagement', () => {
-    expect(AGENT_PRESET).not.toContain('engagement:read');
-    expect(AGENT_PRESET).toContain('guide_posts:write');
-    expect(AGENT_PRESET).toContain('events:write');
+  it('the Agent preset is every known scope, including engagement', () => {
+    expect(AGENT_PRESET).toEqual(KNOWN_SCOPES);
+    expect(AGENT_PRESET).toContain('engagement:read');
+    expect(AGENT_PRESET).toContain('media:write');
+  });
+  it('the Read-only preset is every read scope', () => {
+    expect(READONLY_PRESET).toEqual(KNOWN_SCOPES.filter((s) => s.endsWith(':read')));
+    expect(READONLY_PRESET).toContain('outreach:read');
+    expect(READONLY_PRESET.some((s) => s.endsWith(':write'))).toBe(false);
   });
   it('labels write scopes', () => {
     expect(scopeLabel('events:write')).toBe('Write events');

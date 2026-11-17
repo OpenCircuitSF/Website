@@ -11,6 +11,7 @@
   import { listApiTokens, createApiToken, revokeApiToken, ApiError } from '../../lib/api';
   import {
     AGENT_PRESET,
+    READONLY_PRESET,
     DEFAULT_EXPIRY,
     EXPIRY_OPTIONS,
     SCOPE_GROUPS,
@@ -107,6 +108,10 @@
     scopes = [...AGENT_PRESET];
   }
 
+  function applyReadOnlyPreset(): void {
+    scopes = [...READONLY_PRESET];
+  }
+
   function done(): void {
     secret = null;
     copied = false;
@@ -171,7 +176,8 @@
       {/if}
       <fieldset class="tok-scopes">
         <legend>Scopes</legend>
-        <Button onclick={applyAgentPreset}>Agent (all guide and event scopes)</Button>
+        <Button onclick={applyAgentPreset}>Agent (every scope)</Button>
+        <Button onclick={applyReadOnlyPreset}>Read-only</Button>
         {#each SCOPE_GROUPS as g (g.resource)}
           <div class="tok-scope-group" role="group" aria-label={g.resource}>
             <span class="tok-scope-resource">{g.resource}</span>

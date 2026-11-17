@@ -11,6 +11,10 @@ export const SCOPE_GUIDE_POSTS_WRITE = 'guide_posts:write';
 export const SCOPE_EVENTS_READ = 'events:read';
 export const SCOPE_EVENTS_WRITE = 'events:write';
 export const SCOPE_VENUES_READ = 'venues:read';
+export const SCOPE_OUTREACH_READ = 'outreach:read';
+export const SCOPE_OUTREACH_WRITE = 'outreach:write';
+export const SCOPE_MEDIA_READ = 'media:read';
+export const SCOPE_MEDIA_WRITE = 'media:write';
 
 export interface ScopeGroup {
   resource: string;
@@ -36,20 +40,30 @@ export const SCOPE_GROUPS: ScopeGroup[] = [
     ],
   },
   { resource: 'Venues', scopes: [{ scope: SCOPE_VENUES_READ, label: 'Read venues' }] },
+  {
+    resource: 'Outreach',
+    scopes: [
+      { scope: SCOPE_OUTREACH_READ, label: 'Read outreach' },
+      { scope: SCOPE_OUTREACH_WRITE, label: 'Write outreach' },
+    ],
+  },
+  {
+    resource: 'Media',
+    scopes: [
+      { scope: SCOPE_MEDIA_READ, label: 'Read media' },
+      { scope: SCOPE_MEDIA_WRITE, label: 'Write media' },
+    ],
+  },
 ];
 
 /** Every known scope, in SCOPE_GROUPS order. */
 export const KNOWN_SCOPES: string[] = SCOPE_GROUPS.flatMap((g) => g.scopes.map((s) => s.scope));
 
-/** "Agent (all guide and event scopes)": what an MCP client needs. */
-export const AGENT_PRESET: string[] = [
-  SCOPE_GUIDES_READ,
-  SCOPE_GUIDE_POSTS_READ,
-  SCOPE_GUIDE_POSTS_WRITE,
-  SCOPE_EVENTS_READ,
-  SCOPE_EVENTS_WRITE,
-  SCOPE_VENUES_READ,
-];
+/** "Agent (every scope)": what an MCP client needs (#0696). */
+export const AGENT_PRESET: string[] = [...KNOWN_SCOPES];
+
+/** "Read-only": every read scope (#0696). */
+export const READONLY_PRESET: string[] = KNOWN_SCOPES.filter((s) => s.endsWith(':read'));
 
 /** A readable label for a scope; an unknown scope is shown as itself. */
 export function scopeLabel(scope: string): string {
