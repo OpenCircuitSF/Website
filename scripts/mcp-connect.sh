@@ -9,6 +9,11 @@
 # "Agent (every scope)" or "Read-only". Copy it, run this script, and paste
 # it when asked (input is hidden). Re-run any time to replace the key.
 #
+# Environment:
+#   OCSF_MCP_URL          server URL (default https://www.opencircuitsf.com/mcp)
+#   OCSF_API_KEY          the key itself; skips the hidden prompt
+#   OCSF_SKIP_KEY_CHECK=1 skip the live whoami check before saving the key
+#
 # User scope (~/.claude.json) is inherited by every Claude Code or Agent SDK
 # process this OS user runs. A local-scope entry for an agent's working
 # directory overrides it there, so that agent can have its own key

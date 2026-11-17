@@ -846,9 +846,13 @@ func TestTracker_GuideSourceIsPolledAndRecorded(t *testing.T) {
 		t.Errorf("pass summary missing or wrong:\n%s", buf.String())
 	}
 
+	b1, b2 := len(g.recorded[ev.ID]), len(g.recorded[ev.ID+1_000_000])
+	if b1 == 0 || b2 == 0 {
+		t.Fatalf("first pass captured nothing (%d, %d); the second-pass check cannot run", b1, b2)
+	}
 	tr.pass(ctx)
-	if len(g.recorded[ev.ID]) != 1 || len(g.recorded[ev.ID+1_000_000]) != 1 {
-		t.Error("a second immediate pass captured a guide post again")
+	if a1, a2 := len(g.recorded[ev.ID]), len(g.recorded[ev.ID+1_000_000]); a1 != b1 || a2 != b2 {
+		t.Errorf("a second immediate pass captured a guide post again (before %d/%d, after %d/%d)", b1, b2, a1, a2)
 	}
 }
 

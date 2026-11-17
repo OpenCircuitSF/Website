@@ -48,7 +48,10 @@ func TestV1OutreachResults_ForEvent(t *testing.T) {
 	if _, err := e.pool.Exec(ctx, `UPDATE outreach_posts SET status='posted', posted_at=now() WHERE id=$1`, bsky); err != nil {
 		t.Fatal(err)
 	}
-	store.RecordEngagement(ctx, bsky, time.Now(), outreach.Counts{Likes: 4, Reposts: 2, Replies: 1, Quotes: 3})
+	if err := store.RecordEngagement(ctx, bsky, time.Now(), outreach.Counts{Likes: 4, Reposts: 2, Replies: 1, Quotes: 3}); err != nil {
+		t.Fatal(err)
+	}
+	seedPacificMention(t, store, bsky, "at://mention-0708")
 	e.links.statsRollup = &shortlinks.CampaignRollup{
 		ClickCount: 9, WindowFrom: "2026-10-01", WindowTo: "2026-10-17",
 		ByLink: []shortlinks.LinkBucket{{Key: "k1", Count: 7}, {Key: "k2", Count: 2}},
@@ -84,6 +87,7 @@ func TestV1OutreachResults_ForEvent(t *testing.T) {
 	if !found {
 		t.Fatalf("bluesky post missing: %s", b)
 	}
+	assertPacificMention(t, r.Mentions, bsky, b)
 	e.v1(t, http.MethodGet, "/api/v1/events/999999999/outreach/results", e.read, "", http.StatusNotFound)
 
 }
@@ -103,7 +107,9 @@ func TestV1OutreachResults_ShortLinksFailureIsAStatus(t *testing.T) {
 
 func TestV1OutreachResults_Summary(t *testing.T) {
 	e := newV1OutreachResultsEnv(t, true)
-	w, _ := e.seedResultsOutreach(t)
+	w, panel := e.seedResultsOutreach(t)
+	mentioned := panel.Posts[0].ID
+	seedPacificMention(t, outreach.NewStore(e.pool), mentioned, "at://mention-0708-summary")
 	e.links.statsRollup = &shortlinks.CampaignRollup{ClickCount: 5}
 	e.v1(t, http.MethodGet, "/api/v1/outreach/results", e.write, "", http.StatusForbidden)
 	b := e.v1(t, http.MethodGet, "/api/v1/outreach/results", e.read, "", http.StatusOK)
@@ -112,6 +118,7 @@ func TestV1OutreachResults_Summary(t *testing.T) {
 	if err := json.Unmarshal(b, &v); err != nil {
 		t.Fatal(err)
 	}
+	assertPacificMention(t, v.Mentions, mentioned, b)
 	for _, row := range v.Rows {
 		if row.WorkshopID == w.ID {
 			if row.StartsAt == nil || !strings.HasSuffix(*row.StartsAt, "-08:00") || row.Clicks == nil || *row.Clicks != 5 {
@@ -170,5 +177,34 @@ func TestV1OutreachResults_Luma(t *testing.T) {
 	}
 	if v.ReadAt == nil || *v.ReadAt != "2026-11-05T10:00:00-08:00" || len(v.Leftovers) != 1 || v.Leftovers[0].StartsAt != "2026-11-08T10:00:00-08:00" {
 		t.Errorf("luma = %s", b)
+	}
+}
+
+// seedPacificMention inserts a reply mention created at 20:00 UTC on
+// 2026-11-10, which is 12:00 Pacific (#0708).
+func seedPacificMention(t *testing.T, store *outreach.Store, postID int64, remoteID string) {
+	t.Helper()
+	pid := postID
+	if _, err := store.InsertMention(context.Background(), outreach.Mention{
+		Channel: "bluesky", RemoteID: remoteID, Kind: "reply", Author: "a.test", Text: "hi",
+		PostID: &pid, CreatedAt: time.Date(2026, 11, 10, 20, 0, 0, 0, time.UTC), FetchedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// assertPacificMention: exactly one mention on postID, with its created_at
+// in Pacific. The summary feed spans every workshop, so other tests' mentions
+// may sit beside it.
+func assertPacificMention(t *testing.T, ms []mentionView, postID int64, body []byte) {
+	t.Helper()
+	var mine []mentionView
+	for _, m := range ms {
+		if m.PostID != nil && *m.PostID == postID {
+			mine = append(mine, m)
+		}
+	}
+	if len(mine) != 1 || mine[0].CreatedAt != "2026-11-10T12:00:00-08:00" {
+		t.Errorf("mentions on post %d = %+v (body %s)", postID, mine, body)
 	}
 }

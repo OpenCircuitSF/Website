@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/api"
+	"github.com/brennanMKE/OpenCircuitSF/internal/api/apitest"
 	"github.com/brennanMKE/OpenCircuitSF/internal/apitokens"
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
@@ -123,7 +124,7 @@ func TestV1OutreachLocations_InUse(t *testing.T) {
 // each path reaches its own operation.
 func TestV1OutreachLocations_RouterHasBothPaths(t *testing.T) {
 	e := newV1OutreachLocationsEnv(t)
-	reg := BuildV1Registry(api.Config{Version: "x", Idempotency: api.NewIdempotencyStore(e.pool)}, V1Deps{})
+	reg := BuildV1Registry(api.Config{Version: "x", Idempotency: api.NewIdempotencyStore(e.pool)}, V1Deps{Outreach: e.h})
 	paths := map[string]bool{}
 	for _, op := range reg.Operations() {
 		paths[op.Method+" "+op.Path] = true
@@ -133,8 +134,20 @@ func TestV1OutreachLocations_RouterHasBothPaths(t *testing.T) {
 			t.Errorf("registry lacks %s", p)
 		}
 	}
-	_ = api.NewHTTPRouter(reg, api.RouterDeps{Resolver: apitokens.NewStore(e.pool), Limiter: middleware.NewAPITokenRateLimiter(), BaseURL: "http://example.test"})
+	full := api.NewHTTPRouter(reg, api.RouterDeps{Resolver: apitokens.NewStore(e.pool), Limiter: middleware.NewAPITokenRateLimiter(), BaseURL: "http://example.test"})
 
-	e.v1(t, http.MethodPost, "/api/v1/outreach/999999999/posts", e.write, `{"channel":"bluesky","wave":"announce"}`, http.StatusNotFound)
-	e.v1(t, http.MethodDelete, "/api/v1/outreach/locations/999999999", e.write, "", http.StatusNotFound)
+	for _, c := range []struct {
+		method, path, body string
+		status             int
+		want               string
+	}{
+		{http.MethodPost, "/api/v1/outreach/999999999/posts", `{"channel":"bluesky","wave":"announce"}`, http.StatusNotFound, "outreach not found"},
+		{http.MethodDelete, "/api/v1/outreach/locations/999999999", "", http.StatusNotFound, "outreach location not found"},
+		{http.MethodGet, "/api/v1/outreach/locations", "", http.StatusOK, ""},
+	} {
+		rec := apitest.Do(t, full, c.method, c.path, e.write, c.body)
+		if rec.Code != c.status || !strings.Contains(rec.Body.String(), c.want) {
+			t.Errorf("%s %s = %d %s, want %d containing %q", c.method, c.path, rec.Code, rec.Body.String(), c.status, c.want)
+		}
+	}
 }

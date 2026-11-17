@@ -885,11 +885,13 @@ web_check() {
 # unformatted Go probe parked there by one agent must not fail every
 # agent's run; the gate's intent is that TRACKED Go code is formatted, and
 # nothing else about it changes — a TRACKED unformatted file fails exactly
-# as before.
+# as before. #0708: .claude/ is filtered the same way, because
+# .claude/worktrees/ holds other agents' whole checkouts, whose in-flight
+# Go files are theirs to format, not this run's.
 gofmt_check() {
   step "gofmt -l (#0161 — formatting drift)"
   local out
-  out="$(gofmt -l . 2>&1 | grep -v '^\.scratch/')"
+  out="$(gofmt -l . 2>&1 | grep -v -e '^\.scratch/' -e '^\.claude/')"
   if [ -n "$out" ]; then
     FAILED=1
     printf '\033[31mFAILED: gofmt -l found unformatted file(s):\033[0m\n%s\n' "$out"

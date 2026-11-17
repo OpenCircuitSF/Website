@@ -464,6 +464,20 @@ else
   fail "REGRESSION #0493: scripts/check.sh did not report a gofmt-only failure honestly. exit=$RC, verdict=$(classify). gofmt_check assigns FAILED=1 directly, not through run() — a stub or removal of that assignment is invisible to every check that only watches run()/runpipe()/accounting_probe. Last lines: $(tail -8 "$OUTFILE" | tr '\n' '|')"
 fi
 
+# #0708: gofmt_check must not walk into .claude/ (other agents' worktrees
+# live under .claude/worktrees/) or .scratch/. Both files below are
+# unformatted; go build ./... skips dot directories, so only gofmt sees them.
+SB="$(mk_iso_sandbox p1b_gofmt_claude "$REAL" 0 0)"
+mkdir -p "$SB/.claude/worktrees/w" "$SB/.scratch"
+printf 'package main\n\nfunc main() {\n  println("ok")\n}\n' > "$SB/.claude/worktrees/w/x.go"
+printf 'package main\n\nfunc main() {\n  println("ok")\n}\n' > "$SB/.scratch/x.go"
+run_case "$SB" go ./...
+if [ "$RC" -eq 0 ] && grep -q 'VERIFICATION PASSED' "$OUTFILE"; then
+  pass "go mode, unformatted Go only under .claude/worktrees/ and .scratch/: VERIFICATION PASSED, exit 0 (#0708)"
+else
+  fail "REGRESSION #0708: gofmt_check flagged a file under .claude/ or .scratch/, which belong to other agents. exit=$RC, verdict=$(classify). Last lines: $(tail -8 "$OUTFILE" | tr '\n' '|')"
+fi
+
 # ---------------------------------------------------------------------------
 echo
 echo "== Part 1c: build mode (#0607) =="
