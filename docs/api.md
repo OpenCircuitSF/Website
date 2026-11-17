@@ -527,6 +527,12 @@ curl -s -X POST $B/cadence-rules \
 - **`draft_event_outreach`**, `POST /events/{id}/outreach/draft-all`: drafts every empty slot in `announce` plus any `waves` named; existing posts are skipped. No ShortLinks call; `409` before outreach starts.
 - **`prepare_outreach_post`**, `POST /outreach-posts/{id}/prepare`: makes the post's tracked link and puts it in the body; repeating it makes no ShortLinks call. `503` when ShortLinks is not configured.
 - **`ensure_outreach_hand_links`**, `POST /events/{id}/outreach/hand-links`: makes every missing link for the hand-posted channels; per-slot failures are listed in `failed`. `503` when ShortLinks is not configured.
+- **`schedule_outreach_wave`**, `POST /events/{id}/outreach/schedule`: public; gives every automatic post of `wave` (`announce`, `reminder`, `last-call`) the same `scheduled_at`, all or nothing; skipped posts are in `left_alone`.
+- **`unschedule_outreach_wave`**, `POST /events/{id}/outreach/unschedule`: puts the wave's scheduled posts back to draft; `409` when none is scheduled.
+- **`send_outreach_post`**, `POST /outreach-posts/{id}/send`: public; queues a prepared post to go out now, or retries a failed one; `202`. `503` when the channel is not configured.
+- **`mark_outreach_post_posted`**, `POST /outreach-posts/{id}/posted`: records a hand post, with an optional `remote_url`.
+- **`unmark_outreach_post_posted`**, `POST /outreach-posts/{id}/unmark`: takes back a mark-posted; `409` for a post the site sent.
+- **`takedown_outreach_post`**, `POST /outreach-posts/{id}/takedown`: destructive and public; deletes the post from its network and returns it to draft. Safe to retry; `503` when the network refuses.
 
 ### Media (`media:read`, `media:write`)
 

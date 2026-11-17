@@ -66,6 +66,12 @@ var specTools = map[string]string{
 	"draft_event_outreach":        "#0700",
 	"prepare_outreach_post":       "#0700",
 	"ensure_outreach_hand_links":  "#0700",
+	"schedule_outreach_wave":      "#0701",
+	"unschedule_outreach_wave":    "#0701",
+	"send_outreach_post":          "#0701",
+	"mark_outreach_post_posted":   "#0701",
+	"unmark_outreach_post_posted": "#0701",
+	"takedown_outreach_post":      "#0701",
 	"create_media_upload":         "#0705",
 	"list_media":                  "#0705",
 }

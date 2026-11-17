@@ -33,7 +33,7 @@ func outreachAPIError(err error) error {
 		return api.NotFound(notFoundWhat(oe.msg))
 	case http.StatusConflict:
 		return api.Conflict(oe.msg)
-	case http.StatusServiceUnavailable:
+	case http.StatusServiceUnavailable, http.StatusBadGateway:
 		return api.Unavailable(oe.msg)
 	case http.StatusBadRequest:
 		field := oe.field

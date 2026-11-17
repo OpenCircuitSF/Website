@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -36,52 +37,67 @@ func parseScheduleAt(raw string, now time.Time) (time.Time, string) {
 	return at.UTC(), ""
 }
 
-// postingGate does the checks Post now and Retry share, writing the
-// response and returning ok=false when one fails. It resolves the post, its
-// workshop and its channel; the channel must be automatic and configured.
-func (h *AdminOutreachHandler) postingGate(w http.ResponseWriter, r *http.Request, id int64) (outreach.Post, workshops.Workshop, outreach.Channel, bool) {
-	p, wk, ok := h.postContext(w, r, id)
-	if !ok {
-		return p, wk, outreach.Channel{}, false
+// postContextCtx loads a post and its workshop without the transport
+// (#0701): not-found is a refusal, any other error is returned as is.
+func (h *AdminOutreachHandler) postContextCtx(ctx context.Context, id int64) (outreach.Post, workshops.Workshop, error) {
+	p, err := h.store.GetPost(ctx, id)
+	if errors.Is(err, outreach.ErrNotFound) {
+		return p, workshops.Workshop{}, outreachRefusal(http.StatusNotFound, "", "post not found")
+	} else if err != nil {
+		return p, workshops.Workshop{}, err
+	}
+	o, err := h.store.GetByID(ctx, p.OutreachID)
+	if err != nil {
+		return p, workshops.Workshop{}, err
+	}
+	wk, err := h.workshopFor(ctx, o.WorkshopID)
+	return p, wk, err
+}
+
+// postingGate does the checks Post now and Retry share, returning a refusal
+// when one fails. It resolves the post, its workshop and its channel; the
+// channel must be automatic and configured.
+func (h *AdminOutreachHandler) postingGate(ctx context.Context, id int64) (outreach.Post, workshops.Workshop, outreach.Channel, error) {
+	p, wk, err := h.postContextCtx(ctx, id)
+	if err != nil {
+		return p, wk, outreach.Channel{}, err
 	}
 	ch, chOK := outreach.ChannelByName(p.Channel)
 	if !chOK || !ch.Automatic {
-		writeError(w, http.StatusBadRequest, "this channel is posted by hand")
-		return p, wk, ch, false
+		return p, wk, ch, outreachRefusal(http.StatusBadRequest, "channel", "this channel is posted by hand")
 	}
 	if !h.channelConfigured(ch.Name) {
-		writeError(w, http.StatusServiceUnavailable, ch.Label+" is not configured")
-		return p, wk, ch, false
+		return p, wk, ch, outreachRefusal(http.StatusServiceUnavailable, "", ch.Label+" is not configured")
 	}
 	if !h.postVisible(p) {
 		// A hidden draft on a switched-off channel (#0588); a post already
 		// scheduled or failed there is still shown, so it can be acted on.
-		writeError(w, http.StatusConflict, ch.Label+" is switched off in Settings")
-		return p, wk, ch, false
+		return p, wk, ch, outreachRefusal(http.StatusConflict, "", ch.Label+" is switched off in Settings")
 	}
 	switch {
 	case p.Status == "posted":
-		writeError(w, http.StatusConflict, "post is already posted")
+		return p, wk, ch, outreachRefusal(http.StatusConflict, "", "post is already posted")
 	case p.Status == "queued":
-		writeError(w, http.StatusConflict, "post is being sent")
+		return p, wk, ch, outreachRefusal(http.StatusConflict, "", "post is being sent")
 	case !p.Prepared():
-		writeError(w, http.StatusConflict, "prepare the post before sending it")
+		return p, wk, ch, outreachRefusal(http.StatusConflict, "", "prepare the post before sending it")
 	case wk.Status != "published":
-		writeError(w, http.StatusConflict, "the event is not published")
-	default:
-		if err := outreach.ValidateForSend(ch, p.Body); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
-			break
-		}
-		return p, wk, ch, true
+		return p, wk, ch, outreachRefusal(http.StatusConflict, "", "the event is not published")
 	}
-	return p, wk, ch, false
+	if err := outreach.ValidateForSend(ch, p.Body); err != nil {
+		return p, wk, ch, outreachRefusal(http.StatusBadRequest, "body", err.Error())
+	}
+	return p, wk, ch, nil
 }
 
-// writePostingStoreError maps a store refusal to a response.
-func writePostingStoreError(w http.ResponseWriter, err error) {
+// postingStoreRefusal turns a store refusal into an outreachOpError; an
+// unrecognised error is returned as is (a 500).
+func postingStoreRefusal(err error) error {
 	code, msg := postingStoreStatus(err)
-	writeError(w, code, msg)
+	if code == http.StatusInternalServerError {
+		return err
+	}
+	return outreachRefusal(code, "", msg)
 }
 
 // postingStoreStatus is the status code and message for a store refusal.
@@ -117,28 +133,31 @@ func (h *AdminOutreachHandler) SendPost(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	_, wk, _, ok := h.postingGate(w, r, id)
-	if !ok {
-		return
-	}
-	queued, prev, err := h.store.QueueNow(r.Context(), id)
+	actorID := actor.ID
+	v, err := h.sendNow(r.Context(), clientIP(r), &actorID, id)
 	if err != nil {
-		writePostingStoreError(w, err)
+		writeOutreachError(w, "send post", err)
 		return
 	}
-	if h.auditor != nil {
-		actorID := actor.ID
-		targetID := queued.ID
-		h.auditor.Record(r.Context(), audit.Entry{
-			ActorID:    &actorID,
-			Action:     audit.ActionOutreachPostQueued,
-			TargetType: audit.TargetOutreachPost,
-			TargetID:   &targetID,
-			Metadata:   map[string]any{"outreach_id": queued.OutreachID, "channel": queued.Channel, "wave": queued.Wave, "retry": prev == "failed"},
-			IP:         clientIP(r),
-		})
+	writeJSON(w, http.StatusAccepted, v)
+}
+
+// sendNow is SendPost without the transport (#0701).
+func (h *AdminOutreachHandler) sendNow(ctx context.Context, ip string, actorID *int64, id int64) (outreachPostView, error) {
+	_, wk, _, err := h.postingGate(ctx, id)
+	if err != nil {
+		return outreachPostView{}, err
 	}
-	writeJSON(w, http.StatusAccepted, h.postView(queued, h.facts(wk), wk.Status))
+	queued, prev, err := h.store.QueueNow(ctx, id)
+	if err != nil {
+		return outreachPostView{}, postingStoreRefusal(err)
+	}
+	h.recordCtx(ctx, ip, audit.TargetOutreachPost, queued.ID, audit.Entry{
+		ActorID:  actorID,
+		Action:   audit.ActionOutreachPostQueued,
+		Metadata: map[string]any{"outreach_id": queued.OutreachID, "channel": queued.Channel, "wave": queued.Wave, "retry": prev == "failed"},
+	})
+	return h.postView(queued, h.facts(wk), wk.Status), nil
 }
 
 type scheduleSectionRequest struct {
@@ -167,28 +186,27 @@ type sectionResponse struct {
 // routes (#0640): the ones a call may act on, and the ones it leaves alone
 // with the reason, both in channel order. anyConnection keeps a channel that
 // is not connected among the targets: the unschedule route passes it, since
-// stopping a post is always safe. ok=false means the response is written.
-func (h *AdminOutreachHandler) sectionTargets(w http.ResponseWriter, r *http.Request, wave string, anyConnection bool) (workshops.Workshop, []outreach.Post, []sectionLeftAlone, bool) {
-	wk, o, ok := h.workshopOutreach(w, r)
-	if !ok {
-		return wk, nil, nil, false
+// stopping a post is always safe.
+func (h *AdminOutreachHandler) sectionTargets(ctx context.Context, workshopID int64, wave string, anyConnection bool) (workshops.Workshop, []outreach.Post, []sectionLeftAlone, error) {
+	wk, err := h.workshopFor(ctx, workshopID)
+	if err != nil {
+		return wk, nil, nil, err
 	}
-	if o == nil {
-		writeError(w, http.StatusConflict, "start outreach first")
-		return wk, nil, nil, false
+	o, err := h.store.GetByWorkshop(ctx, workshopID)
+	if errors.Is(err, outreach.ErrNotFound) {
+		return wk, nil, nil, outreachRefusal(http.StatusConflict, "", "start outreach first")
+	} else if err != nil {
+		return wk, nil, nil, err
 	}
 	if wk.Status != "published" {
-		writeError(w, http.StatusConflict, "the event is not published")
-		return wk, nil, nil, false
+		return wk, nil, nil, outreachRefusal(http.StatusConflict, "", "the event is not published")
 	}
 	if _, ok := outreach.WaveByName(wave); !ok {
-		writeError(w, http.StatusBadRequest, "wave must be one of announce, reminder, last-call")
-		return wk, nil, nil, false
+		return wk, nil, nil, outreachRefusal(http.StatusBadRequest, "wave", "wave must be one of announce, reminder, last-call")
 	}
-	all, err := h.store.ListPosts(r.Context(), o.ID)
+	all, err := h.store.ListPosts(ctx, o.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return wk, nil, nil, false
+		return wk, nil, nil, err
 	}
 	posts := h.enabledPosts(all)
 	targets := []outreach.Post{}
@@ -217,7 +235,7 @@ func (h *AdminOutreachHandler) sectionTargets(w http.ResponseWriter, r *http.Req
 			targets = append(targets, p)
 		}
 	}
-	return wk, targets, left, true
+	return wk, targets, left, nil
 }
 
 // channelLabel is the display name of a channel, or the name itself.
@@ -242,22 +260,24 @@ func (h *AdminOutreachHandler) sectionPostViews(posts []outreach.Post, wk worksh
 	return views
 }
 
-// writeSectionRefusal maps a many-post store refusal to a response that
-// names the channel it was about.
-func writeSectionRefusal(w http.ResponseWriter, err error, targets []outreach.Post) {
+// sectionRefusal maps a many-post store refusal to a refusal that names the
+// channel it was about.
+func sectionRefusal(err error, targets []outreach.Post) error {
 	var pr *outreach.PostRefusal
 	if !errors.As(err, &pr) {
-		writePostingStoreError(w, err)
-		return
+		return postingStoreRefusal(err)
 	}
 	code, msg := postingStoreStatus(pr.Err)
+	if code == http.StatusInternalServerError {
+		return err
+	}
 	for _, p := range targets {
 		if p.ID == pr.PostID {
 			msg = channelLabel(p.Channel) + ": " + msg
 			break
 		}
 	}
-	writeError(w, code, msg)
+	return outreachRefusal(code, "", msg)
 }
 
 // ScheduleSection handles POST /admin/workshops/{id}/outreach/schedule: every
@@ -275,52 +295,55 @@ func (h *AdminOutreachHandler) ScheduleSection(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	at, msg := parseScheduleAt(req.ScheduledAt, h.now())
-	if msg != "" {
-		writeError(w, http.StatusBadRequest, "scheduled_at "+msg)
-		return
-	}
-	wk, targets, left, ok := h.sectionTargets(w, r, req.Wave, false)
+	id, ok := outreachPathID(w, r)
 	if !ok {
 		return
 	}
-	if len(targets) == 0 {
-		writeError(w, http.StatusConflict, "nothing in this section can be scheduled")
+	actorID := actor.ID
+	res, err := h.scheduleWave(r.Context(), clientIP(r), &actorID, id, req.Wave, req.ScheduledAt)
+	if err != nil {
+		writeOutreachError(w, "schedule section", err)
 		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// scheduleWave is ScheduleSection without the transport (#0701).
+func (h *AdminOutreachHandler) scheduleWave(ctx context.Context, ip string, actorID *int64, workshopID int64, wave, scheduledAt string) (sectionResponse, error) {
+	at, msg := parseScheduleAt(scheduledAt, h.now())
+	if msg != "" {
+		return sectionResponse{}, outreachRefusal(http.StatusBadRequest, "scheduled_at", "scheduled_at "+msg)
+	}
+	wk, targets, left, err := h.sectionTargets(ctx, workshopID, wave, false)
+	if err != nil {
+		return sectionResponse{}, err
+	}
+	if len(targets) == 0 {
+		return sectionResponse{}, outreachRefusal(http.StatusConflict, "", "nothing in this section can be scheduled")
 	}
 	ids := make([]int64, 0, len(targets))
 	for _, p := range targets {
 		ch, _ := outreach.ChannelByName(p.Channel)
 		if !p.Prepared() {
-			writeError(w, http.StatusConflict, ch.Label+" has no link yet")
-			return
+			return sectionResponse{}, outreachRefusal(http.StatusConflict, "", ch.Label+" has no link yet")
 		}
 		if err := outreach.ValidateForSend(ch, p.Body); err != nil {
-			writeError(w, http.StatusBadRequest, ch.Label+": "+err.Error())
-			return
+			return sectionResponse{}, outreachRefusal(http.StatusBadRequest, "body", ch.Label+": "+err.Error())
 		}
 		ids = append(ids, p.ID)
 	}
-	updated, err := h.store.ScheduleMany(r.Context(), ids, at.UTC())
+	updated, err := h.store.ScheduleMany(ctx, ids, at.UTC())
 	if err != nil {
-		writeSectionRefusal(w, err, targets)
-		return
+		return sectionResponse{}, sectionRefusal(err, targets)
 	}
-	if h.auditor != nil {
-		actorID := actor.ID
-		for _, p := range updated {
-			targetID := p.ID
-			h.auditor.Record(r.Context(), audit.Entry{
-				ActorID:    &actorID,
-				Action:     audit.ActionOutreachPostScheduled,
-				TargetType: audit.TargetOutreachPost,
-				TargetID:   &targetID,
-				Metadata:   map[string]any{"outreach_id": p.OutreachID, "channel": p.Channel, "wave": p.Wave, "scheduled_at": at.UTC().Format(time.RFC3339), "section": true},
-				IP:         clientIP(r),
-			})
-		}
+	for _, p := range updated {
+		h.recordCtx(ctx, ip, audit.TargetOutreachPost, p.ID, audit.Entry{
+			ActorID:  actorID,
+			Action:   audit.ActionOutreachPostScheduled,
+			Metadata: map[string]any{"outreach_id": p.OutreachID, "channel": p.Channel, "wave": p.Wave, "scheduled_at": at.UTC().Format(time.RFC3339), "section": true},
+		})
 	}
-	writeJSON(w, http.StatusOK, sectionResponse{Posts: h.sectionPostViews(updated, wk), LeftAlone: left})
+	return sectionResponse{Posts: h.sectionPostViews(updated, wk), LeftAlone: left}, nil
 }
 
 // UnscheduleSection handles POST /admin/workshops/{id}/outreach/unschedule:
@@ -338,9 +361,24 @@ func (h *AdminOutreachHandler) UnscheduleSection(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	wk, all, left, ok := h.sectionTargets(w, r, req.Wave, true)
+	id, ok := outreachPathID(w, r)
 	if !ok {
 		return
+	}
+	actorID := actor.ID
+	res, err := h.unscheduleWave(r.Context(), clientIP(r), &actorID, id, req.Wave)
+	if err != nil {
+		writeOutreachError(w, "unschedule section", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// unscheduleWave is UnscheduleSection without the transport (#0701).
+func (h *AdminOutreachHandler) unscheduleWave(ctx context.Context, ip string, actorID *int64, workshopID int64, wave string) (sectionResponse, error) {
+	wk, all, left, err := h.sectionTargets(ctx, workshopID, wave, true)
+	if err != nil {
+		return sectionResponse{}, err
 	}
 	var targets []outreach.Post
 	ids := []int64{}
@@ -351,27 +389,18 @@ func (h *AdminOutreachHandler) UnscheduleSection(w http.ResponseWriter, r *http.
 		}
 	}
 	if len(ids) == 0 {
-		writeError(w, http.StatusConflict, "nothing in this section is scheduled")
-		return
+		return sectionResponse{}, outreachRefusal(http.StatusConflict, "", "nothing in this section is scheduled")
 	}
-	updated, err := h.store.UnscheduleMany(r.Context(), ids)
+	updated, err := h.store.UnscheduleMany(ctx, ids)
 	if err != nil {
-		writeSectionRefusal(w, err, targets)
-		return
+		return sectionResponse{}, sectionRefusal(err, targets)
 	}
-	if h.auditor != nil {
-		actorID := actor.ID
-		for _, p := range updated {
-			targetID := p.ID
-			h.auditor.Record(r.Context(), audit.Entry{
-				ActorID:    &actorID,
-				Action:     audit.ActionOutreachPostUnscheduled,
-				TargetType: audit.TargetOutreachPost,
-				TargetID:   &targetID,
-				Metadata:   map[string]any{"outreach_id": p.OutreachID, "channel": p.Channel, "wave": p.Wave, "section": true},
-				IP:         clientIP(r),
-			})
-		}
+	for _, p := range updated {
+		h.recordCtx(ctx, ip, audit.TargetOutreachPost, p.ID, audit.Entry{
+			ActorID:  actorID,
+			Action:   audit.ActionOutreachPostUnscheduled,
+			Metadata: map[string]any{"outreach_id": p.OutreachID, "channel": p.Channel, "wave": p.Wave, "section": true},
+		})
 	}
-	writeJSON(w, http.StatusOK, sectionResponse{Posts: h.sectionPostViews(updated, wk), LeftAlone: left})
+	return sectionResponse{Posts: h.sectionPostViews(updated, wk), LeftAlone: left}, nil
 }

@@ -48,6 +48,7 @@ func BuildV1Registry(cfg api.Config, d V1Deps) *api.Registry {
 	reg.Add(outreachOperations(d.Outreach)...)
 	reg.Add(outreachWriteOperations(d.Outreach)...)
 	reg.Add(outreachLinkOperations(d.Outreach)...)
+	reg.Add(outreachPublishOperations(d.Outreach)...)
 	reg.Add(mediaOperations(d.Media)...)
 	return reg
 }

@@ -1232,46 +1232,45 @@ func (h *AdminOutreachHandler) MarkPosted(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.RemoteURL != nil && strings.TrimSpace(*req.RemoteURL) == "" {
-		req.RemoteURL = nil
-	}
-	if req.RemoteURL != nil && !validRemoteURL(*req.RemoteURL) {
-		writeError(w, http.StatusBadRequest, "remote_url must be an absolute http(s) URL")
+	actorID := actor.ID
+	v, err := h.markPosted(r.Context(), clientIP(r), &actorID, id, req.RemoteURL)
+	if err != nil {
+		writeOutreachError(w, "mark posted", err)
 		return
 	}
-	_, wk, ok := h.postContext(w, r, id)
-	if !ok {
-		return
+	writeJSON(w, http.StatusOK, v)
+}
+
+// markPosted is MarkPosted without the transport (#0701).
+func (h *AdminOutreachHandler) markPosted(ctx context.Context, ip string, actorID *int64, id int64, remoteURL *string) (outreachPostView, error) {
+	if remoteURL != nil && strings.TrimSpace(*remoteURL) == "" {
+		remoteURL = nil
 	}
-	updated, err := h.store.MarkPosted(r.Context(), id, req.RemoteURL, time.Now())
+	if remoteURL != nil && !validRemoteURL(*remoteURL) {
+		return outreachPostView{}, outreachRefusal(http.StatusBadRequest, "remote_url", "remote_url must be an absolute http(s) URL")
+	}
+	_, wk, err := h.postContextCtx(ctx, id)
+	if err != nil {
+		return outreachPostView{}, err
+	}
+	updated, err := h.store.MarkPosted(ctx, id, remoteURL, time.Now())
 	switch {
 	case err == nil:
 	case errors.Is(err, outreach.ErrNotPrepared):
-		writeError(w, http.StatusConflict, "prepare the post before marking it posted")
-		return
+		return outreachPostView{}, outreachRefusal(http.StatusConflict, "", "prepare the post before marking it posted")
 	case errors.Is(err, outreach.ErrPostLocked):
-		writeError(w, http.StatusConflict, "post is already posted")
-		return
+		return outreachPostView{}, outreachRefusal(http.StatusConflict, "", "post is already posted")
 	case errors.Is(err, outreach.ErrPostInFlight):
-		writeError(w, http.StatusConflict, "post is being sent")
-		return
+		return outreachPostView{}, outreachRefusal(http.StatusConflict, "", "post is being sent")
 	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreachPostView{}, err
 	}
-	if h.auditor != nil {
-		actorID := actor.ID
-		targetID := updated.ID
-		h.auditor.Record(r.Context(), audit.Entry{
-			ActorID:    &actorID,
-			Action:     audit.ActionOutreachPostPosted,
-			TargetType: audit.TargetOutreachPost,
-			TargetID:   &targetID,
-			Metadata:   map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave, "has_remote_url": updated.RemoteURL != nil},
-			IP:         clientIP(r),
-		})
-	}
-	writeJSON(w, http.StatusOK, h.postView(updated, h.facts(wk), wk.Status))
+	h.recordCtx(ctx, ip, audit.TargetOutreachPost, updated.ID, audit.Entry{
+		ActorID:  actorID,
+		Action:   audit.ActionOutreachPostPosted,
+		Metadata: map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave, "has_remote_url": updated.RemoteURL != nil},
+	})
+	return h.postView(updated, h.facts(wk), wk.Status), nil
 }
 
 // UnmarkPosted handles POST /admin/outreach-posts/{id}/unmark (#0588): take back
@@ -1287,40 +1286,40 @@ func (h *AdminOutreachHandler) UnmarkPosted(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	p, wk, ok := h.postContext(w, r, id)
-	if !ok {
+	actorID := actor.ID
+	v, err := h.unmarkPosted(r.Context(), clientIP(r), &actorID, id)
+	if err != nil {
+		writeOutreachError(w, "unmark posted", err)
 		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+// unmarkPosted is UnmarkPosted without the transport (#0701).
+func (h *AdminOutreachHandler) unmarkPosted(ctx context.Context, ip string, actorID *int64, id int64) (outreachPostView, error) {
+	p, wk, err := h.postContextCtx(ctx, id)
+	if err != nil {
+		return outreachPostView{}, err
 	}
 	if h.channelConfigured(p.Channel) || p.RemoteID != nil {
-		writeError(w, http.StatusConflict, "this post was sent by the site and cannot be unmarked")
-		return
+		return outreachPostView{}, outreachRefusal(http.StatusConflict, "", "this post was sent by the site and cannot be unmarked")
 	}
-	updated, err := h.store.MarkUnposted(r.Context(), id)
+	updated, err := h.store.MarkUnposted(ctx, id)
 	switch {
 	case err == nil:
 	case errors.Is(err, outreach.ErrWrongStatus):
-		writeError(w, http.StatusConflict, "post is not marked as posted")
-		return
+		return outreachPostView{}, outreachRefusal(http.StatusConflict, "", "post is not marked as posted")
 	case errors.Is(err, outreach.ErrNotFound):
-		writeError(w, http.StatusNotFound, "post not found")
-		return
+		return outreachPostView{}, outreachRefusal(http.StatusNotFound, "", "post not found")
 	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreachPostView{}, err
 	}
-	if h.auditor != nil {
-		actorID := actor.ID
-		targetID := updated.ID
-		h.auditor.Record(r.Context(), audit.Entry{
-			ActorID:    &actorID,
-			Action:     audit.ActionOutreachPostUnmarked,
-			TargetType: audit.TargetOutreachPost,
-			TargetID:   &targetID,
-			Metadata:   map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave},
-			IP:         clientIP(r),
-		})
-	}
-	writeJSON(w, http.StatusOK, h.postView(updated, h.facts(wk), wk.Status))
+	h.recordCtx(ctx, ip, audit.TargetOutreachPost, updated.ID, audit.Entry{
+		ActorID:  actorID,
+		Action:   audit.ActionOutreachPostUnmarked,
+		Metadata: map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave},
+	})
+	return h.postView(updated, h.facts(wk), wk.Status), nil
 }
 
 // takedownBudget bounds the remote delete in Takedown.
@@ -1341,72 +1340,70 @@ func (h *AdminOutreachHandler) Takedown(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	p, wk, ok := h.postContext(w, r, id)
-	if !ok {
+	actorID := actor.ID
+	v, err := h.takedown(r.Context(), clientIP(r), &actorID, id)
+	if err != nil {
+		writeOutreachError(w, "takedown", err)
 		return
+	}
+	writeJSON(w, http.StatusOK, v)
+}
+
+// takedown is Takedown without the transport (#0701). A network refusal is
+// a 502 refusal; the row stays posted.
+func (h *AdminOutreachHandler) takedown(ctx context.Context, ip string, actorID *int64, id int64) (outreachPostView, error) {
+	p, wk, err := h.postContextCtx(ctx, id)
+	if err != nil {
+		return outreachPostView{}, err
 	}
 	ch, _ := outreach.ChannelByName(p.Channel)
 	if !ch.Automatic {
-		writeError(w, http.StatusConflict, "only a post the site sent itself can be deleted here; a hand-posted one is taken back with Unmark")
-		return
+		return outreachPostView{}, outreachRefusal(http.StatusConflict, "", "only a post the site sent itself can be deleted here; a hand-posted one is taken back with Unmark")
 	}
 	if !h.channelConfigured(p.Channel) {
-		writeError(w, http.StatusConflict, ch.Label+" is not connected on this server, so the post cannot be deleted from here")
-		return
+		return outreachPostView{}, outreachRefusal(http.StatusConflict, "", ch.Label+" is not connected on this server, so the post cannot be deleted from here")
 	}
-	checked, err := h.store.CheckTakedown(r.Context(), id)
-	if !h.takedownRefusal(w, err) {
-		return
+	checked, err := h.store.CheckTakedown(ctx, id)
+	if err != nil {
+		return outreachPostView{}, takedownRefusal(err)
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), takedownBudget)
+	dctx, cancel := context.WithTimeout(ctx, takedownBudget)
 	defer cancel()
-	existed, err := h.posting.DeleteRemote(ctx, checked)
+	existed, err := h.posting.DeleteRemote(dctx, checked)
 	if err != nil {
 		slog.Warn("outreach: remote delete failed", "post_id", id, "channel", p.Channel, "err", err)
-		writeError(w, http.StatusBadGateway, ch.Label+" would not delete the post, so it is still marked posted: "+err.Error())
-		return
+		return outreachPostView{}, outreachRefusal(http.StatusBadGateway, "", ch.Label+" would not delete the post, so it is still marked posted: "+err.Error())
 	}
-	updated, err := h.store.CompleteTakedown(r.Context(), id, *checked.RemoteID)
-	if !h.takedownRefusal(w, err) {
-		return
+	updated, err := h.store.CompleteTakedown(ctx, id, *checked.RemoteID)
+	if err != nil {
+		return outreachPostView{}, takedownRefusal(err)
 	}
-	if h.auditor != nil {
-		actorID := actor.ID
-		targetID := updated.ID
-		remoteURL := ""
-		if checked.RemoteURL != nil {
-			remoteURL = *checked.RemoteURL
-		}
-		h.auditor.Record(r.Context(), audit.Entry{
-			ActorID:    &actorID,
-			Action:     audit.ActionOutreachPostTakenDown,
-			TargetType: audit.TargetOutreachPost,
-			TargetID:   &targetID,
-			Metadata:   map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave, "remote_url": remoteURL, "already_gone": !existed, "attempt_generation": updated.AttemptGeneration},
-			IP:         clientIP(r),
-		})
+	remoteURL := ""
+	if checked.RemoteURL != nil {
+		remoteURL = *checked.RemoteURL
 	}
-	writeJSON(w, http.StatusOK, h.postView(updated, h.facts(wk), wk.Status))
+	h.recordCtx(ctx, ip, audit.TargetOutreachPost, updated.ID, audit.Entry{
+		ActorID:  actorID,
+		Action:   audit.ActionOutreachPostTakenDown,
+		Metadata: map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave, "remote_url": remoteURL, "already_gone": !existed, "attempt_generation": updated.AttemptGeneration},
+	})
+	return h.postView(updated, h.facts(wk), wk.Status), nil
 }
 
-// takedownRefusal writes the response for a takedown store error and reports
-// whether the request may continue (err was nil).
-func (h *AdminOutreachHandler) takedownRefusal(w http.ResponseWriter, err error) bool {
+// takedownRefusal maps a takedown store error to a refusal; an unrecognised
+// error is returned as is.
+func takedownRefusal(err error) error {
 	switch {
-	case err == nil:
-		return true
 	case errors.Is(err, outreach.ErrNotFound):
-		writeError(w, http.StatusNotFound, "post not found")
+		return outreachRefusal(http.StatusNotFound, "", "post not found")
 	case errors.Is(err, outreach.ErrTakedownNotPosted):
-		writeError(w, http.StatusConflict, "this post is not posted, or was not sent by the site")
+		return outreachRefusal(http.StatusConflict, "", "this post is not posted, or was not sent by the site")
 	case errors.Is(err, outreach.ErrTakedownInFlight):
-		writeError(w, http.StatusConflict, "this post is still being sent; try again in a minute")
+		return outreachRefusal(http.StatusConflict, "", "this post is still being sent; try again in a minute")
 	case errors.Is(err, outreach.ErrTakedownChanged):
-		writeError(w, http.StatusConflict, "this post changed while it was being deleted; reload and check it")
-	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
+		return outreachRefusal(http.StatusConflict, "", "this post changed while it was being deleted; reload and check it")
 	}
-	return false
+	return err
 }
 
 // DeletePost handles DELETE /admin/outreach-posts/{id}.
