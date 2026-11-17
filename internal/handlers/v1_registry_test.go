@@ -24,7 +24,7 @@ func TestBuildV1RegistryListsOperations(t *testing.T) {
 		"event_coverage", "list_cadence_rules", "set_cadence_rule",
 		"list_outreach", "get_event_outreach", "outreach_connections_status",
 		"start_event_outreach", "create_outreach_post", "update_outreach_post", "delete_outreach_post",
-		"reset_event_outreach"}
+		"reset_event_outreach", "draft_event_outreach", "prepare_outreach_post", "ensure_outreach_hand_links"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("operations %v, want %v", names, want)
 	}

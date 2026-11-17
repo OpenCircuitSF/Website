@@ -102,38 +102,50 @@ func (h *AdminOutreachHandler) EnsureHandLinks(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
-	if !h.linksEnabled() {
-		writeError(w, http.StatusServiceUnavailable, "ShortLinks is not configured")
-		return
-	}
-	wk, o, ok := h.workshopOutreach(w, r)
+	id, ok := outreachPathID(w, r)
 	if !ok {
 		return
 	}
-	if o == nil {
-		writeError(w, http.StatusConflict, "start outreach first")
+	actorID := actor.ID
+	report, err := h.ensureHandLinks(r.Context(), clientIP(r), &actorID, id)
+	if err != nil {
+		writeOutreachError(w, "hand links", err)
 		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
+// ensureHandLinks is EnsureHandLinks without the transport (#0700);
+// ensure_outreach_hand_links calls it too. It detaches from ctx's
+// cancellation, per #0630.
+func (h *AdminOutreachHandler) ensureHandLinks(ctx context.Context, ip string, actorID *int64, workshopID int64) (outreachLinkReport, error) {
+	if !h.linksEnabled() {
+		return outreachLinkReport{}, outreachRefusal(http.StatusServiceUnavailable, "", "ShortLinks is not configured")
+	}
+	wk, err := h.workshopFor(ctx, workshopID)
+	if err != nil {
+		return outreachLinkReport{}, err
+	}
+	o, err := h.store.GetByWorkshop(ctx, workshopID)
+	if errors.Is(err, outreach.ErrNotFound) {
+		return outreachLinkReport{}, outreachRefusal(http.StatusConflict, "", "start outreach first")
+	} else if err != nil {
+		return outreachLinkReport{}, err
 	}
 	if wk.Status != "published" {
-		writeError(w, http.StatusConflict, "outreach is only available for a published event")
-		return
+		return outreachLinkReport{}, outreachRefusal(http.StatusConflict, "", "outreach is only available for a published event")
 	}
 	if h.eventStarted(wk) {
-		writeJSON(w, http.StatusOK, outreachLinkReport{Failed: []outreachLinkFailure{}})
-		return
+		return outreachLinkReport{Failed: []outreachLinkFailure{}}, nil
 	}
-	r = r.WithContext(context.WithoutCancel(r.Context()))
-	ctx := r.Context()
-	actorID := actor.ID
+	ctx = context.WithoutCancel(ctx)
 	posts, err := h.store.ListPosts(ctx, o.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreachLinkReport{}, err
 	}
-	report, err := h.ensureLinksFor(ctx, clientIP(r), &actorID, *o, wk, h.handPostedChannels(), false)
+	report, err := h.ensureLinksFor(ctx, ip, actorID, o, wk, h.handPostedChannels(), false)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreachLinkReport{}, err
 	}
 	have := map[[2]string]bool{}
 	for _, p := range posts {
@@ -155,22 +167,16 @@ func (h *AdminOutreachHandler) EnsureHandLinks(w http.ResponseWriter, r *http.Re
 			continue
 		}
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "internal server error")
-			return
+			return outreachLinkReport{}, err
 		}
 		if _, _, err := h.store.SetPrepared(ctx, p.ID, l.Key, l.ShortURL, "manual"); err != nil {
-			writeError(w, http.StatusInternalServerError, "internal server error")
-			return
+			return outreachLinkReport{}, err
 		}
 		report.Drafted++
-		if h.auditor != nil {
-			actorID, targetID := actor.ID, p.ID
-			h.auditor.Record(ctx, audit.Entry{
-				ActorID: &actorID, Action: audit.ActionOutreachPostCreated, TargetType: audit.TargetOutreachPost, TargetID: &targetID,
-				Metadata: map[string]any{"outreach_id": o.ID, "channel": p.Channel, "wave": p.Wave, "bulk": true, "link_applied": true},
-				IP:       clientIP(r),
-			})
-		}
+		h.recordCtx(ctx, ip, audit.TargetOutreachPost, p.ID, audit.Entry{
+			ActorID: actorID, Action: audit.ActionOutreachPostCreated,
+			Metadata: map[string]any{"outreach_id": o.ID, "channel": p.Channel, "wave": p.Wave, "bulk": true, "link_applied": true},
+		})
 	}
-	writeJSON(w, http.StatusOK, report)
+	return report, nil
 }

@@ -324,32 +324,9 @@ func (h *AdminOutreachHandler) DraftAll(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusUnauthorized, "unauthenticated")
 		return
 	}
-	wk, o, ok := h.workshopOutreach(w, r)
+	id, ok := outreachPathID(w, r)
 	if !ok {
 		return
-	}
-	if o == nil {
-		writeError(w, http.StatusConflict, "start outreach first")
-		return
-	}
-	ctx := r.Context()
-	posts, err := h.store.ListPosts(ctx, o.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-	links, err := h.store.ListPostLinks(ctx, o.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
-	}
-	have := map[[2]string]bool{}
-	for _, p := range posts {
-		have[[2]string{p.Channel, p.Wave}] = true
-	}
-	linkBySlot := map[[2]string]outreach.PostLink{}
-	for _, l := range links {
-		linkBySlot[[2]string{l.Channel, l.Wave}] = l
 	}
 	// Announce is always drafted; Reminder and Last call only when asked for
 	// (#0574), so a default Draft all makes a post per channel, not fifteen.
@@ -363,13 +340,50 @@ func (h *AdminOutreachHandler) DraftAll(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	actorID := actor.ID
+	rep, err := h.draftAll(r.Context(), clientIP(r), &actorID, id, req.Waves)
+	if err != nil {
+		writeOutreachError(w, "draft all", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
+}
+
+// draftAll is DraftAll without the transport (#0700); draft_event_outreach
+// calls it too.
+func (h *AdminOutreachHandler) draftAll(ctx context.Context, ip string, actorID *int64, workshopID int64, waves []string) (draftAllReport, error) {
+	wk, err := h.workshopFor(ctx, workshopID)
+	if err != nil {
+		return draftAllReport{}, err
+	}
+	o, err := h.store.GetByWorkshop(ctx, workshopID)
+	if errors.Is(err, outreach.ErrNotFound) {
+		return draftAllReport{}, outreachRefusal(http.StatusConflict, "", "start outreach first")
+	} else if err != nil {
+		return draftAllReport{}, err
+	}
 	wantWave := map[string]bool{"announce": true}
-	for _, name := range req.Waves {
+	for _, name := range waves {
 		if _, ok := outreach.WaveByName(name); !ok {
-			writeError(w, http.StatusBadRequest, "unknown wave")
-			return
+			return draftAllReport{}, outreachRefusal(http.StatusBadRequest, "waves", "unknown wave")
 		}
 		wantWave[name] = true
+	}
+	posts, err := h.store.ListPosts(ctx, o.ID)
+	if err != nil {
+		return draftAllReport{}, err
+	}
+	links, err := h.store.ListPostLinks(ctx, o.ID)
+	if err != nil {
+		return draftAllReport{}, err
+	}
+	have := map[[2]string]bool{}
+	for _, p := range posts {
+		have[[2]string{p.Channel, p.Wave}] = true
+	}
+	linkBySlot := map[[2]string]outreach.PostLink{}
+	for _, l := range links {
+		linkBySlot[[2]string{l.Channel, l.Wave}] = l
 	}
 	f := h.facts(wk)
 	rep := draftAllReport{Created: []draftAllCreated{}}
@@ -389,8 +403,7 @@ func (h *AdminOutreachHandler) DraftAll(w http.ResponseWriter, r *http.Request) 
 				continue
 			}
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, "internal server error")
-				return
+				return draftAllReport{}, err
 			}
 			hasLink := false
 			if l, ok := linkBySlot[slot]; ok {
@@ -399,23 +412,18 @@ func (h *AdminOutreachHandler) DraftAll(w http.ResponseWriter, r *http.Request) 
 					status = "manual"
 				}
 				if _, _, err := h.store.SetPrepared(ctx, p.ID, l.Key, l.ShortURL, status); err != nil {
-					writeError(w, http.StatusInternalServerError, "internal server error")
-					return
+					return draftAllReport{}, err
 				}
 				hasLink = true
 			} else {
 				rep.WithoutLink++
 			}
 			rep.Created = append(rep.Created, draftAllCreated{PostID: p.ID, Channel: ch.Name, Wave: wv.Name, HasLink: hasLink})
-			if h.auditor != nil {
-				actorID, targetID := actor.ID, p.ID
-				h.auditor.Record(ctx, audit.Entry{
-					ActorID: &actorID, Action: audit.ActionOutreachPostCreated, TargetType: audit.TargetOutreachPost, TargetID: &targetID,
-					Metadata: map[string]any{"outreach_id": o.ID, "channel": p.Channel, "wave": p.Wave, "bulk": true, "link_applied": hasLink},
-					IP:       clientIP(r),
-				})
-			}
+			h.recordCtx(ctx, ip, audit.TargetOutreachPost, p.ID, audit.Entry{
+				ActorID: actorID, Action: audit.ActionOutreachPostCreated,
+				Metadata: map[string]any{"outreach_id": o.ID, "channel": p.Channel, "wave": p.Wave, "bulk": true, "link_applied": hasLink},
+			})
 		}
 	}
-	writeJSON(w, http.StatusOK, rep)
+	return rep, nil
 }

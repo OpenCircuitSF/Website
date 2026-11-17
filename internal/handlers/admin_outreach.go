@@ -1114,93 +1114,93 @@ func (h *AdminOutreachHandler) Prepare(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !h.linksEnabled() {
-		writeError(w, http.StatusServiceUnavailable, "ShortLinks is not configured")
+	actorID := actor.ID
+	v, err := h.prepare(r.Context(), clientIP(r), &actorID, id)
+	if err != nil {
+		writeOutreachError(w, "create link", err)
 		return
 	}
-	p, wk, ok := h.postContext(w, r, id)
-	if !ok {
-		return
+	writeJSON(w, http.StatusOK, v)
+}
+
+// prepare is Prepare without the transport (#0700); prepare_outreach_post
+// calls it too.
+func (h *AdminOutreachHandler) prepare(ctx context.Context, ip string, actorID *int64, id int64) (outreachPostView, error) {
+	if !h.linksEnabled() {
+		return outreachPostView{}, outreachRefusal(http.StatusServiceUnavailable, "", "ShortLinks is not configured")
+	}
+	p, err := h.store.GetPost(ctx, id)
+	if err != nil {
+		return outreachPostView{}, postErrorRefusal(err)
+	}
+	o, err := h.store.GetByID(ctx, p.OutreachID)
+	if err != nil {
+		return outreachPostView{}, err
+	}
+	wk, err := h.workshopFor(ctx, o.WorkshopID)
+	if err != nil {
+		return outreachPostView{}, err
 	}
 	if !h.postVisible(p) {
 		ch, _ := outreach.ChannelByName(p.Channel)
-		writeError(w, http.StatusConflict, ch.Label+" is switched off in Settings")
-		return
+		return outreachPostView{}, outreachRefusal(http.StatusConflict, "", ch.Label+" is switched off in Settings")
 	}
 	f := h.facts(wk)
 	if p.Prepared() {
-		writeJSON(w, http.StatusOK, h.postView(p, f, wk.Status))
-		return
+		return h.postView(p, f, wk.Status), nil
 	}
 	if wk.Status != "published" {
-		writeError(w, http.StatusConflict, "outreach is only available for a published event")
-		return
-	}
-	o, err := h.store.GetByID(r.Context(), p.OutreachID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreachPostView{}, outreachRefusal(http.StatusConflict, "", "outreach is only available for a published event")
 	}
 	ch, _ := outreach.ChannelByName(p.Channel)
 	wv, _ := outreach.WaveByName(p.Wave)
 	var linkKey, linkURL string
-	switch pl, lerr := h.store.GetPostLink(r.Context(), o.ID, p.Channel, p.Wave); {
+	switch pl, lerr := h.store.GetPostLink(ctx, o.ID, p.Channel, p.Wave); {
 	case lerr == nil:
 		// Created up front (#0568): no ShortLinks call at all.
 		linkKey, linkURL = pl.Key, pl.ShortURL
 	case errors.Is(lerr, outreach.ErrNotFound):
-		base, berr := h.shortLinksBase(r.Context())
+		base, berr := h.shortLinksBase(ctx)
 		if berr != nil {
-			writeShortLinksError(w, "me", berr)
-			return
+			return outreachPostView{}, outreachLinksError{berr}
 		}
-		link, cerr := h.links.CreateLink(r.Context(), h.postLinkRequest(o, wk, ch, wv))
+		link, cerr := h.links.CreateLink(ctx, h.postLinkRequest(o, wk, ch, wv))
 		if cerr != nil {
-			writeShortLinksError(w, "create link", cerr)
-			return
+			return outreachPostView{}, outreachLinksError{cerr}
 		}
 		// A racing Create links may have won the slot: use the stored row.
-		row, _, ierr := h.store.InsertPostLink(r.Context(), o.ID, ch.Name, wv.Name, link.Key, shortlinks.ShortURL(base, link.Key))
+		row, _, ierr := h.store.InsertPostLink(ctx, o.ID, ch.Name, wv.Name, link.Key, shortlinks.ShortURL(base, link.Key))
 		if ierr != nil {
-			writeError(w, http.StatusInternalServerError, "internal server error")
-			return
+			return outreachPostView{}, ierr
 		}
 		linkKey, linkURL = row.Key, row.ShortURL
 	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreachPostView{}, lerr
 	}
 	status := p.Status
 	if !ch.Automatic {
 		status = "manual"
 	}
-	updated, changed, err := h.store.SetPrepared(r.Context(), id, linkKey, linkURL, status)
+	updated, changed, err := h.store.SetPrepared(ctx, id, linkKey, linkURL, status)
 	switch {
 	case err == nil:
 	case errors.Is(err, outreach.ErrPostLocked):
-		writeError(w, http.StatusConflict, "post is already posted")
-		return
+		return outreachPostView{}, outreachRefusal(http.StatusConflict, "", "post is already posted")
 	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreachPostView{}, err
 	}
 	// A racing Prepare that lost gets the winner's row back with changed
 	// false, so only the call whose UPDATE actually set the key audits. (The
 	// stored key cannot decide this: ShortLinks de-duplicates the link, so
 	// racing callers hold the same key.)
-	if h.auditor != nil && changed {
-		actorID := actor.ID
-		targetID := updated.ID
-		h.auditor.Record(r.Context(), audit.Entry{
-			ActorID:    &actorID,
-			Action:     audit.ActionOutreachPostPrepared,
-			TargetType: audit.TargetOutreachPost,
-			TargetID:   &targetID,
-			Metadata:   map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave, "short_link_key": linkKey},
-			IP:         clientIP(r),
+	if changed {
+		h.recordCtx(ctx, ip, audit.TargetOutreachPost, updated.ID, audit.Entry{
+			ActorID:  actorID,
+			Action:   audit.ActionOutreachPostPrepared,
+			Metadata: map[string]any{"outreach_id": updated.OutreachID, "channel": updated.Channel, "wave": updated.Wave, "short_link_key": linkKey},
 		})
 	}
-	writeJSON(w, http.StatusOK, h.postView(updated, f, wk.Status))
+	return h.postView(updated, f, wk.Status), nil
 }
 
 type markOutreachPostedRequest struct {

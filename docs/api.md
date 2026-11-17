@@ -524,6 +524,9 @@ curl -s -X POST $B/cadence-rules \
 - **`update_outreach_post`**, `PATCH /outreach-posts/{id}`: exactly one of `body` or `regenerate: true`. `409` once posted or sending.
 - **`delete_outreach_post`**, `DELETE /outreach-posts/{id}`: destructive; `409` once posted or sending.
 - **`reset_event_outreach`**, `POST /events/{id}/outreach/reset`: destructive; removes every post and flyer, refused (`409`) once anything is public.
+- **`draft_event_outreach`**, `POST /events/{id}/outreach/draft-all`: drafts every empty slot in `announce` plus any `waves` named; existing posts are skipped. No ShortLinks call; `409` before outreach starts.
+- **`prepare_outreach_post`**, `POST /outreach-posts/{id}/prepare`: makes the post's tracked link and puts it in the body; repeating it makes no ShortLinks call. `503` when ShortLinks is not configured.
+- **`ensure_outreach_hand_links`**, `POST /events/{id}/outreach/hand-links`: makes every missing link for the hand-posted channels; per-slot failures are listed in `failed`. `503` when ShortLinks is not configured.
 
 ### Engagement (`engagement:read`)
 
