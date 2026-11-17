@@ -541,6 +541,14 @@ curl -s -X POST $B/cadence-rules \
 - **`create_outreach_location`**, `POST /outreach/locations`: `name`, `code` (2–16 lowercase letters, digits or dashes), optional `address`, `notes`, `active`. Takes `Idempotency-Key`; `201`; `409` when the code is taken.
 - **`update_outreach_location`**, `PATCH /outreach/locations/{id}`: only the fields sent change; `409` when changing a code a flyer link already uses.
 - **`delete_outreach_location`**, `DELETE /outreach/locations/{id}`: destructive; `409` when a flyer link uses it (set `active` to false instead).
+- **`list_flyers`**, `GET /flyers`: saved flyers with their event.
+- **`get_flyer`**, `GET /flyers/{id}`: one flyer's design, the event facts it prints, its locations with their short links and QR state, and `print_url` (the admin page a person prints it from).
+- **`create_flyer`**, `POST /flyers`: `outreach_id` plus optional design fields; `photo` must be a `/media/` path. Takes `Idempotency-Key`; `201`.
+- **`update_flyer`**, `PATCH /flyers/{id}`: only the fields sent change; an empty `photo` clears it.
+- **`set_flyer_locations`**, `PUT /flyers/{id}/locations`: `{locations: [{location_id, copies}]}` replaces the selection; each active, once, 1–50 copies.
+- **`generate_flyer`**, `POST /flyers/{id}/generate`: makes each selected location's short link and QR code for a published event; safe to repeat, and `remaining` above 0 means call again.
+- **`set_flyer_link_put_up`**, `POST /flyer-links/{id}/put-up`: `{put_up: true|false}` marks or clears it; marking keeps the first time.
+- **`delete_flyer`**, `DELETE /flyers/{id}`: destructive; the flyer's short links stay with the outreach.
 
 ### Media (`media:read`, `media:write`)
 

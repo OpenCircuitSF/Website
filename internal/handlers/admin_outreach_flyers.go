@@ -124,23 +124,20 @@ func flyerRowViewOf(f outreach.Flyer, o outreach.Outreach, slug, title string) f
 	}
 }
 
-// buildFlyerView loads everything a flyer's editor and print page need. On
-// failure it writes the response and returns ok=false.
-func (h *AdminOutreachHandler) buildFlyerView(w http.ResponseWriter, r *http.Request, f outreach.Flyer) (flyerView, bool) {
-	ctx := r.Context()
+// flyerView loads everything a flyer's editor and print page need (#0703:
+// transport-free, for the admin routes and /api/v1).
+func (h *AdminOutreachHandler) flyerView(ctx context.Context, f outreach.Flyer) (flyerView, error) {
 	o, err := h.store.GetByID(ctx, f.OutreachID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return flyerView{}, false
+		return flyerView{}, err
 	}
-	wk, ok := h.loadWorkshop(w, r, o.WorkshopID)
-	if !ok {
-		return flyerView{}, false
+	wk, err := h.workshopFor(ctx, o.WorkshopID)
+	if err != nil {
+		return flyerView{}, err
 	}
 	sel, err := h.flyers.ListFlyerSelection(ctx, f.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return flyerView{}, false
+		return flyerView{}, err
 	}
 	v := flyerView{
 		Flyer: flyerRowViewOf(f, o, wk.Slug, wk.Title),
@@ -160,7 +157,7 @@ func (h *AdminOutreachHandler) buildFlyerView(w http.ResponseWriter, r *http.Req
 		}
 		v.Selection = append(v.Selection, sv)
 	}
-	return v, true
+	return v, nil
 }
 
 func flyerPathID(w http.ResponseWriter, r *http.Request, what string) (int64, bool) {
@@ -172,32 +169,51 @@ func flyerPathID(w http.ResponseWriter, r *http.Request, what string) (int64, bo
 	return id, true
 }
 
-// loadFlyer writes the response and returns ok=false on failure.
-func (h *AdminOutreachHandler) loadFlyer(w http.ResponseWriter, r *http.Request, id int64) (outreach.Flyer, bool) {
-	f, err := h.flyers.GetFlyer(r.Context(), id)
-	switch {
-	case err == nil:
-		return f, true
-	case errors.Is(err, outreach.ErrFlyerNotFound):
-		writeError(w, http.StatusNotFound, "flyer not found")
-	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
+var (
+	errFlyerNotFound     = outreachRefusal(http.StatusNotFound, "", "flyer not found")
+	errFlyerLinkNotFound = outreachRefusal(http.StatusNotFound, "", "flyer link not found")
+	errOutreachNotFound  = outreachRefusal(http.StatusNotFound, "", "outreach not found")
+)
+
+// getFlyer loads flyer id, turning not-found into a refusal.
+func (h *AdminOutreachHandler) getFlyer(ctx context.Context, id int64) (outreach.Flyer, error) {
+	f, err := h.flyers.GetFlyer(ctx, id)
+	if errors.Is(err, outreach.ErrFlyerNotFound) {
+		return f, errFlyerNotFound
 	}
-	return outreach.Flyer{}, false
+	return f, err
+}
+
+// flyerByID is GetFlyer without the transport (#0703).
+func (h *AdminOutreachHandler) flyerByID(ctx context.Context, id int64) (flyerView, error) {
+	f, err := h.getFlyer(ctx, id)
+	if err != nil {
+		return flyerView{}, err
+	}
+	return h.flyerView(ctx, f)
 }
 
 // ListFlyers handles GET /admin/outreach-flyers.
 func (h *AdminOutreachHandler) ListFlyers(w http.ResponseWriter, r *http.Request) {
-	list, err := h.flyers.ListFlyers(r.Context(), 0)
+	rows, err := h.listFlyerRows(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"flyers": rows})
+}
+
+// listFlyerRows is ListFlyers without the transport (#0703).
+func (h *AdminOutreachHandler) listFlyerRows(ctx context.Context) ([]flyerRowView, error) {
+	list, err := h.flyers.ListFlyers(ctx, 0)
+	if err != nil {
+		return nil, err
 	}
 	rows := make([]flyerRowView, 0, len(list))
 	for _, f := range list {
 		rows = append(rows, flyerRowViewOf(f, outreach.Outreach{ID: f.OutreachID, WorkshopID: f.WorkshopID}, f.WorkshopSlug, f.WorkshopTitle))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"flyers": rows})
+	return rows, nil
 }
 
 type flyerRequest struct {
@@ -258,6 +274,43 @@ func validateFlyerFields(req *flyerRequest) string {
 	return ""
 }
 
+// flyerFieldOf names the request field a flyer validation message is about,
+// for the v1 validation envelope.
+func flyerFieldOf(msg string) string {
+	switch {
+	case strings.HasPrefix(msg, "outreach_id"):
+		return "outreach_id"
+	case strings.HasPrefix(msg, "unknown template"):
+		return "template"
+	case strings.HasPrefix(msg, "focal"):
+		return "focal_x"
+	case strings.HasPrefix(msg, "tagline"):
+		return "tagline"
+	case strings.HasPrefix(msg, "description"):
+		return "description"
+	case strings.HasPrefix(msg, "short description"):
+		return "description_short"
+	case strings.HasPrefix(msg, "unknown title position"):
+		return "title_position"
+	case strings.HasPrefix(msg, "photo"):
+		return "photo"
+	}
+	return ""
+}
+
+func flyerBadRequest(msg string) error {
+	return outreachRefusal(http.StatusBadRequest, flyerFieldOf(msg), msg)
+}
+
+// writeFlyerResult answers an admin flyer request with v or err.
+func writeFlyerResult(w http.ResponseWriter, op string, status int, v flyerView, err error) {
+	if err != nil {
+		writeOutreachError(w, op, err)
+		return
+	}
+	writeJSON(w, status, v)
+}
+
 // CreateFlyer handles POST /admin/outreach-flyers.
 func (h *AdminOutreachHandler) CreateFlyer(w http.ResponseWriter, r *http.Request) {
 	actor, ok := middleware.UserFromContext(r.Context())
@@ -270,20 +323,23 @@ func (h *AdminOutreachHandler) CreateFlyer(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	actorID := actor.ID
+	v, err := h.createFlyer(r.Context(), clientIP(r), &actorID, req)
+	writeFlyerResult(w, "create flyer", http.StatusCreated, v, err)
+}
+
+// createFlyer is CreateFlyer without the transport (#0703).
+func (h *AdminOutreachHandler) createFlyer(ctx context.Context, ip string, actorID *int64, req flyerRequest) (flyerView, error) {
 	if req.OutreachID == nil || *req.OutreachID <= 0 {
-		writeError(w, http.StatusBadRequest, "outreach_id is required")
-		return
+		return flyerView{}, flyerBadRequest("outreach_id is required")
 	}
 	if msg := validateFlyerFields(&req); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
-		return
+		return flyerView{}, flyerBadRequest(msg)
 	}
-	if _, err := h.store.GetByID(r.Context(), *req.OutreachID); errors.Is(err, outreach.ErrNotFound) {
-		writeError(w, http.StatusNotFound, "outreach not found")
-		return
+	if _, err := h.store.GetByID(ctx, *req.OutreachID); errors.Is(err, outreach.ErrNotFound) {
+		return flyerView{}, errOutreachNotFound
 	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return flyerView{}, err
 	}
 	in := outreach.FlyerInput{OutreachID: *req.OutreachID, FocalX: 0.5, FocalY: 0.5, Template: "full-photo", TitlePosition: "auto"}
 	if req.Template != nil {
@@ -310,33 +366,23 @@ func (h *AdminOutreachHandler) CreateFlyer(w http.ResponseWriter, r *http.Reques
 	if req.Photo != nil && *req.Photo != "" {
 		in.Photo = req.Photo
 	}
-	f, err := h.flyers.CreateFlyer(r.Context(), in)
+	f, err := h.flyers.CreateFlyer(ctx, in)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return flyerView{}, err
 	}
-	h.auditFlyer(r, actor.ID, audit.ActionOutreachFlyerCreated, f.ID, f.OutreachID, map[string]any{"template": f.Template})
-	v, ok := h.buildFlyerView(w, r, f)
-	if !ok {
-		return
-	}
-	writeJSON(w, http.StatusCreated, v)
+	h.auditFlyerCtx(ctx, ip, actorID, audit.ActionOutreachFlyerCreated, f.ID, f.OutreachID, map[string]any{"template": f.Template})
+	return h.flyerView(ctx, f)
 }
 
-// auditFlyer records a flyer action. extra adds to the always-present
-// outreach_id; it must never carry tagline or description text or a photo path.
-func (h *AdminOutreachHandler) auditFlyer(r *http.Request, actorID int64, action string, flyerID, outreachID int64, extra map[string]any) {
-	if h.auditor == nil {
-		return
-	}
+// auditFlyerCtx records a flyer action. extra adds to the always-present
+// outreach_id; it must never carry tagline or description text or a photo
+// path. recordCtx attributes an API-token request to its token.
+func (h *AdminOutreachHandler) auditFlyerCtx(ctx context.Context, ip string, actorID *int64, action string, flyerID, outreachID int64, extra map[string]any) {
 	meta := map[string]any{"outreach_id": outreachID}
 	for k, v := range extra {
 		meta[k] = v
 	}
-	h.auditor.Record(r.Context(), audit.Entry{
-		ActorID: &actorID, Action: action, TargetType: audit.TargetOutreachFlyer, TargetID: &flyerID,
-		Metadata: meta, IP: clientIP(r),
-	})
+	h.recordCtx(ctx, ip, audit.TargetOutreachFlyer, flyerID, audit.Entry{ActorID: actorID, Action: action, Metadata: meta})
 }
 
 // GetFlyer handles GET /admin/outreach-flyers/{id}.
@@ -345,15 +391,8 @@ func (h *AdminOutreachHandler) GetFlyer(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	f, ok := h.loadFlyer(w, r, id)
-	if !ok {
-		return
-	}
-	v, ok := h.buildFlyerView(w, r, f)
-	if !ok {
-		return
-	}
-	writeJSON(w, http.StatusOK, v)
+	v, err := h.flyerByID(r.Context(), id)
+	writeFlyerResult(w, "get flyer", http.StatusOK, v, err)
 }
 
 // PatchFlyer handles PATCH /admin/outreach-flyers/{id}: the design fields.
@@ -372,18 +411,23 @@ func (h *AdminOutreachHandler) PatchFlyer(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	actorID := actor.ID
+	v, err := h.patchFlyer(r.Context(), clientIP(r), &actorID, id, req)
+	writeFlyerResult(w, "update flyer", http.StatusOK, v, err)
+}
+
+// patchFlyer is PatchFlyer without the transport (#0703).
+func (h *AdminOutreachHandler) patchFlyer(ctx context.Context, ip string, actorID *int64, id int64, req flyerRequest) (flyerView, error) {
 	if req.Photo == nil && req.FocalX == nil && req.FocalY == nil && req.Template == nil && req.Tagline == nil &&
 		req.Description == nil && req.DescriptionShort == nil && req.TitlePosition == nil {
-		writeError(w, http.StatusBadRequest, "no fields to update")
-		return
+		return flyerView{}, flyerBadRequest("no fields to update")
 	}
 	if msg := validateFlyerFields(&req); msg != "" {
-		writeError(w, http.StatusBadRequest, msg)
-		return
+		return flyerView{}, flyerBadRequest(msg)
 	}
-	before, ok := h.loadFlyer(w, r, id)
-	if !ok {
-		return
+	before, err := h.getFlyer(ctx, id)
+	if err != nil {
+		return flyerView{}, err
 	}
 	p := outreach.FlyerPatch{FocalX: req.FocalX, FocalY: req.FocalY, Template: req.Template, Tagline: req.Tagline,
 		Description: req.Description, DescriptionShort: req.DescriptionShort, TitlePosition: req.TitlePosition}
@@ -394,24 +438,18 @@ func (h *AdminOutreachHandler) PatchFlyer(w http.ResponseWriter, r *http.Request
 			p.Photo = req.Photo
 		}
 	}
-	after, err := h.flyers.UpdateFlyer(r.Context(), id, p)
+	after, err := h.flyers.UpdateFlyer(ctx, id, p)
 	switch {
 	case err == nil:
 	case errors.Is(err, outreach.ErrFlyerNotFound):
-		writeError(w, http.StatusNotFound, "flyer not found")
-		return
+		return flyerView{}, errFlyerNotFound
 	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return flyerView{}, err
 	}
 	if changed := changedFlyerFields(before, after); len(changed) > 0 {
-		h.auditFlyer(r, actor.ID, audit.ActionOutreachFlyerUpdated, after.ID, after.OutreachID, map[string]any{"changed": changed})
+		h.auditFlyerCtx(ctx, ip, actorID, audit.ActionOutreachFlyerUpdated, after.ID, after.OutreachID, map[string]any{"changed": changed})
 	}
-	v, ok := h.buildFlyerView(w, r, after)
-	if !ok {
-		return
-	}
-	writeJSON(w, http.StatusOK, v)
+	return h.flyerView(ctx, after)
 }
 
 // changedFlyerFields lists the design fields whose value differs, by name
@@ -443,11 +481,13 @@ func changedFlyerFields(before, after outreach.Flyer) []string {
 	return changed
 }
 
+type flyerSelectionItem struct {
+	LocationID int64 `json:"location_id" jsonschema:"an outreach location id"`
+	Copies     int   `json:"copies" jsonschema:"copies to print, 1-50"`
+}
+
 type flyerSelectionRequest struct {
-	Locations []struct {
-		LocationID int64 `json:"location_id"`
-		Copies     int   `json:"copies"`
-	} `json:"locations"`
+	Locations []flyerSelectionItem `json:"locations"`
 }
 
 // PutFlyerLocations handles PUT /admin/outreach-flyers/{id}/locations:
@@ -467,39 +507,37 @@ func (h *AdminOutreachHandler) PutFlyerLocations(w http.ResponseWriter, r *http.
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if len(req.Locations) > outreach.MaxFlyerLocations {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("a flyer can have at most %d locations", outreach.MaxFlyerLocations))
-		return
+	actorID := actor.ID
+	v, err := h.putFlyerLocations(r.Context(), clientIP(r), &actorID, id, req.Locations)
+	writeFlyerResult(w, "set flyer locations", http.StatusOK, v, err)
+}
+
+// putFlyerLocations is PutFlyerLocations without the transport (#0703).
+func (h *AdminOutreachHandler) putFlyerLocations(ctx context.Context, ip string, actorID *int64, id int64, locs []flyerSelectionItem) (flyerView, error) {
+	if len(locs) > outreach.MaxFlyerLocations {
+		return flyerView{}, outreachRefusal(http.StatusBadRequest, "locations", fmt.Sprintf("a flyer can have at most %d locations", outreach.MaxFlyerLocations))
 	}
-	sel := make([]outreach.SelectionInput, 0, len(req.Locations))
-	for _, l := range req.Locations {
+	sel := make([]outreach.SelectionInput, 0, len(locs))
+	for _, l := range locs {
 		sel = append(sel, outreach.SelectionInput{LocationID: l.LocationID, Copies: l.Copies})
 	}
-	f, ok := h.loadFlyer(w, r, id)
-	if !ok {
-		return
+	f, err := h.getFlyer(ctx, id)
+	if err != nil {
+		return flyerView{}, err
 	}
-	switch err := h.flyers.ReplaceFlyerSelection(r.Context(), id, sel); {
+	switch err := h.flyers.ReplaceFlyerSelection(ctx, id, sel); {
 	case err == nil:
 	case errors.Is(err, outreach.ErrFlyerNotFound):
-		writeError(w, http.StatusNotFound, "flyer not found")
-		return
+		return flyerView{}, errFlyerNotFound
 	case errors.Is(err, outreach.ErrLocationInactive):
-		writeError(w, http.StatusBadRequest, "an inactive location cannot be added")
-		return
+		return flyerView{}, outreachRefusal(http.StatusBadRequest, "locations", "an inactive location cannot be added")
 	case errors.Is(err, outreach.ErrFlyerSelectionInvalid):
-		writeError(w, http.StatusBadRequest, "each location must be known and used once, with 1–50 copies")
-		return
+		return flyerView{}, outreachRefusal(http.StatusBadRequest, "locations", "each location must be known and used once, with 1–50 copies")
 	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return flyerView{}, err
 	}
-	h.auditFlyer(r, actor.ID, audit.ActionOutreachFlyerUpdated, id, f.OutreachID, map[string]any{"changed": []string{"locations"}, "locations": len(sel)})
-	v, ok := h.buildFlyerView(w, r, f)
-	if !ok {
-		return
-	}
-	writeJSON(w, http.StatusOK, v)
+	h.auditFlyerCtx(ctx, ip, actorID, audit.ActionOutreachFlyerUpdated, id, f.OutreachID, map[string]any{"changed": []string{"locations"}, "locations": len(sel)})
+	return h.flyerView(ctx, f)
 }
 
 // DeleteFlyer handles DELETE /admin/outreach-flyers/{id}. Links stay: they
@@ -515,21 +553,29 @@ func (h *AdminOutreachHandler) DeleteFlyer(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	f, ok := h.loadFlyer(w, r, id)
-	if !ok {
+	actorID := actor.ID
+	if err := h.deleteFlyer(r.Context(), clientIP(r), &actorID, id); err != nil {
+		writeOutreachError(w, "delete flyer", err)
 		return
 	}
-	switch err := h.flyers.DeleteFlyer(r.Context(), id); {
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteFlyer is DeleteFlyer without the transport (#0703).
+func (h *AdminOutreachHandler) deleteFlyer(ctx context.Context, ip string, actorID *int64, id int64) error {
+	f, err := h.getFlyer(ctx, id)
+	if err != nil {
+		return err
+	}
+	switch err := h.flyers.DeleteFlyer(ctx, id); {
 	case err == nil:
 	case errors.Is(err, outreach.ErrFlyerNotFound):
-		writeError(w, http.StatusNotFound, "flyer not found")
-		return
+		return errFlyerNotFound
 	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return err
 	}
-	h.auditFlyer(r, actor.ID, audit.ActionOutreachFlyerDeleted, id, f.OutreachID, nil)
-	w.WriteHeader(http.StatusNoContent)
+	h.auditFlyerCtx(ctx, ip, actorID, audit.ActionOutreachFlyerDeleted, id, f.OutreachID, nil)
+	return nil
 }
 
 // GenerateFlyer handles POST /admin/outreach-flyers/{id}/generate: one
@@ -550,43 +596,45 @@ func (h *AdminOutreachHandler) GenerateFlyer(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
+	actorID := actor.ID
+	v, err := h.generateFlyer(r.Context(), clientIP(r), &actorID, id)
+	writeFlyerResult(w, "generate flyer links", http.StatusOK, v, err)
+}
+
+// generateFlyer is GenerateFlyer without the transport (#0703). A
+// ShortLinks failure it passes through is an outreachLinksError.
+func (h *AdminOutreachHandler) generateFlyer(ctx context.Context, ip string, actorID *int64, id int64) (flyerView, error) {
 	if !h.linksEnabled() {
-		writeError(w, http.StatusServiceUnavailable, "ShortLinks is not configured")
-		return
+		return flyerView{}, outreachRefusal(http.StatusServiceUnavailable, "", "ShortLinks is not configured")
 	}
-	f, ok := h.loadFlyer(w, r, id)
-	if !ok {
-		return
-	}
-	o, err := h.store.GetByID(r.Context(), f.OutreachID)
+	f, err := h.getFlyer(ctx, id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return flyerView{}, err
 	}
-	wk, ok := h.loadWorkshop(w, r, o.WorkshopID)
-	if !ok {
-		return
+	o, err := h.store.GetByID(ctx, f.OutreachID)
+	if err != nil {
+		return flyerView{}, err
+	}
+	wk, err := h.workshopFor(ctx, o.WorkshopID)
+	if err != nil {
+		return flyerView{}, err
 	}
 	if wk.Status != "published" {
-		writeError(w, http.StatusConflict, "flyer links can only be generated for a published event")
-		return
+		return flyerView{}, outreachRefusal(http.StatusConflict, "", "flyer links can only be generated for a published event")
 	}
-	sel, err := h.flyers.ListFlyerSelection(r.Context(), id)
+	sel, err := h.flyers.ListFlyerSelection(ctx, id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return flyerView{}, err
 	}
 	if len(sel) == 0 {
-		writeError(w, http.StatusBadRequest, "select at least one location first")
-		return
+		return flyerView{}, outreachRefusal(http.StatusBadRequest, "locations", "select at least one location first")
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), flyerGenerateTimeout)
+	gctx, cancel := context.WithTimeout(ctx, flyerGenerateTimeout)
 	defer cancel()
-	base, err := h.shortLinksBase(ctx)
+	base, err := h.shortLinksBase(gctx)
 	if err != nil {
-		writeShortLinksError(w, "me", err)
-		return
+		return flyerView{}, outreachLinksError{err}
 	}
 
 	progress := 0
@@ -594,10 +642,9 @@ func (h *AdminOutreachHandler) GenerateFlyer(w http.ResponseWriter, r *http.Requ
 	for _, s := range sel {
 		link := s.Link
 		if link == nil {
-			l, created, err := h.generateLink(ctx, o, wk, s, base)
+			l, created, err := h.generateLink(gctx, o, wk, s, base)
 			if errors.Is(err, outreach.ErrLocationCodeChanged) {
-				writeError(w, http.StatusConflict, "a location's code changed; try again")
-				return
+				return flyerView{}, outreachRefusal(http.StatusConflict, "", "a location's code changed; try again")
 			}
 			if err != nil {
 				stopErr = err
@@ -606,13 +653,13 @@ func (h *AdminOutreachHandler) GenerateFlyer(w http.ResponseWriter, r *http.Requ
 			progress++
 			link = &l
 			if created {
-				h.auditFlyerLink(r, actor.ID, audit.ActionOutreachFlyerLinkCreated, l.ID, o.ID, s.LocationID, map[string]any{
+				h.auditFlyerLinkCtx(ctx, ip, actorID, audit.ActionOutreachFlyerLinkCreated, l.ID, o.ID, s.LocationID, map[string]any{
 					"code": s.Code, "short_link_key": l.Key,
 				})
 			}
 		}
 		if !link.HasQR {
-			if err := h.cacheQR(ctx, *link); err != nil {
+			if err := h.cacheQR(gctx, *link); err != nil {
 				stopErr = err
 				break
 			}
@@ -620,19 +667,16 @@ func (h *AdminOutreachHandler) GenerateFlyer(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	if stopErr != nil && progress == 0 {
-		if errors.Is(stopErr, shortlinks.ErrRateLimited) {
-			writeShortLinksError(w, "generate flyer links", stopErr)
-			return
-		}
+	if stopErr != nil && progress == 0 && errors.Is(stopErr, shortlinks.ErrRateLimited) {
+		return flyerView{}, outreachLinksError{stopErr}
 	}
 	if stopErr != nil {
 		slog.Default().Error("admin_outreach: flyer generate stopped", "flyer_id", id, "err", stopErr)
 	}
 
-	v, ok := h.buildFlyerView(w, r, f)
-	if !ok {
-		return
+	v, err := h.flyerView(ctx, f)
+	if err != nil {
+		return flyerView{}, err
 	}
 	remaining := 0
 	for _, s := range v.Selection {
@@ -643,32 +687,17 @@ func (h *AdminOutreachHandler) GenerateFlyer(w http.ResponseWriter, r *http.Requ
 	v.Remaining = &remaining
 	switch {
 	case remaining == 0:
-	case errors.Is(stopErr, context.DeadlineExceeded) || ctx.Err() != nil:
+	case errors.Is(stopErr, context.DeadlineExceeded) || gctx.Err() != nil:
 		v.Message = msgFlyerGenerateTimeout
 	default:
 		v.Message = msgFlyerGenerateStopped
 	}
-	writeJSON(w, http.StatusOK, v)
+	return v, nil
 }
 
-// auditFlyerLink records a flyer-link action; extra adds to the
-// always-present outreach_id and location_id.
-func (h *AdminOutreachHandler) auditFlyerLink(r *http.Request, actorID int64, action string, linkID, outreachID, locationID int64, extra map[string]any) {
-	if h.auditor == nil {
-		return
-	}
-	meta := map[string]any{"outreach_id": outreachID, "location_id": locationID}
-	for k, v := range extra {
-		meta[k] = v
-	}
-	h.auditor.Record(r.Context(), audit.Entry{
-		ActorID: &actorID, Action: action, TargetType: audit.TargetOutreachFlyerLink, TargetID: &linkID,
-		Metadata: meta, IP: clientIP(r),
-	})
-}
-
-// auditFlyerLinkCtx is auditFlyerLink without the request (#0699), for
-// ensureLinksFor; recordCtx attributes an API-token request to its token.
+// auditFlyerLinkCtx records a flyer-link action (#0699); extra adds to the
+// always-present outreach_id and location_id. recordCtx attributes an
+// API-token request to its token.
 func (h *AdminOutreachHandler) auditFlyerLinkCtx(ctx context.Context, ip string, actorID *int64, action string, linkID, outreachID, locationID int64, extra map[string]any) {
 	meta := map[string]any{"outreach_id": outreachID, "location_id": locationID}
 	for k, v := range extra {
@@ -753,30 +782,37 @@ func (h *AdminOutreachHandler) PutUpFlyerLink(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	putUp := r.Method == http.MethodPost
-	before, err := h.flyers.GetFlyerLink(r.Context(), id)
-	if errors.Is(err, outreach.ErrFlyerLinkNotFound) {
-		writeError(w, http.StatusNotFound, "flyer link not found")
-		return
-	} else if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal server error")
+	actorID := actor.ID
+	after, err := h.setFlyerLinkPutUp(r.Context(), clientIP(r), &actorID, id, r.Method == http.MethodPost)
+	if err != nil {
+		writeOutreachError(w, "put up flyer link", err)
 		return
 	}
-	after, err := h.flyers.SetPutUp(r.Context(), id, putUp)
+	writeJSON(w, http.StatusOK, flyerLinkViewOf(after))
+}
+
+// setFlyerLinkPutUp is PutUpFlyerLink without the transport (#0703). Only a
+// real change is audited.
+func (h *AdminOutreachHandler) setFlyerLinkPutUp(ctx context.Context, ip string, actorID *int64, id int64, putUp bool) (outreach.FlyerLink, error) {
+	before, err := h.flyers.GetFlyerLink(ctx, id)
+	if errors.Is(err, outreach.ErrFlyerLinkNotFound) {
+		return outreach.FlyerLink{}, errFlyerLinkNotFound
+	} else if err != nil {
+		return outreach.FlyerLink{}, err
+	}
+	after, err := h.flyers.SetPutUp(ctx, id, putUp)
 	switch {
 	case err == nil:
 	case errors.Is(err, outreach.ErrFlyerLinkNotFound):
-		writeError(w, http.StatusNotFound, "flyer link not found")
-		return
+		return outreach.FlyerLink{}, errFlyerLinkNotFound
 	default:
-		writeError(w, http.StatusInternalServerError, "internal server error")
-		return
+		return outreach.FlyerLink{}, err
 	}
 	switch {
 	case putUp && before.PutUpAt == nil:
-		h.auditFlyerLink(r, actor.ID, audit.ActionOutreachFlyerLinkPutUp, id, after.OutreachID, after.LocationID, nil)
+		h.auditFlyerLinkCtx(ctx, ip, actorID, audit.ActionOutreachFlyerLinkPutUp, id, after.OutreachID, after.LocationID, nil)
 	case !putUp && before.PutUpAt != nil:
-		h.auditFlyerLink(r, actor.ID, audit.ActionOutreachFlyerLinkPutUpCleared, id, after.OutreachID, after.LocationID, nil)
+		h.auditFlyerLinkCtx(ctx, ip, actorID, audit.ActionOutreachFlyerLinkPutUpCleared, id, after.OutreachID, after.LocationID, nil)
 	}
-	writeJSON(w, http.StatusOK, flyerLinkViewOf(after))
+	return after, nil
 }

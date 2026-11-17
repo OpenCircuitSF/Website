@@ -155,6 +155,14 @@ for DESTRUCTIVE, and `readOnlyHint` for every read.
 | | `create_outreach_location` | | `outreach:write` | yes |
 | | `update_outreach_location` | | `outreach:write` | |
 | | `delete_outreach_location` | DESTRUCTIVE | `outreach:write` | |
+| | `list_flyers` |  | `outreach:read` |  |
+| | `get_flyer` |  | `outreach:read` |  |
+| | `create_flyer` |  | `outreach:write` | yes |
+| | `update_flyer` |  | `outreach:write` |  |
+| | `set_flyer_locations` |  | `outreach:write` |  |
+| | `generate_flyer` |  | `outreach:write` |  |
+| | `set_flyer_link_put_up` |  | `outreach:write` |  |
+| | `delete_flyer` | DESTRUCTIVE | `outreach:write` |  |
 | Media | `create_media_upload` | | `media:write` | |
 | | `list_media` | | `media:read` | |
 | Engagement | `get_engagement` | | `engagement:read` | |

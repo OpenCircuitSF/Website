@@ -30,6 +30,8 @@ func TestBuildV1RegistryListsOperations(t *testing.T) {
 		"get_outreach_results", "outreach_results_summary", "outreach_timeline", "outreach_luma",
 		"list_outreach_locations", "create_outreach_location", "update_outreach_location", "delete_outreach_location",
 		"get_post_performance",
+		"list_flyers", "get_flyer", "create_flyer", "update_flyer", "set_flyer_locations", "generate_flyer",
+		"set_flyer_link_put_up", "delete_flyer",
 		"create_media_upload", "list_media"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("operations %v, want %v", names, want)

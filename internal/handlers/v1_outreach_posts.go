@@ -54,6 +54,10 @@ func notFoundWhat(msg string) string {
 		return "outreach post"
 	case "location not found":
 		return "outreach location"
+	case "flyer not found":
+		return "flyer"
+	case "flyer link not found":
+		return "flyer link"
 	}
 	return "outreach"
 }
