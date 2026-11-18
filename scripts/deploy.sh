@@ -48,8 +48,11 @@
 #      run golang-migrate from the bundle's migrations against the live
 #      database (IRREVERSIBLE — the on-box CLI installed per #0513), install
 #      the binary, restart the service.
-#   8. Health-check the live site and confirm the installed binary reports
-#      this commit (docs/deployment.md, Provenance).
+#   8. Health-check the live site with a bounded retry (#0712: Apache 503s
+#      while the restarted service is still starting), confirm the installed
+#      binary reports this commit (docs/deployment.md, Provenance), and
+#      confirm the RUNNING process's /proc/<pid>/exe hashes the same as the
+#      installed and shipped binaries — so a stale process cannot pass.
 #
 # Configuration, all via environment (no #0511 identifiers may ever be
 # written into this file — take them from the environment or a config file
@@ -60,6 +63,9 @@
 #   BIN_PATH      the binary path systemd runs on the host
 #   SERVICE       systemd unit name
 #   PUBLIC_URL    public site URL for the /health check
+#   HEALTH_ATTEMPTS / HEALTH_INTERVAL / HEALTH_MAX_TIME
+#                 /health retry: attempts (default 10), seconds between
+#                 them (default 3), per-attempt curl --max-time (default 5)
 #
 set -euo pipefail
 
@@ -303,7 +309,8 @@ if [ "$DRY_RUN" -eq 1 ]; then
   info "[dry-run] after a Y/n gate:"
   printf '    [dry-run] ssh %s -- %s   # restore-point check, then IRREVERSIBLE migrate\n' "$DEPLOY_HOST" "$R_MIGRATE"
   printf '    [dry-run] ssh %s -- %s\n' "$DEPLOY_HOST" "$R_INSTALL"
-  printf '    [dry-run] curl -fsS --max-time 15 %s/health\n' "$PUBLIC_URL"
+  printf '    [dry-run] curl %s/health up to %s attempts, %ss apart (per-attempt --max-time %s)\n' "$PUBLIC_URL" "${HEALTH_ATTEMPTS:-10}" "${HEALTH_INTERVAL:-3}" "${HEALTH_MAX_TIME:-5}"
+  printf '    [dry-run] ssh %s bash -s -- %s %s %s/opencircuit   # MainPID exe sha256 == installed == shipped\n' "$DEPLOY_HOST" "$SERVICE" "$BIN_PATH" "$DEST"
   info "[dry-run] bundle left for inspection at: $SCRATCH_DIR"
   exit 0
 fi
@@ -384,14 +391,80 @@ fi
 ok "'$SERVICE' restarted and active"
 
 step "Verifying the live site and the installed binary"
-if ! curl -fsS --max-time 15 "$PUBLIC_URL/health"; then
-  die "$PUBLIC_URL/health did not return healthy — the service may be up but unhealthy, or something in front of it is stale."
+# HEALTH-0712-BEGIN
+# #0712: a single curl right after `systemctl restart` raced the service's
+# startup (Apache answers 503 until it listens), so three successful deploys
+# reported failure. Retry for a bounded window; healthy means HTTP 200 AND a
+# body carrying "status":"ok" (a 200 with a degraded body is not healthy).
+# Exercised by scripts/deploy_health_guard_test.sh against a 127.0.0.1 stub.
+HEALTH_ATTEMPTS="${HEALTH_ATTEMPTS:-10}"   # ~30s window at the default interval
+HEALTH_INTERVAL="${HEALTH_INTERVAL:-3}"    # seconds between attempts (sleep accepts 0.1)
+HEALTH_MAX_TIME="${HEALTH_MAX_TIME:-5}"    # per-attempt curl --max-time
+LAST_HEALTH_CODE=""; LAST_HEALTH_BODY=""
+wait_healthy() {
+  local url="$1" i out code body
+  case "$HEALTH_ATTEMPTS" in ''|*[!0-9]*) die "HEALTH_ATTEMPTS must be a positive integer (got '$HEALTH_ATTEMPTS')" ;; esac
+  [ "$HEALTH_ATTEMPTS" -ge 1 ] || die "HEALTH_ATTEMPTS must be at least 1 (got '$HEALTH_ATTEMPTS')"
+  i=1
+  while [ "$i" -le "$HEALTH_ATTEMPTS" ]; do
+    out="$(curl -sS --max-time "$HEALTH_MAX_TIME" -w '\n%{http_code}' "$url" 2>&1)" || true
+    code="${out##*$'\n'}"
+    body="${out%$'\n'*}"
+    [ "$body" = "$out" ] && body=""
+    LAST_HEALTH_CODE="$code"; LAST_HEALTH_BODY="$body"
+    info "attempt $i/$HEALTH_ATTEMPTS: HTTP $code"
+    if [ "$code" = "200" ]; then
+      case "$body" in
+        *'"status":"ok"'*) ok "healthy after $i/$HEALTH_ATTEMPTS attempt(s)"; return 0 ;;
+      esac
+    fi
+    if [ "$i" -lt "$HEALTH_ATTEMPTS" ]; then sleep "$HEALTH_INTERVAL"; fi
+    i=$((i + 1))
+  done
+  return 1
+}
+# HEALTH-0712-END
+if ! wait_healthy "$PUBLIC_URL/health"; then
+  die "$PUBLIC_URL/health never returned healthy in $HEALTH_ATTEMPTS attempts ${HEALTH_INTERVAL}s apart — the service may be up but unhealthy, or something in front of it is stale. Last response: HTTP ${LAST_HEALTH_CODE:-none}: $(printf '%s' "$LAST_HEALTH_BODY" | head -c 500) — inspect: ssh $DEPLOY_HOST journalctl -u $SERVICE -n 50"
 fi
 LIVE_VER="$(run_remote "'$BIN_PATH' --version" || true)"
 case "$LIVE_VER" in
   *"$COMMIT"*) ok "live binary reports commit $COMMIT: $LIVE_VER" ;;
   *) die "the installed binary does not report this commit (got: ${LIVE_VER:-<no output>}) — the install did not take, or something else is at $BIN_PATH." ;;
 esac
+# IDENTITY-0712-BEGIN
+# #0712: --version above proves the FILE at $BIN_PATH is this build, not that
+# the RUNNING process is. Hash /proc/<MainPID>/exe (which reads the mapped
+# inode even if the file was since replaced) and require it to equal both the
+# installed binary and the shipped one ($DEST/opencircuit, whose --version
+# already named $COMMIT). Quoted assignment: the body must reach the host
+# unexpanded; values arrive as positional args (SC2016 is the point here).
+# shellcheck disable=SC2016
+IDENTITY_CHECK='set -e
+pid="$(systemctl show -p MainPID --value "$1")"
+case "$pid" in ""|0) echo "no MainPID for $1"; exit 3 ;; esac
+echo "pid $pid"
+sudo sha256sum "/proc/$pid/exe" "$2" "$3"'
+# Pure and local — no ssh in here — so the guard test can feed it fixtures.
+confirm_live_identity() {
+  local out="$1" pid h_exe h_bin h_dest h
+  pid="$(printf '%s\n' "$out" | awk '$1=="pid"{print $2; exit}')"
+  h_exe="$(printf '%s\n' "$out" | awk '$2 ~ /^\/proc\/[0-9]+\/exe$/{print $1; exit}')"
+  h_bin="$(printf '%s\n' "$out" | awk '$1 ~ /^[0-9a-f]+$/ && $2 !~ /^\/proc\//{n++; if(n==1){print $1; exit}}')"
+  h_dest="$(printf '%s\n' "$out" | awk '$1 ~ /^[0-9a-f]+$/ && $2 !~ /^\/proc\//{n++; if(n==2){print $1; exit}}')"
+  for h in "$h_exe" "$h_bin" "$h_dest"; do
+    case "$h" in
+      *[!0-9a-f]*|'') die "could not read the running process's identity from the host (output: ${out:-<none>})" ;;
+    esac
+    [ "${#h}" -eq 64 ] || die "malformed sha256 in identity output: '$h' (output: ${out:-<none>})"
+  done
+  [ "$h_bin" = "$h_dest" ] || die "installed binary sha256 $h_bin differs from the shipped one $h_dest — the install did not take."
+  [ "$h_exe" = "$h_bin" ] || die "running process (pid ${pid:-?}) sha256 $h_exe differs from the installed binary $h_bin — a stale process is still serving; restart did not take."
+  ok "running process (pid ${pid:-?}) is executing the deployed binary (sha256 $(printf '%s' "$h_exe" | cut -c1-12)…)"
+}
+# IDENTITY-0712-END
+ID_OUT="$(printf '%s' "$IDENTITY_CHECK" | ssh "$DEPLOY_HOST" bash -s -- "$SERVICE" "$BIN_PATH" "$DEST/opencircuit" 2>&1 || true)"
+confirm_live_identity "$ID_OUT"
 
 step "Cleaning up local build residue"
 rm -rf "${STAGE:?}" "${SCRATCH_DIR:?}/$ZIP_NAME" "${SCRATCH_DIR:?}/SHA256SUMS"

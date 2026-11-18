@@ -30,7 +30,8 @@
 # it only says the tree compiles and type-checks.
 #
 # `guards` runs scripts/check_guard_test.sh, scripts/deploy_guard_test.sh
-# (#0424), scripts/testdb_gc_guard_test.sh, scripts/dev_guard_test.sh,
+# (#0424), scripts/deploy_health_guard_test.sh (#0712),
+# scripts/testdb_gc_guard_test.sh, scripts/dev_guard_test.sh,
 # scripts/db_reset_guard_test.sh, and scripts/go_file_visit_floor_guard_test.sh
 # (#0300). The last of those ALSO runs on the ordinary path now (#0489 — see
 # floor_guard_check below); the rest are not part of any other mode, since
@@ -970,6 +971,10 @@ case "$MODE" in
        # it runs here right alongside check_guard_test.sh rather than with
        # the heavier database- or port-bound checks below.
        step "scripts/deploy_guard_test.sh (#0424)"; run scripts/deploy_guard_test.sh
+       # #0712: deploy.sh's /health retry and running-process identity
+       # check, against a python3 stub on an ephemeral 127.0.0.1 port — no
+       # database, no fixed port, ~2s.
+       step "scripts/deploy_health_guard_test.sh (#0712)"; run scripts/deploy_health_guard_test.sh
        step "scripts/testdb_gc_guard_test.sh (#0150)"; run scripts/testdb_gc_guard_test.sh
        step "scripts/dev_guard_test.sh (#0117)";        run scripts/dev_guard_test.sh
        step "scripts/db_reset_guard_test.sh (#0207)";   run scripts/db_reset_guard_test.sh

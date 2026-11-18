@@ -3189,7 +3189,8 @@ Both scripts exist now; what each automates, and what still needs hands:
   verifies SHA-256 on the host, proves the artifact runs, backs up the
   previous binary, and — behind a `[Y/n]` gate — checks a restore point,
   runs `migrate` from the bundle's `migrations/` via the on-box
-  `golang-migrate` (`#0513`), installs, restarts, and health-checks.
+  `golang-migrate` (`#0513`), installs, restarts, health-checks with a bounded
+  retry, and confirms the running process is the shipped binary (`#0712`).
   `--dry-run` prints the exact remote plan without touching the host.
 - **Neither script replaces reading this procedure.** `deploy.sh` ships by
   `scp` from the workstation rather than by release-fetch on the box, so a
