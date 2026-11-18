@@ -153,7 +153,7 @@ describe('versionCheck', () => {
     createSeenBuildStore(() => s).set({ build: 'n+2', at: 5 });
     expect(s.getItem(SEEN_BUILD_KEY)).toBe('{"build":"n+2","at":5}');
     expect(createSeenBuildStore(() => s).get()).toEqual({ build: 'n+2', at: 5 });
-    for (const bad of ['not json', '{"build":3,"at":1}', '{"build":"x"}']) {
+    for (const bad of ['not json', '{"build":3,"at":1}', '{"build":"x"}', '{"build":"","at":1}']) {
       s.setItem(SEEN_BUILD_KEY, bad);
       expect(createSeenBuildStore(() => s).get()).toBeNull();
     }
@@ -192,6 +192,7 @@ describe('versionCheck', () => {
     expect(await checkForNewVersion(tab(s, 'old+1', 0, T + 60_000, fetchB))).toBe('reload');
     expect(await checkForNewVersion(tab(s, 'old+1', 0, T + 60_000, fetchB, true))).toBe('notify');
     expect(fetchB).not.toHaveBeenCalled();
+    expect(s.getItem(LAST_CHECK_KEY)).toBe(String(T)); // the seen path does not touch the throttle
   });
 
   it('a tab already on the seen build still obeys the hour throttle', async () => {
@@ -356,6 +357,25 @@ describe('versionCheck', () => {
     expect(h.reload).toHaveBeenCalledOnce();
     expect(h.fetchBuild).not.toHaveBeenCalled();
     h.stop();
+  });
+
+  it('startVersionWatch defaults loadedAt to its start, so a build seen before this page loaded is ignored', async () => {
+    const reload = vi.fn();
+    const fetchBuild = vi.fn(async () => 'new+2');
+    const doc = Object.assign(new EventTarget(), { visibilityState: 'hidden', activeElement: null });
+    const stop = startVersionWatch({
+      onNotify: vi.fn(), win: new EventTarget(), doc, reload,
+      // No loadedAt: the default must be "now", not 0. The seen record predates this page,
+      // as after a reload onto a stale cached shell.
+      deps: { runningBuild: 'old+1', store: memStore(Date.now()), fetchBuild, hasUnsavedWork: () => false,
+        seen: memSeen({ build: 'new+2', at: Date.now() - 1000 }) },
+    });
+    doc.visibilityState = 'visible';
+    doc.dispatchEvent(new Event('visibilitychange'));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(reload).not.toHaveBeenCalled();
+    expect(fetchBuild).not.toHaveBeenCalled();
+    stop();
   });
 
   it('startVersionWatch cleanup removes both listeners', async () => {
