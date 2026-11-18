@@ -63,7 +63,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/web"
 )
 
-const version = "0.16.2"
+const version = "0.17.0"
 
 // commitHash records the git commit the running binary was built from. It is
 // "unknown" unless overridden at build time via -ldflags, which is exactly
