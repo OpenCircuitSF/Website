@@ -15,6 +15,8 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outreach"
 	"github.com/brennanMKE/OpenCircuitSF/internal/shortlinks"
+	"github.com/brennanMKE/OpenCircuitSF/internal/testdb"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type fixedLumaFeed struct{ snap luma.Snapshot }
@@ -51,7 +53,7 @@ func TestV1OutreachResults_ForEvent(t *testing.T) {
 	if err := store.RecordEngagement(ctx, bsky, time.Now(), outreach.Counts{Likes: 4, Reposts: 2, Replies: 1, Quotes: 3}); err != nil {
 		t.Fatal(err)
 	}
-	seedPacificMention(t, store, bsky, "at://mention-0708")
+	seedPacificMention(t, e.pool, store, bsky, "at://mention-0708")
 	e.links.statsRollup = &shortlinks.CampaignRollup{
 		ClickCount: 9, WindowFrom: "2026-10-01", WindowTo: "2026-10-17",
 		ByLink: []shortlinks.LinkBucket{{Key: "k1", Count: 7}, {Key: "k2", Count: 2}},
@@ -109,7 +111,7 @@ func TestV1OutreachResults_Summary(t *testing.T) {
 	e := newV1OutreachResultsEnv(t, true)
 	w, panel := e.seedResultsOutreach(t)
 	mentioned := panel.Posts[0].ID
-	seedPacificMention(t, outreach.NewStore(e.pool), mentioned, "at://mention-0708-summary")
+	seedPacificMention(t, e.pool, outreach.NewStore(e.pool), mentioned, "at://mention-0708-summary")
 	e.links.statsRollup = &shortlinks.CampaignRollup{ClickCount: 5}
 	e.v1(t, http.MethodGet, "/api/v1/outreach/results", e.write, "", http.StatusForbidden)
 	b := e.v1(t, http.MethodGet, "/api/v1/outreach/results", e.read, "", http.StatusOK)
@@ -182,9 +184,16 @@ func TestV1OutreachResults_Luma(t *testing.T) {
 
 // seedPacificMention inserts a reply mention created at 20:00 UTC on
 // 2026-11-10, which is 12:00 Pacific (#0708).
-func seedPacificMention(t *testing.T, store *outreach.Store, postID int64, remoteID string) {
+func seedPacificMention(t *testing.T, pool *pgxpool.Pool, store *outreach.Store, postID int64, remoteID string) {
 	t.Helper()
 	pid := postID
+	// Unique per run: InsertMention is ON CONFLICT (remote_id) DO NOTHING, so a
+	// fixed id left over from an earlier run against the same database would
+	// silently skip this insert (#0639).
+	remoteID = fmt.Sprintf("%s-%d", remoteID, testdb.Unique())
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM outreach_mentions WHERE remote_id=$1`, remoteID)
+	})
 	if _, err := store.InsertMention(context.Background(), outreach.Mention{
 		Channel: "bluesky", RemoteID: remoteID, Kind: "reply", Author: "a.test", Text: "hi",
 		PostID: &pid, CreatedAt: time.Date(2026, 11, 10, 20, 0, 0, 0, time.UTC), FetchedAt: time.Now(),

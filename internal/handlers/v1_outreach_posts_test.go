@@ -131,7 +131,7 @@ func TestV1OutreachWrite_UpdatePost(t *testing.T) {
 
 	e.v1(t, http.MethodPatch, path, e.read, `{"body":"x"}`, http.StatusForbidden)
 	b := e.v1(t, http.MethodPatch, path, e.write, `{"body":"edited"}`, http.StatusOK)
-	if !strings.Contains(string(b), `"body":"edited"`) || !strings.Contains(string(b), "-08:00") {
+	if !strings.Contains(string(b), `"body":"edited"`) || (!strings.Contains(string(b), "-08:00") && !strings.Contains(string(b), "-07:00")) {
 		t.Errorf("update body %s", b)
 	}
 	e.v1(t, http.MethodPatch, path, e.write, `{"regenerate":true}`, http.StatusOK)

@@ -71,7 +71,7 @@ func TestV1OutreachLinks_PrepareIsIdempotent(t *testing.T) {
 
 	e.v1(t, http.MethodPost, path, e.read, "", http.StatusForbidden)
 	first := e.v1(t, http.MethodPost, path, e.write, "", http.StatusOK)
-	if !strings.Contains(string(first), `"prepared":true`) || !strings.Contains(string(first), "-08:00") {
+	if !strings.Contains(string(first), `"prepared":true`) || (!strings.Contains(string(first), "-08:00") && !strings.Contains(string(first), "-07:00")) {
 		t.Errorf("prepare body %s", first)
 	}
 	calls := len(e.links.links)

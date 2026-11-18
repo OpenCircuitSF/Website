@@ -327,6 +327,7 @@ func TestAdminOutreachLinks_Guards(t *testing.T) {
 
 func TestAdminOutreachLinks_PrepareAndCreatePostUseTheRow(t *testing.T) {
 	e := newOutreachEnv(t, true)
+	e.beforeEvent()
 	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
 	p := e.startHTTP(t, w)
 	oid := p.Outreach.ID
@@ -375,6 +376,7 @@ type testDraftAll struct {
 
 func TestAdminOutreachLinks_DraftAll(t *testing.T) {
 	e := newOutreachEnv(t, true)
+	e.beforeEvent()
 	w := seedOutreachWorkshop(t, e.pool, e.ws, "published")
 	p := e.startHTTP(t, w)
 	oid := p.Outreach.ID
