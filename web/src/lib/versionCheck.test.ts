@@ -4,15 +4,20 @@ import {
   LAST_CHECK_KEY,
   RELOAD_SCROLL_KEY,
   RETRY_AFTER_FAILURE_MS,
+  SEEN_BUILD_KEY,
   checkForNewVersion,
+  createSeenBuildStore,
   createThrottleStore,
   fetchServerBuild,
   readRunningBuild,
   reloadToSameURL,
   restoreScrollAfterReload,
+  seenNewerBuild,
   shouldCheck,
   startVersionWatch,
   type CheckDeps,
+  type SeenBuild,
+  type SeenBuildStore,
   type ThrottleStore,
 } from './versionCheck';
 
@@ -35,12 +40,18 @@ const memStore = (v: number | null = null): ThrottleStore => {
   let x = v;
   return { get: () => x, set: (n) => void (x = n) };
 };
+const memSeen = (v: SeenBuild | null = null): SeenBuildStore => {
+  let x = v;
+  return { get: () => x, set: (n) => void (x = n) };
+};
 const deps = (over: Partial<CheckDeps> = {}): CheckDeps => ({
   now: () => 10 * CHECK_INTERVAL_MS,
   store: memStore(),
   runningBuild: 'a+1',
   fetchBuild: async () => 'a+1',
   hasUnsavedWork: () => false,
+  seen: memSeen(),
+  loadedAt: 0,
   ...over,
 });
 const resp = (ok: boolean, json: () => Promise<unknown>) => ({ ok, json }) as unknown as Response;
@@ -104,14 +115,16 @@ describe('versionCheck', () => {
     for (const server of ['a+1', 'b+2']) {
       const store = memStore();
       let now = 10 * CHECK_INTERVAL_MS;
+      let loadedAt = 0;
       const fetchBuild = vi.fn(async () => server);
-      const d = { now: () => now, store, fetchBuild };
-      expect(await checkForNewVersion(deps(d))).toBe(server === 'a+1' ? 'same' : 'reload');
+      const d = { now: () => now, store, fetchBuild, seen: memSeen() };
+      expect(await checkForNewVersion(deps({ ...d, loadedAt }))).toBe(server === 'a+1' ? 'same' : 'reload');
+      loadedAt = now + 1; // the tab reloaded, still on a stale shell
       now += CHECK_INTERVAL_MS - 1;
-      expect(await checkForNewVersion(deps(d))).toBe('skip');
+      expect(await checkForNewVersion(deps({ ...d, loadedAt }))).toBe('skip');
       expect(fetchBuild).toHaveBeenCalledTimes(1);
       now += 1;
-      await checkForNewVersion(deps(d));
+      await checkForNewVersion(deps({ ...d, loadedAt }));
       expect(fetchBuild).toHaveBeenCalledTimes(2);
     }
   });
@@ -133,6 +146,96 @@ describe('versionCheck', () => {
     expect(shouldCheck(now, store.get())).toBe(false);
     now += 1;
     expect(shouldCheck(now, store.get())).toBe(true);
+  });
+
+  it('seen-build store persists across instances and ignores malformed values', () => {
+    const s = fakeStorage();
+    createSeenBuildStore(() => s).set({ build: 'n+2', at: 5 });
+    expect(s.getItem(SEEN_BUILD_KEY)).toBe('{"build":"n+2","at":5}');
+    expect(createSeenBuildStore(() => s).get()).toEqual({ build: 'n+2', at: 5 });
+    for (const bad of ['not json', '{"build":3,"at":1}', '{"build":"x"}']) {
+      s.setItem(SEEN_BUILD_KEY, bad);
+      expect(createSeenBuildStore(() => s).get()).toBeNull();
+    }
+  });
+
+  it('seen-build store falls back to memory when storage throws', () => {
+    const st = createSeenBuildStore(throwingStorage);
+    expect(st.get()).toBeNull();
+    st.set({ build: 'n+2', at: 7 });
+    expect(st.get()).toEqual({ build: 'n+2', at: 7 });
+  });
+
+  it('a successful check records the server build; a failed check does not', async () => {
+    const now = 10 * CHECK_INTERVAL_MS;
+    for (const server of ['a+1', 'b+2']) {
+      const seen = memSeen();
+      await checkForNewVersion(deps({ seen, fetchBuild: async () => server }));
+      expect(seen.get()).toEqual({ build: server, at: now });
+    }
+    const seen = memSeen();
+    expect(await checkForNewVersion(deps({ seen, fetchBuild: async () => null }))).toBe('failed');
+    expect(seen.get()).toBeNull();
+  });
+
+  const tab = (s: Storage, runningBuild: string, loadedAt: number, now: number, fetchBuild: () => Promise<string | null>, unsaved = false) =>
+    deps({
+      now: () => now, runningBuild, loadedAt, fetchBuild, hasUnsavedWork: () => unsaved,
+      store: createThrottleStore(() => s), seen: createSeenBuildStore(() => s),
+    });
+
+  it('a second stale tab reloads on focus from the build the first tab saw, without fetching', async () => {
+    const s = fakeStorage();
+    const T = 10 * CHECK_INTERVAL_MS;
+    expect(await checkForNewVersion(tab(s, 'old+1', 0, T, async () => 'new+2'))).toBe('reload');
+    const fetchB = vi.fn(async () => 'new+2');
+    expect(await checkForNewVersion(tab(s, 'old+1', 0, T + 60_000, fetchB))).toBe('reload');
+    expect(await checkForNewVersion(tab(s, 'old+1', 0, T + 60_000, fetchB, true))).toBe('notify');
+    expect(fetchB).not.toHaveBeenCalled();
+  });
+
+  it('a tab already on the seen build still obeys the hour throttle', async () => {
+    const s = fakeStorage();
+    const T = 10 * CHECK_INTERVAL_MS;
+    await checkForNewVersion(tab(s, 'old+1', 0, T, async () => 'new+2'));
+    const fetchC = vi.fn(async () => 'new+2');
+    expect(await checkForNewVersion(tab(s, 'new+2', 0, T + 60_000, fetchC))).toBe('skip');
+    expect(fetchC).not.toHaveBeenCalled();
+  });
+
+  it('a seen build recorded before this tab loaded is ignored', async () => {
+    const fetchBuild = vi.fn(async () => 'new+2');
+    const now = 10 * CHECK_INTERVAL_MS;
+    expect(await checkForNewVersion(deps({
+      runningBuild: 'new+2', loadedAt: 200, seen: memSeen({ build: 'old+1', at: 100 }),
+      store: memStore(now - 1000), fetchBuild,
+    }))).toBe('skip');
+    expect(fetchBuild).not.toHaveBeenCalled();
+  });
+
+  it('a seen build in the future is ignored', () => {
+    expect(seenNewerBuild('a', { build: 'b', at: 2000 }, 0, 1000)).toBe(false);
+    expect(seenNewerBuild('a', { build: 'b', at: 500 }, 0, 1000)).toBe(true);
+    expect(seenNewerBuild('a', { build: 'a', at: 500 }, 0, 1000)).toBe(false);
+  });
+
+  it('an old tab and a new tab sharing storage do not ping-pong', async () => {
+    const s = fakeStorage();
+    const T = 10 * CHECK_INTERVAL_MS;
+    expect(await checkForNewVersion(tab(s, 'new+2', 0, T, async () => 'new+2'))).toBe('same');
+    expect(await checkForNewVersion(tab(s, 'old+1', 0, T + 1000, async () => 'new+2'))).toBe('reload');
+    const oLoadedAt = T + 2000; // O reloaded onto a stale shell
+    const before = s.getItem(SEEN_BUILD_KEY);
+    const fetchN = vi.fn(async () => 'new+2');
+    const fetchO = vi.fn(async () => 'new+2');
+    for (let i = 3; i <= 10; i++) {
+      const at = T + i * 1000;
+      const d = i % 2 ? tab(s, 'new+2', 0, at, fetchN) : tab(s, 'old+1', oLoadedAt, at, fetchO);
+      expect(await checkForNewVersion(d)).toBe('skip');
+    }
+    expect(fetchN).not.toHaveBeenCalled();
+    expect(fetchO).not.toHaveBeenCalled();
+    expect(s.getItem(SEEN_BUILD_KEY)).toBe(before);
   });
 
   it('fetchServerBuild requests /api/version with no-store and returns build', async () => {
@@ -185,7 +288,7 @@ describe('versionCheck', () => {
     const fetchBuild = vi.fn(async () => 'new+2');
     const stop = startVersionWatch({
       onNotify, win, doc, reload,
-      deps: { runningBuild: 'old+1', store: memStore(), fetchBuild, hasUnsavedWork: () => false, ...over },
+      deps: { runningBuild: 'old+1', store: memStore(), fetchBuild, hasUnsavedWork: () => false, seen: memSeen(), loadedAt: 0, ...over },
     });
     const flush = () => new Promise((r) => setTimeout(r, 0));
     return { win, doc, reload, onNotify, fetchBuild, stop, flush };
@@ -239,6 +342,19 @@ describe('versionCheck', () => {
     await h.flush();
     expect(h.onNotify).toHaveBeenCalledOnce();
     expect(h.reload).not.toHaveBeenCalled();
+    h.stop();
+  });
+
+  it('startVersionWatch reloads on focus from a newer seen build without fetching', async () => {
+    const h = watchHarness({ seen: memSeen({ build: 'new+2', at: 5 }), loadedAt: 0, store: memStore(Date.now()) });
+    await h.flush();
+    expect(h.reload).not.toHaveBeenCalled();
+    expect(h.fetchBuild).not.toHaveBeenCalled();
+    h.doc.visibilityState = 'visible';
+    h.doc.dispatchEvent(new Event('visibilitychange'));
+    await h.flush();
+    expect(h.reload).toHaveBeenCalledOnce();
+    expect(h.fetchBuild).not.toHaveBeenCalled();
     h.stop();
   });
 

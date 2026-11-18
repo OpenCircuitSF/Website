@@ -7,6 +7,9 @@
 // compared; on a mismatch the tab reloads in place, or — when work is
 // unsaved — the caller is asked to show a "Reload" notice instead.
 //
+// The newest build a server response reported is shared through localStorage
+// (#0718), so a second stale tab reloads on focus without waiting out the hour.
+//
 // No service worker, no polling interval, no external request (PRD §7.6).
 
 import { hasUnsavedWork as registryHasUnsaved, isEditingField } from './unsavedWork';
@@ -14,6 +17,7 @@ import { hasUnsavedWork as registryHasUnsaved, isEditingField } from './unsavedW
 export const CHECK_INTERVAL_MS = 3_600_000;
 export const RETRY_AFTER_FAILURE_MS = 300_000;
 export const LAST_CHECK_KEY = 'oc.versionCheck.lastAt';
+export const SEEN_BUILD_KEY = 'oc.versionCheck.seenBuild';
 export const RELOAD_SCROLL_KEY = 'oc.reload.scroll';
 
 export function readRunningBuild(doc: Pick<Document, 'querySelector'> = document): string | null {
@@ -57,6 +61,51 @@ export function createThrottleStore(
   };
 }
 
+export interface SeenBuild {
+  build: string;
+  at: number;
+}
+
+export interface SeenBuildStore {
+  get(): SeenBuild | null;
+  set(v: SeenBuild): void;
+}
+
+export function createSeenBuildStore(
+  getStorage: () => Storage | null = () => window.localStorage,
+): SeenBuildStore {
+  let memory: SeenBuild | null = null;
+  return {
+    get() {
+      try {
+        const raw = getStorage()?.getItem(SEEN_BUILD_KEY);
+        if (raw != null) {
+          const v = JSON.parse(raw) as { build?: unknown; at?: unknown } | null;
+          if (v && typeof v.build === 'string' && v.build !== '' && typeof v.at === 'number' && Number.isFinite(v.at)) {
+            return { build: v.build, at: v.at };
+          }
+        }
+      } catch {
+        // storage blocked or malformed: fall through to memory
+      }
+      return memory;
+    },
+    set(v: SeenBuild) {
+      memory = v;
+      try {
+        getStorage()?.setItem(SEEN_BUILD_KEY, JSON.stringify({ build: v.build, at: v.at }));
+      } catch {
+        // storage blocked: memory still holds it
+      }
+    },
+  };
+}
+
+/** A build other than ours, reported by the server after this tab loaded. */
+export function seenNewerBuild(running: string, seen: SeenBuild | null, loadedAt: number, now: number): boolean {
+  return seen !== null && seen.build !== running && seen.at > loadedAt && seen.at <= now;
+}
+
 export function shouldCheck(now: number, last: number | null): boolean {
   if (last === null) return true;
   if (last > now) return true; // clock moved backward
@@ -86,11 +135,17 @@ export interface CheckDeps {
   runningBuild: string | null;
   fetchBuild(): Promise<string | null>;
   hasUnsavedWork(): boolean;
+  seen: SeenBuildStore;
+  /** ms timestamp at which this page instance started. */
+  loadedAt: number;
 }
 
 export async function checkForNewVersion(deps: CheckDeps): Promise<Decision> {
   if (deps.runningBuild === null) return 'skip';
   const now = deps.now();
+  if (seenNewerBuild(deps.runningBuild, deps.seen.get(), deps.loadedAt, now)) {
+    return deps.hasUnsavedWork() ? 'notify' : 'reload'; // no fetch, no throttle write
+  }
   if (!shouldCheck(now, deps.store.get())) return 'skip';
   deps.store.set(now); // before the fetch, so two near-simultaneous events cannot both fetch
   const server = await deps.fetchBuild();
@@ -99,6 +154,7 @@ export async function checkForNewVersion(deps: CheckDeps): Promise<Decision> {
     deps.store.set(now - CHECK_INTERVAL_MS + RETRY_AFTER_FAILURE_MS);
     return 'failed';
   }
+  deps.seen.set({ build: server, at: now }); // only ever a server's answer
   if (server === deps.runningBuild) return 'same';
   return deps.hasUnsavedWork() ? 'notify' : 'reload';
 }
@@ -163,6 +219,8 @@ export function startVersionWatch(opts: WatchOptions): () => void {
     runningBuild: opts.deps?.runningBuild !== undefined ? opts.deps.runningBuild : readRunningBuild(),
     fetchBuild: () => fetchServerBuild(),
     hasUnsavedWork: () => registryHasUnsaved() || isEditingField(doc.activeElement ?? null),
+    seen: opts.deps?.seen ?? createSeenBuildStore(),
+    loadedAt: Date.now(),
     ...opts.deps,
   };
   let inFlight = false;

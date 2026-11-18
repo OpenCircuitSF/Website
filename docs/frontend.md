@@ -119,7 +119,11 @@ notice instead. Unsaved work means a key registered through
 `web/src/lib/unsavedWork.ts`'s `setUnsaved` (the campaign, workshop and
 outreach editors and the admin address form) or a focused text field. It
 uses no service worker and no polling. In Vite dev the token is never
-substituted, so the check is off there.
+substituted, so the check is off there. A successful check also stores the
+server's build and when it was seen (`oc.versionCheck.seenBuild`, `#0718`). A
+tab whose own build differs from a build seen after that tab loaded reloads,
+or shows the notice, on its next focus, without a request and regardless of
+the hour. A tab never writes its own build there.
 
 ## Code splitting (`#0717`)
 
