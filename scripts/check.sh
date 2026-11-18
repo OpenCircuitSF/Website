@@ -31,6 +31,7 @@
 #
 # `guards` runs scripts/check_guard_test.sh, scripts/deploy_guard_test.sh
 # (#0424), scripts/deploy_health_guard_test.sh (#0712),
+# scripts/ship_sigpipe_guard_test.sh (#0714),
 # scripts/testdb_gc_guard_test.sh, scripts/dev_guard_test.sh,
 # scripts/db_reset_guard_test.sh, and scripts/go_file_visit_floor_guard_test.sh
 # (#0300). The last of those ALSO runs on the ordinary path now (#0489 — see
@@ -975,6 +976,8 @@ case "$MODE" in
        # check, against a python3 stub on an ephemeral 127.0.0.1 port — no
        # database, no fixed port, ~2s.
        step "scripts/deploy_health_guard_test.sh (#0712)"; run scripts/deploy_health_guard_test.sh
+       # #0714: ship.sh --yes must not exit 141 from yes's SIGPIPE. Sub-second.
+       step "scripts/ship_sigpipe_guard_test.sh (#0714)"; run scripts/ship_sigpipe_guard_test.sh
        step "scripts/testdb_gc_guard_test.sh (#0150)"; run scripts/testdb_gc_guard_test.sh
        step "scripts/dev_guard_test.sh (#0117)";        run scripts/dev_guard_test.sh
        step "scripts/db_reset_guard_test.sh (#0207)";   run scripts/db_reset_guard_test.sh

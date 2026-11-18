@@ -59,7 +59,9 @@ git show --stat --oneline HEAD | head -5
 echo
 echo "Deploying v$VERSION — deploy.sh will ask before changing production."
 if [ "$YES" = "--yes" ]; then
-  yes y | scripts/deploy.sh "$VERSION"
+  # #0714: yes dies of SIGPIPE (141) once deploy.sh exits; || true keeps the
+  # pipeline status deploy.sh's own under pipefail.
+  { yes y || true; } | scripts/deploy.sh "$VERSION"
 elif [ ! -t 0 ]; then
   echo "No keyboard input here, so the [Y/n] prompt would abort. Re-run with --yes:" >&2
   echo "  scripts/ship.sh $VERSION --yes" >&2
