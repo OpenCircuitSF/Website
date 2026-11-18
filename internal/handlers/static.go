@@ -1,11 +1,33 @@
 package handlers
 
 import (
+	"bytes"
+	"compress/gzip"
+	"errors"
 	"io/fs"
+	"log"
+	"mime"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 )
+
+// Cache-Control values (#0716). Hashed /assets/* files never change under
+// their name, so they are cached for a year; the HTML shell is revalidated
+// on every load so a new release is picked up immediately (#0715).
+const (
+	cacheImmutable = "public, max-age=31536000, immutable"
+	cacheShell     = "no-cache"
+)
+
+// precompressExts are the /assets/* extensions gzipped once at construction.
+var precompressExts = map[string]bool{
+	".js": true, ".css": true, ".svg": true, ".json": true,
+	".map": true, ".txt": true, ".xml": true, ".html": true,
+}
 
 // SPAHandler serves the embedded Svelte single-page app. It is mounted on the
 // catch-all "GET /" pattern, which is the least-specific route under the Go 1.22
@@ -30,6 +52,14 @@ import (
 //     200 a search engine reads as a successful page. Resolvers are
 //     optional: with none wired (STORAGE=json dev mode, existing tests),
 //     the routes table alone decides, exactly as before this issue.
+//   - (#0716) Hashed /assets/* files carry Cache-Control cacheImmutable;
+//     the HTML shell carries no-cache. Root files (favicons, images, the
+//     web manifest) are not content-hashed and get no Cache-Control here.
+//   - (#0716) Compressible /assets/* files are gzipped once at construction
+//     (gzip.BestCompression) and served from memory with Content-Encoding:
+//     gzip to clients that accept it and send no Range; middleware.Compress
+//     sees the encoding already set and passes them through. Range and
+//     identity requests fall through to http.FileServerFS.
 type SPAHandler struct {
 	dist    fs.FS
 	fileSrv http.Handler
@@ -37,6 +67,8 @@ type SPAHandler struct {
 	// status before the known-route table decides. All non-nil (mountAndServe
 	// filters nil handlers out at the call site).
 	deepLinks []SPADeepLinkStatus
+	// gz maps an assets/* fs name to its gzipped bytes (#0716).
+	gz map[string][]byte
 }
 
 // SPADeepLinkStatus lets a live-data owner decide the HTTP status for an SPA
@@ -57,7 +89,51 @@ func NewSPAHandler(dist fs.FS, deepLinks ...SPADeepLinkStatus) *SPAHandler {
 		dist:      dist,
 		fileSrv:   http.FileServerFS(dist),
 		deepLinks: deepLinks,
+		gz:        precompressAssets(dist),
 	}
+}
+
+// precompressAssets gzips every compressible regular file under assets/,
+// keeping only those that shrink. A missing assets/ (the committed
+// placeholder dist) yields an empty map; a per-file error is logged and the
+// file is served uncompressed.
+func precompressAssets(dist fs.FS) map[string][]byte {
+	out := map[string][]byte{}
+	err := fs.WalkDir(dist, "assets", func(name string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			log.Printf("spa precompress: %s: %v", name, err)
+			return nil
+		}
+		if !d.Type().IsRegular() || !precompressExts[path.Ext(name)] {
+			return nil
+		}
+		raw, err := fs.ReadFile(dist, name)
+		if err != nil {
+			log.Printf("spa precompress: read %s: %v", name, err)
+			return nil
+		}
+		var buf bytes.Buffer
+		zw, _ := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+		if _, err := zw.Write(raw); err != nil {
+			log.Printf("spa precompress: gzip %s: %v", name, err)
+			return nil
+		}
+		if err := zw.Close(); err != nil {
+			log.Printf("spa precompress: gzip %s: %v", name, err)
+			return nil
+		}
+		if buf.Len() < len(raw) {
+			out[name] = buf.Bytes()
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		log.Printf("spa precompress: %v", err)
+	}
+	return out
 }
 
 // ServeHTTP implements http.Handler. It serves the requested embedded file when
@@ -70,6 +146,24 @@ func (h *SPAHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/")
 
 	if name != "" && h.fileExists(name) {
+		if strings.HasPrefix(name, "assets/") {
+			w.Header().Set("Cache-Control", cacheImmutable)
+		}
+		if gzBody, ok := h.gz[name]; ok {
+			w.Header().Add("Vary", "Accept-Encoding")
+			if middleware.AcceptsGzip(r) && r.Header.Get("Range") == "" {
+				if ct := mime.TypeByExtension(path.Ext(name)); ct != "" {
+					w.Header().Set("Content-Type", ct)
+				}
+				w.Header().Set("Content-Encoding", "gzip")
+				w.Header().Set("Content-Length", strconv.Itoa(len(gzBody)))
+				w.WriteHeader(http.StatusOK)
+				if r.Method != http.MethodHead {
+					_, _ = w.Write(gzBody)
+				}
+				return
+			}
+		}
 		h.fileSrv.ServeHTTP(w, r)
 		return
 	}
@@ -127,6 +221,7 @@ func (h *SPAHandler) serveIndex(w http.ResponseWriter, status int) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", cacheShell)
 	w.WriteHeader(status)
 	_, _ = w.Write(data)
 }

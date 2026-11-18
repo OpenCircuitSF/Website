@@ -2186,8 +2186,10 @@ func mountAndServe(
 	// Wrap the whole mux with the API noindex header (#0518) before the outer
 	// middleware, so it applies unconditionally on every path -- dev
 	// auto-login and production alike -- rather than depending on which
-	// outer middleware, if any, happens to be present.
-	var handler http.Handler = seo.NoIndexAPIMiddleware(mux)
+	// outer middleware, if any, happens to be present. Compress (#0716)
+	// gzips text responses outside it; SPAHandler's precompressed assets
+	// already carry Content-Encoding and pass through.
+	var handler http.Handler = middleware.Compress(seo.NoIndexAPIMiddleware(mux))
 
 	// Apply the outer middleware (dev auto-login) when provided. This must never
 	// be non-nil on the production path — servePostgres always passes nil.

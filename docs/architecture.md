@@ -87,7 +87,7 @@ registers the route table and starts `http.ListenAndServe`.
 | `events` | In-memory pub/sub `Broker`. Each `GET /api/events` SSE stream subscribes for the authenticated user; `#0048` wires campaign-send-progress as the first real publisher. |
 | `devstore` | In-memory storage backend for `./scripts/dev.sh` (`STORAGE=json`). Implements every store interface the handlers depend on for users, sessions, settings, credentials (stubbed), and audit — no Postgres required. See [`dev.md`](dev.md). |
 | `handlers` | All `http.Handler` implementations: auth, credentials, settings, users (admin), audit (admin), me, events, health, and the SPA catch-all. |
-| `middleware` | `RequireSession` (reads the session cookie, resolves the session, attaches the user to context), `RequireAdmin` (checks `is_admin`), `DevAutoLogin` (dev-mode-only auto session), and per-IP token-bucket `RateLimiter`. |
+| `middleware` | `RequireSession` (reads the session cookie, resolves the session, attaches the user to context), `RequireAdmin` (checks `is_admin`), `DevAutoLogin` (dev-mode-only auto session), per-IP token-bucket `RateLimiter`, and `Compress` (gzip for text responses, wrapped around the whole mux, `#0716`). |
 | `testdb` | Test helper that serializes integration tests sharing one PostgreSQL test database (`TEST_DATABASE_URL`), via a session-level advisory lock. |
 
 ### `web/` — the embedded Svelte SPA
