@@ -65,7 +65,28 @@ func flyerPhotoV1(photo *string) error {
 	if t != "" && !strings.HasPrefix(t, "/media/") {
 		return api.Validation(map[string]string{"photo": "photo must be a /media/ path"})
 	}
+	if t != "" && hasDotSegment(t) {
+		return api.Validation(map[string]string{"photo": "photo must be a /media/ path without . or .. segments"})
+	}
 	return nil
+}
+
+// hasDotSegment reports whether path p has a "." or ".." segment, so that
+// "/media/../admin" cannot pass a /media/ prefix check (#0708). A backslash
+// counts as a slash, the query and fragment are ignored, and %2e decodes to
+// a dot in either case.
+func hasDotSegment(p string) bool {
+	p = strings.ReplaceAll(p, `\`, "/")
+	if i := strings.IndexAny(p, "?#"); i >= 0 {
+		p = p[:i]
+	}
+	for _, seg := range strings.Split(p, "/") {
+		seg = strings.ReplaceAll(strings.ToLower(seg), "%2e", ".")
+		if seg == "." || seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 func flyerRowV1(r flyerRowView) flyerRowView {

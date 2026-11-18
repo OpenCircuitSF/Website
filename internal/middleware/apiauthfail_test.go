@@ -176,3 +176,39 @@ func TestNewAPIAuthFailureLimiter_Budget(t *testing.T) {
 		t.Errorf("burst %d rate %v", rl.burst, rl.rate)
 	}
 }
+
+// TestBearerAuthFailureLimit_CountsAnyBearer: the media upload route's bearer
+// is a ticket, not an API token, so it needs the any-bearer variant (#0708).
+func TestBearerAuthFailureLimit_CountsAnyBearer(t *testing.T) {
+	deny := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusUnauthorized) })
+	h := BearerAuthFailureLimit(NewRateLimiter(rate.Every(time.Minute), 2))(deny)
+	for i := 0; i < 5; i++ {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, authFailReq("192.0.2.1:1", "", ""))
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("no header %d: %d, want 401 (not counted)", i, rec.Code)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, authFailReq("192.0.2.1:1", "", "oup_x"))
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: %d, want 401", i, rec.Code)
+		}
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, authFailReq("192.0.2.1:1", "", "oup_x"))
+	if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("third: %d Retry-After=%q, want 429 with Retry-After", rec.Code, rec.Header().Get("Retry-After"))
+	}
+
+	// APIAuthFailureLimit does not count a non-token bearer at all.
+	api := APIAuthFailureLimit(NewRateLimiter(rate.Every(time.Minute), 2))(deny)
+	for i := 0; i < 5; i++ {
+		rec := httptest.NewRecorder()
+		api.ServeHTTP(rec, authFailReq("192.0.2.1:1", "", "oup_x"))
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("APIAuthFailureLimit attempt %d: %d, want 401", i, rec.Code)
+		}
+	}
+}

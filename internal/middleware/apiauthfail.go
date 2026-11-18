@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -35,6 +36,22 @@ func NewAPIAuthFailureLimiter() *RateLimiter {
 // {"error":"rate_limit_exceeded"} body of the signup and login IP limiters is
 // not used here and stays as it is. A nil rl disables the limit.
 func APIAuthFailureLimit(rl *RateLimiter) func(http.Handler) http.Handler {
+	return authFailureLimit(rl, func(r *http.Request) bool { return apiBearerToken(r) != "" })
+}
+
+// BearerAuthFailureLimit is APIAuthFailureLimit for a route whose bearer is
+// not an API token, such as the media upload ticket (#0708): it counts a 401
+// for any request with a non-empty Bearer value (scheme matched without
+// regard to case). A nil rl disables the limit.
+func BearerAuthFailureLimit(rl *RateLimiter) func(http.Handler) http.Handler {
+	return authFailureLimit(rl, func(r *http.Request) bool {
+		h := r.Header.Get("Authorization")
+		return len(h) > 7 && strings.EqualFold(h[:7], "Bearer ") && strings.TrimSpace(h[7:]) != ""
+	})
+}
+
+// authFailureLimit is the shared body: presented says whether a 401 counts.
+func authFailureLimit(rl *RateLimiter, presented func(*http.Request) bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		if rl == nil {
 			return next
@@ -52,7 +69,7 @@ func APIAuthFailureLimit(rl *RateLimiter) func(http.Handler) http.Handler {
 			}
 			sw := &authStatusWriter{ResponseWriter: w}
 			next.ServeHTTP(sw, r)
-			if sw.status == http.StatusUnauthorized && apiBearerToken(r) != "" {
+			if sw.status == http.StatusUnauthorized && presented(r) {
 				lim.AllowN(time.Now(), 1)
 			}
 		})

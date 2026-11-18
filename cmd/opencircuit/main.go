@@ -1910,7 +1910,7 @@ func mountAndServe(
 		// #0705: the media upload route authenticates with its single-use
 		// ticket, not an API key, so it sits outside the registry.
 		if m := t.MediaUpload(); m != nil {
-			mux.Handle(handlers.MediaUploadPattern, http.HandlerFunc(m.Upload))
+			mux.Handle(handlers.MediaUploadPattern, m.UploadHandler(authFailLimiter))
 		}
 		api.Mount(mux, api.NewHTTPRouter(t.V1(), api.RouterDeps{Resolver: t.Resolver(), Limiter: apiTokenLimiter, AuthFailLimiter: authFailLimiter, BaseURL: cfg.BaseURL}))
 		// MCP (#0679): Streamable HTTP, stateless JSON, over the same

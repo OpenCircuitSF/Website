@@ -10,6 +10,7 @@ import (
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/api"
 	"github.com/brennanMKE/OpenCircuitSF/internal/apitokens"
+	"github.com/brennanMKE/OpenCircuitSF/internal/guideposts"
 	"github.com/brennanMKE/OpenCircuitSF/internal/guides"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outreach"
 )
@@ -20,6 +21,10 @@ import (
 type guidePostEngagementReader interface {
 	LatestEngagement(ctx context.Context, postIDs []int64) (map[int64]outreach.Engagement, error)
 }
+
+// The real store must keep satisfying it, or guideRows silently drops every
+// guide post's engagement (#0708); the fakes deliberately do not.
+var _ guidePostEngagementReader = (*guideposts.Store)(nil)
 
 // postPerformanceOp runs get_post_performance (#0706): the cumulative results
 // of the event and guide posts made in a window. now is a field so tests can

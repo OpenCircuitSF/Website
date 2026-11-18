@@ -20,6 +20,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/apitokens"
 	"github.com/brennanMKE/OpenCircuitSF/internal/audit"
 	"github.com/brennanMKE/OpenCircuitSF/internal/media"
+	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 )
 
 // mediaV1Fixture is a MediaV1 over a temp directory, its v1 router with a
@@ -38,7 +39,7 @@ func newMediaV1Fixture(t *testing.T, dir string) *mediaV1Fixture {
 	res := apitest.NewResolver()
 	key, _ := res.Key(t, "media", apitokens.ScopeMediaWrite)
 	mux := http.NewServeMux()
-	mux.Handle(MediaUploadPattern, http.HandlerFunc(m.Upload))
+	mux.Handle(MediaUploadPattern, m.UploadHandler(nil))
 	return &mediaV1Fixture{m: m, dir: dir, router: apitest.Router(t, res, mediaOperations(m)...), upload: mux, key: key}
 }
 
@@ -152,6 +153,90 @@ func TestV1MediaUpload_HEIC(t *testing.T) {
 	rec := f.sendUpload(t, tk.UploadURL, tk.UploadToken, heic, "IMG_0001.HEIC")
 	if rec.Code != http.StatusUnsupportedMediaType || !strings.Contains(rec.Body.String(), "HEIC") {
 		t.Fatalf("HEIC: %d %s", rec.Code, rec.Body)
+	}
+	// #0708: a refused upload leaves the ticket usable; success spends it.
+	if rec := f.sendUpload(t, tk.UploadURL, tk.UploadToken, buildTestPNG(4, 4, false), "a.png"); rec.Code != http.StatusOK {
+		t.Fatalf("after HEIC: %d %s", rec.Code, rec.Body)
+	}
+	if rec := f.sendUpload(t, tk.UploadURL, tk.UploadToken, buildTestPNG(4, 4, false), "a.png"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("third use: %d, want 401", rec.Code)
+	}
+}
+
+func TestV1MediaUpload_CorruptKeepsTicket(t *testing.T) {
+	f := newMediaV1Fixture(t, t.TempDir())
+	tk := f.mint(t)
+	if rec := f.sendUpload(t, tk.UploadURL, tk.UploadToken, []byte("not an image"), "a.png"); rec.Code < 400 || rec.Code >= 500 {
+		t.Fatalf("corrupt: %d %s, want 4xx", rec.Code, rec.Body)
+	}
+	if rec := f.sendUpload(t, tk.UploadURL, tk.UploadToken, buildTestPNG(4, 4, false), "a.png"); rec.Code != http.StatusOK {
+		t.Fatalf("after corrupt: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestV1MediaUpload_TooLarge(t *testing.T) {
+	f := newMediaV1Fixture(t, t.TempDir())
+	tk := f.mint(t)
+	rec := f.sendUpload(t, tk.UploadURL, tk.UploadToken, make([]byte, mediaMaxUploadBytes+1), "big.jpg")
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "exceeds") {
+		t.Fatalf("too large: %d %s", rec.Code, rec.Body)
+	}
+	if rec := f.sendUpload(t, tk.UploadURL, tk.UploadToken, buildTestPNG(4, 4, false), "a.png"); rec.Code != http.StatusOK {
+		t.Fatalf("after too large: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestUploadTickets_ClaimReleaseConsume(t *testing.T) {
+	s := newUploadTickets(time.Now)
+	id, secret, _, err := s.mint(audit.APITokenActor{Name: "k"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, err := s.claim(id, secret); err != nil || a.Name != "k" {
+		t.Fatalf("claim: %+v %v", a, err)
+	}
+	if _, err := s.claim(id, secret); err != errTicketBusy {
+		t.Fatalf("second claim: %v, want busy", err)
+	}
+	if _, err := s.claim(id, "oup_wrong"); err != errTicketInvalid {
+		t.Fatalf("wrong secret: %v, want invalid", err)
+	}
+	s.release(id)
+	if _, err := s.claim(id, secret); err != nil {
+		t.Fatalf("claim after release: %v", err)
+	}
+	s.consume(id)
+	if _, err := s.claim(id, secret); err != errTicketInvalid {
+		t.Fatalf("claim after consume: %v, want invalid", err)
+	}
+	s.release(id) // no-op once gone
+}
+
+func TestV1MediaUpload_BusyTicketIs409(t *testing.T) {
+	f := newMediaV1Fixture(t, t.TempDir())
+	tk := f.mint(t)
+	id := strings.TrimPrefix(tk.UploadURL, "http://example.test"+mediaUploadPathPrefix)
+	if _, err := f.m.tickets.claim(id, tk.UploadToken); err != nil {
+		t.Fatal(err)
+	}
+	if rec := f.sendUpload(t, tk.UploadURL, tk.UploadToken, buildTestPNG(4, 4, false), "a.png"); rec.Code != http.StatusConflict {
+		t.Fatalf("concurrent upload: %d %s, want 409", rec.Code, rec.Body)
+	}
+}
+
+func TestV1MediaUpload_FailedTicketsAreRateLimited(t *testing.T) {
+	f := newMediaV1Fixture(t, t.TempDir())
+	mux := http.NewServeMux()
+	mux.Handle(MediaUploadPattern, f.m.UploadHandler(middleware.NewAPIAuthFailureLimiter()))
+	f.upload = mux
+	tk := f.mint(t)
+	for i := 0; i < middleware.APIAuthFailuresPerMinute; i++ {
+		if rec := f.sendUpload(t, tk.UploadURL, "oup_wrong", nil, "a.png"); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: %d, want 401", i, rec.Code)
+		}
+	}
+	if rec := f.sendUpload(t, tk.UploadURL, "oup_wrong", nil, "a.png"); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("over the limit: %d, want 429", rec.Code)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -44,10 +45,11 @@ type uploadTicket struct {
 	secretHash [32]byte
 	actor      audit.APITokenActor
 	expires    time.Time
+	inUse      bool
 }
 
 // uploadTickets is an in-memory, one-process ticket store keyed by ticket
-// id. A ticket is removed when used; expired ones are swept on every access.
+// id. A ticket is removed only by a successful upload (#0708); expired ones are swept on every access.
 type uploadTickets struct {
 	mu      sync.Mutex
 	now     func() time.Time
@@ -85,21 +87,51 @@ func (s *uploadTickets) mint(actor audit.APITokenActor) (id, secret string, expi
 	return id, secret, expires, nil
 }
 
-// redeem consumes the ticket id if secret matches and it has not expired.
-func (s *uploadTickets) redeem(id, secret string) (audit.APITokenActor, bool) {
+var (
+	errTicketInvalid = errors.New("invalid, used or expired upload token")
+	errTicketBusy    = errors.New("this upload token is already in use")
+)
+
+// claim marks the ticket in use if secret matches and it has not expired
+// (#0708). An unknown, expired or mismatched ticket is errTicketInvalid; one
+// already claimed by a concurrent upload is errTicketBusy. The caller must
+// release or consume it.
+func (s *uploadTickets) claim(id, secret string) (audit.APITokenActor, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweepLocked(s.now())
 	t, ok := s.tickets[id]
 	if !ok {
-		return audit.APITokenActor{}, false
+		return audit.APITokenActor{}, errTicketInvalid
 	}
 	h := sha256.Sum256([]byte(secret))
 	if subtle.ConstantTimeCompare(h[:], t.secretHash[:]) != 1 {
-		return audit.APITokenActor{}, false
+		return audit.APITokenActor{}, errTicketInvalid
 	}
+	if t.inUse {
+		return audit.APITokenActor{}, errTicketBusy
+	}
+	t.inUse = true
+	s.tickets[id] = t
+	return t.actor, nil
+}
+
+// release makes a claimed ticket usable again after a refused upload. It is
+// a no-op when the ticket is gone.
+func (s *uploadTickets) release(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t, ok := s.tickets[id]; ok {
+		t.inUse = false
+		s.tickets[id] = t
+	}
+}
+
+// consume deletes the ticket; a successful upload spends it.
+func (s *uploadTickets) consume(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	delete(s.tickets, id)
-	return t.actor, true
 }
 
 // MediaV1 backs the v1 media operations and the ticket upload route.
@@ -230,18 +262,31 @@ func mediaOperations(m *MediaV1) []api.Operation {
 // Upload handles POST /api/v1/media/uploads/{id}: the ticket from
 // create_media_upload, as a Bearer header, and a multipart "file" field. It
 // answers {path} like POST /admin/media/upload and shares its pipeline
-// (storeImage). An unknown, used or expired ticket gets 401.
+// (storeImage). An unknown, used or expired ticket gets 401, and one that a
+// concurrent upload holds gets 409. A refused upload (wrong type, too large,
+// unreadable) releases the ticket; only a stored image spends it (#0708).
 func (m *MediaV1) Upload(w http.ResponseWriter, r *http.Request) {
 	secret, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok || secret == "" {
 		writeError(w, http.StatusUnauthorized, "missing upload token")
 		return
 	}
-	actor, ok := m.tickets.redeem(r.PathValue("id"), strings.TrimSpace(secret))
-	if !ok {
-		writeError(w, http.StatusUnauthorized, "invalid, used or expired upload token")
+	id := r.PathValue("id")
+	actor, err := m.tickets.claim(id, strings.TrimSpace(secret))
+	if errors.Is(err, errTicketBusy) {
+		writeError(w, http.StatusConflict, errTicketBusy.Error())
 		return
 	}
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, errTicketInvalid.Error())
+		return
+	}
+	consumed := false
+	defer func() {
+		if !consumed {
+			m.tickets.release(id)
+		}
+	}()
 	dir := m.mediaDir()
 	if dir == "" {
 		writeError(w, http.StatusServiceUnavailable, mediaNotConfiguredMessage)
@@ -274,6 +319,8 @@ func (m *MediaV1) Upload(w http.ResponseWriter, r *http.Request) {
 		writeError(w, serr.status, serr.msg)
 		return
 	}
+	m.tickets.consume(id)
+	consumed = true
 	if m.auditor != nil {
 		m.auditor.Record(r.Context(), audit.AttributeAPIToken(audit.Entry{
 			Action: audit.ActionMediaImageUploaded,
@@ -289,4 +336,12 @@ func (m *MediaV1) Upload(w http.ResponseWriter, r *http.Request) {
 		}, actor))
 	}
 	writeJSON(w, http.StatusOK, mediaUploadResponse{Path: stored.path})
+}
+
+// UploadHandler is Upload behind the failed-auth limiter (#0708). A ticket
+// is not an API token, so it uses BearerAuthFailureLimit, which counts any
+// bearer's 401; pass the same limiter as /api/v1/ and /mcp. A nil limiter
+// disables the limit.
+func (m *MediaV1) UploadHandler(authFail *middleware.RateLimiter) http.Handler {
+	return middleware.BearerAuthFailureLimit(authFail)(http.HandlerFunc(m.Upload))
 }

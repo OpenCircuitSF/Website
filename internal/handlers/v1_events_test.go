@@ -538,6 +538,35 @@ func TestV1UpdateEvent_CoverAlt(t *testing.T) {
 	e.wantField(t, e.call(t, http.MethodPatch, path, e.write, fmt.Sprintf(`{"cover_alt":%q}`, strings.Repeat("a", 1501))), "cover_alt")
 }
 
+// TestV1Event_CoverImageDotSegment is #0708: "/media/../admin" is refused on
+// update_event and create_event.
+func TestV1Event_CoverImageDotSegment(t *testing.T) {
+	e := newV1EventsEnv(t)
+	ev := e.create(t, v1EventTitle("V1 Dot"), "")
+	path := fmt.Sprintf("/api/v1/events/%d", ev.ID)
+	e.wantField(t, e.call(t, http.MethodPatch, path, e.write, `{"cover_image":"/media/../admin"}`), "cover_image")
+	e.wantField(t, e.call(t, http.MethodPost, "/api/v1/events", e.write, `{"title":"V1 Dot 2","cover_image":"/media/%2e%2e/admin"}`), "cover_image")
+}
+
+func TestHasDotSegment(t *testing.T) {
+	bs := string(rune(92))
+	for p, want := range map[string]bool{
+		"/media/../admin":               true,
+		"/media/%2e%2E/admin":           true,
+		"/media/%2E./x":                 true,
+		"/media/.." + bs + "admin":      true,
+		"/media" + bs + ".." + bs + "x": true,
+		"/media/./a.jpg":                true,
+		"/media/a..b.jpg":               false,
+		"/media/cover-1.jpg":            false,
+		"/media/a.jpg?x=..":             false,
+	} {
+		if got := hasDotSegment(p); got != want {
+			t.Errorf("hasDotSegment(%q) = %v, want %v", p, got, want)
+		}
+	}
+}
+
 // TestV1DuplicateEvent_CopiesCoverAlt is #0572: duplicate_event copies the
 // cover's alt text along with the cover.
 func TestV1DuplicateEvent_CopiesCoverAlt(t *testing.T) {

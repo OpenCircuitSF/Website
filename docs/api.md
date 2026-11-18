@@ -562,7 +562,7 @@ curl -s -X POST $B/cadence-rules \
 
 - **`create_media_upload`**, `POST /media/uploads`: a single-use upload ticket valid 10 minutes: `{upload_url, upload_token, expires_at, max_bytes, curl}`; `201`. `503` when no media directory is set.
 - **`list_media`**, `GET /media`: files in the media directory, `{name, path, size_bytes, modified_at}`, newest first (paged).
-- *(REST only)* `POST /media/uploads/{id}`, the `upload_url`: send the ticket as `Authorization: Bearer <upload_token>` and the image as multipart field `file` (JPEG or PNG, 5 MiB). Answers `{path}`, a `/media/…` path for `update_event` `cover_image` or `update_flyer` `photo`. An unknown, used or expired ticket is `401`. The URL carries only the ticket's id; the secret `upload_token` travels only in the `Authorization` header, so it stays out of access logs.
+- *(REST only)* `POST /media/uploads/{id}`, the `upload_url`: send the ticket as `Authorization: Bearer <upload_token>` and the image as multipart field `file` (JPEG or PNG, 5 MiB). Answers `{path}`, a `/media/…` path for `update_event` `cover_image` or `update_flyer` `photo`. An unknown, used or expired ticket is `401`, and one another upload is using at that moment is `409`. A refused upload (wrong type, too large, unreadable) leaves the ticket usable; it is spent only by a successful upload. Failed tickets count toward the same per-IP failed-authentication limit as API keys (`429` once exhausted). A `photo` or `cover_image` with a `.` or `..` segment (including `%2e` and backslash forms) is refused with `400`. The URL carries only the ticket's id; the secret `upload_token` travels only in the `Authorization` header, so it stays out of access logs.
 
 Adding a cover image to an event, end to end:
 

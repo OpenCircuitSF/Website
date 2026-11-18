@@ -330,6 +330,9 @@ func eventOps(d V1Deps) []api.Operation {
 			if err != nil {
 				return eventDetailV1{}, err
 			}
+			if err := coverImageV1(in.CoverImage); err != nil {
+				return eventDetailV1{}, err
+			}
 			w, err := d.Workshops.createWorkshop(ctx, "", nil, createWorkshopRequest{
 				Title: in.Title, Summary: in.Summary, BodyMD: in.BodyMD, StartsAt: in.StartsAt, EndsAt: in.EndsAt,
 				Capacity: in.Capacity, SignupURL: in.SignupURL, CoverImage: in.CoverImage, CoverAlt: in.CoverAlt,
@@ -381,10 +384,22 @@ func eventOps(d V1Deps) []api.Operation {
 	}
 }
 
+// coverImageV1 refuses a v1 cover_image with a . or .. segment (#0708); the
+// admin's own same-site check still runs after it.
+func coverImageV1(p *string) error {
+	if p != nil && hasDotSegment(*p) {
+		return api.Validation(map[string]string{"cover_image": "cover_image must not contain . or .. segments"})
+	}
+	return nil
+}
+
 // patchRequest maps update_event's input onto the admin PATCH request.
 func (in updateEventIn) patchRequest() (patchWorkshopRequest, error) {
 	venue, err := venueOptional(in.VenueID, in.NoVenue)
 	if err != nil {
+		return patchWorkshopRequest{}, err
+	}
+	if err := coverImageV1(in.CoverImage); err != nil {
 		return patchWorkshopRequest{}, err
 	}
 	var capacity Optional[int]

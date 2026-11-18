@@ -92,6 +92,9 @@ func TestV1OutreachFlyers_CRUD(t *testing.T) {
 
 	e.v1(t, http.MethodPatch, path, e.write, `{}`, http.StatusBadRequest)
 	e.v1(t, http.MethodPatch, path, e.write, `{"photo":"/x.jpg"}`, http.StatusBadRequest)
+	if b := e.v1(t, http.MethodPatch, path, e.write, `{"photo":"/media/../admin"}`, http.StatusBadRequest); !strings.Contains(string(b), `"photo"`) {
+		t.Errorf("dot-segment photo: %s", b) // #0708
+	}
 	pb := e.v1(t, http.MethodPatch, path, e.write, `{"photo":"","tagline":"New"}`, http.StatusOK)
 	assertPacific(t, pb)
 	if err := json.Unmarshal(pb, &v); err != nil || v.Flyer.Photo != nil || v.Flyer.Tagline != "New" {
