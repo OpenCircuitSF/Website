@@ -15,7 +15,7 @@ describe('temperature', () => {
     expect(formatTempRange(217, 220, 'C')).toBe('217–220 °C');
     expect(formatTempRange(330, 350, 'F', 10)).toBe('630–660 °F');
     expect(formatTempRange(330, 350, 'C', 10)).toBe('330–350 °C');
-    expect(formatTempRange(350, 380, 'F', 10)).toBe('660–720 °F');
+    expect(formatTempRange(350, 380, 'F', 10)).toBe('670–710 °F');
     expect(formatTempRange(350, 380, 'C', 10)).toBe('350–380 °C');
     expect(formatTemp(25, 'F')).toBe('77 °F');
     expect(formatTemp(25, 'C')).toBe('25 °C');

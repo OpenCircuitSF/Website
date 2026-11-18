@@ -5,7 +5,7 @@
   // than the dial says, which is why tip size matters more than the number.
   import GuideArt from './GuideArt.svelte';
   import { alloyById, jointAt, MAX_SECONDS, type TipShape } from './soldering';
-  import { TEMP_UNIT_SYMBOL, cToF, fToC, formatTemp, tempValue } from '../temperature';
+  import { TEMP_UNIT_SYMBOL, cToF, fToC, formatTemp, tempRange } from '../temperature';
   import { tempUnit } from '../tempUnit.svelte';
 
   // The dial steps in the visitor's unit (10 °F or 5 °C); the model stays in
@@ -27,8 +27,9 @@
   const modelC = $derived(unit === 'F' ? fToC(shown) : shown);
   const result = $derived(jointAt(modelC, solder, tip, unit));
   const sweet = $derived(alloyById(solder).ironC!);
-  const sweetLo = $derived(tempValue(sweet[0], unit, 10));
-  const sweetHi = $derived(tempValue(sweet[1], unit, 10));
+  const sweetEnds = $derived(tempRange(sweet[0], sweet[1], unit, 10));
+  const sweetLo = $derived(sweetEnds[0]);
+  const sweetHi = $derived(sweetEnds[1]);
   const pct = (v: number) => ((v - range.min) / (range.max - range.min)) * 100;
   const tone = $derived(result.kind === 'good' ? 'good' : result.kind === 'slow' ? 'meh' : 'bad');
 

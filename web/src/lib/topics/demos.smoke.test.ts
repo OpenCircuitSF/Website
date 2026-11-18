@@ -192,6 +192,49 @@ describe('guide demos', () => {
     resetTempUnitForTest();
   });
 
+  it('iron temperature: every setting in the shown sweet spot is a good joint', async () => {
+    for (const unit of ['F', 'C'] as const) {
+      for (const solder of ['Leaded 63/37', 'Lead-free SAC305']) {
+        resetTempUnitForTest();
+        setTempUnit(unit);
+        const r = render(IronTempDemo);
+        await tick();
+        await fireEvent.click(r.getByRole('radio', { name: solder }));
+        const m = /^sweet spot (\d+)–(\d+)$/.exec(r.container.querySelector('.scale > span:nth-child(2)')!.textContent ?? '');
+        expect(m, `${solder} ${unit}`).not.toBeNull();
+        const lo = Number(m![1]);
+        const hi = Number(m![2]);
+        const step = unit === 'F' ? 10 : 5;
+        const slider = r.getByRole('slider');
+        for (let v = lo; v <= hi; v += step) {
+          await fireEvent.input(slider, { target: { value: String(v) } });
+          expect(r.queryByRole('heading', { name: 'Good joint' }), `${solder} at ${v} °${unit}`).not.toBeNull();
+        }
+        for (const v of [lo - step, hi + step]) {
+          await fireEvent.input(slider, { target: { value: String(v) } });
+          expect(r.queryByRole('heading', { name: 'Good joint' }), `${solder} at ${v} °${unit}`).toBeNull();
+        }
+        cleanup();
+      }
+    }
+    resetTempUnitForTest();
+  });
+
+  it('iron temperature: switching units re-judges the shown setting', async () => {
+    resetTempUnitForTest();
+    const r = render(IronTempDemo);
+    await fireEvent.click(r.getByRole('radio', { name: 'Lead-free SAC305' }));
+    setTempUnit('C');
+    await tick();
+    await fireEvent.input(r.getByRole('slider'), { target: { value: '350' } });
+    expect(r.getByRole('heading', { name: 'Good joint' })).toBeTruthy();
+    setTempUnit('F');
+    await tick();
+    expect(r.container.textContent).toContain('Iron set to 660 °F');
+    expect(r.getByRole('heading', { name: 'It works, slowly' })).toBeTruthy();
+    resetTempUnitForTest();
+  });
+
   it('tinning: both tinned joins in about a second; bare makes a blob', async () => {
     const r = render(TinningDemo);
     await fireEvent.click(r.getByText('Join them'));

@@ -4,8 +4,10 @@
 // Rounding rule: °C is always rounded to the nearest whole degree; °F is
 // rounded to the nearest `step` (default 1). Callers pass step = 10 for iron
 // settings and tip temperatures (a dial value), and the default for melting
-// points and junction temperatures. No guide temperature is negative, so
-// Math.round's half-up behaviour never differs from half-away-from-zero.
+// points and junction temperatures. A stepped °F range rounds inward, so every
+// setting it names lies inside the true range. No guide temperature is
+// negative, so Math.round's half-up behaviour never differs from
+// half-away-from-zero.
 
 export type TempUnit = 'F' | 'C';
 export const DEFAULT_TEMP_UNIT: TempUnit = 'F';
@@ -29,9 +31,23 @@ export function formatTemp(c: number, unit: TempUnit, step = 1): string {
   return `${tempValue(c, unit, step)} ${TEMP_UNIT_SYMBOL[unit]}`;
 }
 
+/**
+ * Both ends of a range in the chosen unit. A stepped °F range rounds inward
+ * (low end up, high end down) so each named setting lies inside the true
+ * range; if that would cross, both ends fall back to nearest rounding.
+ */
+export function tempRange(lo: number, hi: number, unit: TempUnit, step = 1): [number, number] {
+  if (unit === 'C') return [Math.round(lo), Math.round(hi)];
+  if (step > 1) {
+    const a = Math.ceil(cToF(lo) / step) * step;
+    const b = Math.floor(cToF(hi) / step) * step;
+    if (a <= b) return [a, b];
+  }
+  return [tempValue(lo, unit, step), tempValue(hi, unit, step)];
+}
+
 export function formatTempRange(lo: number, hi: number, unit: TempUnit, step = 1): string {
-  const a = tempValue(lo, unit, step);
-  const b = tempValue(hi, unit, step);
+  const [a, b] = tempRange(lo, hi, unit, step);
   if (a === b) return formatTemp(lo, unit, step);
   return `${a}–${b} ${TEMP_UNIT_SYMBOL[unit]}`;
 }
