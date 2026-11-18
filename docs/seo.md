@@ -441,6 +441,22 @@ no `?v=`, since browsers revalidate. `TestGuideThumb_EmbeddedSetWeight` holds
 each under 40,000 bytes. The SPA renders it as a lazy `<img alt="">` with
 fixed width and height, so the grid does not shift.
 
+## Client-side navigation (`#0711`)
+
+The server-rendered head is correct on first load. A client-side navigation
+does not fetch HTML, so Safari's share sheet (Messages, Notes, AirDrop), which
+reads the open tab's live DOM, used to share the first page's card. On every
+navigation after the first, `web/src/lib/pageMeta.ts` calls
+`GET /api/page-meta?path=<pathname>` (`internal/seo/pagemeta.go`) and writes
+the result into `description`, `og:*`, `twitter:*` and `link rel=canonical`
+(adding or removing the link). The endpoint runs the same `Renderer.resolve`
+as the HTML, so `og:image` keeps its `?v=` suffix, and
+`TestPageMeta_MatchesRenderedHead` pins it field by field against the parsed
+rendered head. Only the pathname is sent, never a token-bearing query string;
+a stale response is dropped by a sequence number, and a failed fetch leaves
+the head as it was. JSON-LD is not refreshed: share sheets do not read it and
+crawlers fetch fresh HTML.
+
 ## Deliberate limits
 
 These are settled decisions, not gaps waiting to be closed. A doc that

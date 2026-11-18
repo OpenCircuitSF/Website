@@ -873,3 +873,24 @@ func TestMountAndServe_GuideRoutes(t *testing.T) {
 		}
 	}
 }
+
+// TestMountAndServe_PageMetaRoute proves #0711's GET /api/page-meta is
+// mounted on the real mux and answers without a session.
+func TestMountAndServe_PageMetaRoute(t *testing.T) {
+	baseURL, _, _, _, _, get := seoWiringServer(t)
+	body := get("/api/page-meta?path=/guides/baud-rate", http.StatusOK)
+	var m struct {
+		OGURL   string `json:"og_url"`
+		OGImage string `json:"og_image"`
+	}
+	if err := json.Unmarshal([]byte(body), &m); err != nil {
+		t.Fatalf("decode %q: %v", body, err)
+	}
+	if m.OGURL != baseURL+"/guides/baud-rate" {
+		t.Errorf("og_url = %q", m.OGURL)
+	}
+	if !strings.Contains(m.OGImage, "/guides/baud-rate/og.png") {
+		t.Errorf("og_image = %q", m.OGImage)
+	}
+	get("/api/page-meta", http.StatusBadRequest)
+}

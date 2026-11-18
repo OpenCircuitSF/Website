@@ -5,6 +5,7 @@
   import { currentRoute, initRouter, navigate, needsSessionGate } from './lib/router';
   import { getMe } from './lib/api';
   import { titleForRoute, shouldAnnounceNavigation } from './lib/pageTitle';
+  import { updatePageMetaFor } from './lib/pageMeta';
   import Login from './views/Login.svelte';
   import Account from './views/Account.svelte';
   import Admin from './views/Admin.svelte';
@@ -105,6 +106,9 @@
     if (!shouldAnnounceNavigation()) return;
 
     document.title = titleForRoute(route);
+    // #0711: refresh the preview meta (og:*, description, canonical) from the
+    // server, so a live-tab share reads this route's card, not the first page's.
+    void updatePageMetaFor(route.path);
 
     // Move focus to the new view's own <h1> (every public/auth view's <h1>
     // now carries tabindex="-1" -- see app.css's h1[tabindex='-1']:focus

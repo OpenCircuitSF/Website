@@ -2112,6 +2112,10 @@ func mountAndServe(
 	// their documented generic defaults (seo.WorkshopSource's doc comment).
 	mux.Handle("GET /sitemap.xml", site.SitemapHandler())
 	mux.Handle("GET /robots.txt", site.RobotsHandler())
+	// #0711: the preview meta the server renders for a path, so the SPA can
+	// refresh its head on client-side navigation. Public and read-only, with
+	// the same trust level as the HTML it describes.
+	mux.Handle("GET /api/page-meta", site.PageMetaHandler())
 
 	// The newsletter archive's Atom feed (#0531) -- own, more specific
 	// pattern, resolved ahead of the "GET /" SPA catch-all (and not matched
