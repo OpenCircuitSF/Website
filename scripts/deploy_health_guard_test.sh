@@ -57,6 +57,22 @@ for anchor in '^# HEALTH-0712-BEGIN' '^# HEALTH-0712-END' \
 done
 pass "all seven extraction anchors appear exactly once"
 
+# ---- call sites (#0712 review) ----------------------------------------------
+# The scenarios below prove the extracted functions; they cannot see whether
+# deploy.sh still CALLS them. Reverting the call site to the old single curl,
+# or dropping the identity call, left every scenario green. Pin each call line
+# (whole-line, fixed-string) to exactly one occurrence. This oracle lives in
+# this file, so an edit to deploy.sh cannot also satisfy it (AGENTS.md §8).
+# shellcheck disable=SC2016  # literal deploy.sh lines, not expansions
+for callsite in \
+  'if ! wait_healthy "$PUBLIC_URL/health"; then' \
+  'ID_OUT="$(printf '"'%s'"' "$IDENTITY_CHECK" | ssh "$DEPLOY_HOST" bash -s -- "$SERVICE" "$BIN_PATH" "$DEST/opencircuit" 2>&1 || true)"' \
+  'confirm_live_identity "$ID_OUT"'; do
+  n="$(grep -cxF -- "$callsite" "$REAL_SCRIPT")"
+  if [ "$n" = "1" ]; then pass "call site present exactly once: $callsite"
+  else fail "call site must appear exactly once in deploy.sh (found $n): $callsite"; fi
+done
+
 # ---- extraction -------------------------------------------------------------
 extract_block() { awk -v b="# $1-BEGIN" -v e="# $1-END" '$0==b{f=1; next} $0==e{f=0} f' "$REAL_SCRIPT"; }
 HELPERS="$(grep -m1 '^die(){' "$REAL_SCRIPT"; grep -m1 '^ok(){' "$REAL_SCRIPT"; grep -m1 '^info(){' "$REAL_SCRIPT")"
