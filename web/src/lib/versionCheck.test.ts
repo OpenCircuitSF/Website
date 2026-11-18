@@ -97,6 +97,25 @@ describe('versionCheck', () => {
     expect(await checkForNewVersion(deps())).toBe('same');
   });
 
+  it('a completed check starts the hour, so the next one inside it skips without fetching', async () => {
+    // Review of #0715: without this, dropping the pre-fetch store.set(now)
+    // left every test green while every focus fetched. It also covers the
+    // reload case, so a reload onto a stale-cached shell cannot loop.
+    for (const server of ['a+1', 'b+2']) {
+      const store = memStore();
+      let now = 10 * CHECK_INTERVAL_MS;
+      const fetchBuild = vi.fn(async () => server);
+      const d = { now: () => now, store, fetchBuild };
+      expect(await checkForNewVersion(deps(d))).toBe(server === 'a+1' ? 'same' : 'reload');
+      now += CHECK_INTERVAL_MS - 1;
+      expect(await checkForNewVersion(deps(d))).toBe('skip');
+      expect(fetchBuild).toHaveBeenCalledTimes(1);
+      now += 1;
+      await checkForNewVersion(deps(d));
+      expect(fetchBuild).toHaveBeenCalledTimes(2);
+    }
+  });
+
   it('checkForNewVersion returns reload when builds differ and nothing is unsaved', async () => {
     expect(await checkForNewVersion(deps({ fetchBuild: async () => 'b+2' }))).toBe('reload');
   });

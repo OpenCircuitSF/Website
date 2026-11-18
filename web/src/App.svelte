@@ -212,20 +212,22 @@
 
 <Footer />
 
-<div class="update-notice" class:visible={updateAvailable}>
+<!-- #0715: the role="status" node is persistent (#0063) and never inside a
+     display:none ancestor, which would drop it from the accessibility tree
+     and turn its first announcement into an insertion; hidden, it is sr-only. -->
+<div class="update-notice" class:visible={updateAvailable} class:sr-only={!updateAvailable}>
   <p role="status">{updateAvailable ? 'A new version of the site is available.' : ''}</p>
   {#if updateAvailable}<Button onclick={() => reloadToSameURL()}>Reload</Button>{/if}
 </div>
 
 <style>
-  .update-notice {
-    display: none;
-  }
   .update-notice.visible {
     position: fixed;
     bottom: 1rem;
-    left: 50%;
-    transform: translateX(-50%);
+    left: 0;
+    right: 0;
+    margin-inline: auto;
+    width: max-content;
     z-index: 50;
     display: flex;
     flex-wrap: wrap;
