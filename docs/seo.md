@@ -429,6 +429,18 @@ generated title card. Images can land one at a time.
   catalog guide has no `### <slug>` section there, so **a new guide needs a
   prompt section** naming its output path.
 
+## Guide card thumbnails (`#0710`)
+
+Each card on `/guides` shows `GET /guides/{slug}/thumb.jpg`
+(`Site.GuideThumbHandler`, `internal/seo/guidethumb.go`): a 640×336 JPEG at
+quality 80, scaled from exactly the bytes `og.png` serves, so a guide without
+art shows its generated title card. Each thumbnail is made on first request
+and held in memory (about 605 KB for all 43); there is nothing to regenerate
+when art changes. Same `Cache-Control`/`ETag`/`304` handling as `og.png`, and
+no `?v=`, since browsers revalidate. `TestGuideThumb_EmbeddedSetWeight` holds
+each under 40,000 bytes. The SPA renders it as a lazy `<img alt="">` with
+fixed width and height, so the grid does not shift.
+
 ## Deliberate limits
 
 These are settled decisions, not gaps waiting to be closed. A doc that

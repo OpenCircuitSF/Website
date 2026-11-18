@@ -5,9 +5,8 @@
   import { currentRoute } from '../lib/router';
   import TerminalPanel from '../lib/TerminalPanel.svelte';
   import Prompt from '../lib/Prompt.svelte';
-  import MiniStrip from '../lib/topics/MiniStrip.svelte';
   import { TOPICS } from '../lib/topics/topics';
-  import { GUIDE_SETS, WORKSHOP_GUIDES } from '../lib/guides';
+  import { GUIDE_SETS, GUIDE_THUMB, WORKSHOP_GUIDES, guideThumbPath } from '../lib/guides';
   import { ALL, countsBySet, groupBySet, hrefForSet, setFromQuery } from '../lib/guideSets';
 
   const filter = $derived(setFromQuery($currentRoute.query?.get('set')));
@@ -43,7 +42,15 @@
         {#each g.guides as t (t.slug)}
           <li>
             <a class="card" href="/guides/{t.slug}">
-              <MiniStrip seed={TOPICS.indexOf(t)} />
+              <img
+                class="thumb"
+                src={guideThumbPath(t.slug)}
+                alt=""
+                width={GUIDE_THUMB.width}
+                height={GUIDE_THUMB.height}
+                loading="lazy"
+                decoding="async"
+              />
               <span class="tags">
                 {#each t.tags as tag (tag)}<span>{tag}</span>{/each}
                 <span>{t.minutes} min</span>
@@ -63,7 +70,15 @@
     <p class="text-muted">Step-by-step companions to our in-person workshops.</p>
     {#each workshops as g (g.slug)}
       <a class="card wide" href="/workshops/{g.slug}">
-        <MiniStrip seed={7} count={10} />
+        <img
+                class="thumb"
+                src={guideThumbPath(g.slug)}
+                alt=""
+                width={GUIDE_THUMB.width}
+                height={GUIDE_THUMB.height}
+                loading="lazy"
+                decoding="async"
+              />
         <span class="tags">{#each g.tags as tag (tag)}<span>{tag}</span>{/each}</span>
         <strong>{g.title}</strong>
         <span class="hook">{g.hook}</span>
@@ -159,6 +174,14 @@
     .card:hover {
       transform: none;
     }
+  }
+  .thumb {
+    display: block;
+    width: 100%;
+    height: auto;
+    aspect-ratio: 640 / 336;
+    border-radius: 4px;
+    background: var(--guide-pcb);
   }
   .card strong {
     font-size: var(--fs-lg);

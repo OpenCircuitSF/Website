@@ -56,3 +56,11 @@ export function workshopGuideForEventSlug(eventSlug: string): GuideMeta | undefi
     return /^\d+$/.test(eventSlug.slice(g.slug.length + 1));
   });
 }
+
+// #0710: the /guides card image, served by Go (internal/seo/guidethumb.go,
+// whose guideThumbW/guideThumbH constants these dimensions mirror).
+export const GUIDE_THUMB = { width: 640, height: 336 } as const;
+
+export function guideThumbPath(slug: string): string {
+  return `/guides/${slug}/thumb.jpg`;
+}

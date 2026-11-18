@@ -2165,6 +2165,8 @@ func mountAndServe(
 	// guide's, because /workshops/{slug}/og.png above still renders the
 	// production event of the same slug for posts that already carry it.
 	mux.Handle("GET /guides/{slug}/og.png", site.GuideCardHandler())
+	// #0710: the /guides card image, a small JPEG of the og.png bytes above.
+	mux.Handle("GET /guides/{slug}/thumb.jpg", site.GuideThumbHandler())
 
 	// Per-newsletter Open Graph card (#0532) -- the archive twin of the
 	// route above, sharing its rendering, cache, and invalidation. The

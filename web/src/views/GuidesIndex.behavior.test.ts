@@ -56,3 +56,33 @@ describe('GuidesIndex sets', () => {
     expect(screen.queryByRole('heading', { name: 'Multimeter' })).toBeNull();
   });
 });
+
+describe('GuidesIndex card images (#0710)', () => {
+  it('every guide card shows its own image, lazy, sized and decorative', () => {
+    const { container } = show('');
+    const cards = [...container.querySelectorAll<HTMLAnchorElement>('a.card')];
+    expect(cards.length).toBeGreaterThan(0);
+    for (const card of cards) {
+      const imgs = card.querySelectorAll('img');
+      expect(imgs).toHaveLength(1);
+      const img = imgs[0];
+      const slug = card.getAttribute('href')!.split('/').pop();
+      expect(img.getAttribute('src')).toBe(`/guides/${slug}/thumb.jpg`);
+      expect(img.getAttribute('alt')).toBe('');
+      expect(img.getAttribute('width')).toBe('640');
+      expect(img.getAttribute('height')).toBe('336');
+      expect(img.getAttribute('loading')).toBe('lazy');
+    }
+  });
+
+  it('the workshop guide card shows programming-leds image', () => {
+    const { container } = show('');
+    const card = container.querySelector('a[href="/workshops/programming-leds"]')!;
+    expect(card.querySelector('img')!.getAttribute('src')).toBe('/guides/programming-leds/thumb.jpg');
+  });
+
+  it('no card renders the LED strip', () => {
+    const { container } = show('');
+    expect(container.querySelector('.cards .mini, .workshops .mini')).toBeNull();
+  });
+});

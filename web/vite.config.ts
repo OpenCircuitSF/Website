@@ -96,6 +96,9 @@ export default defineConfig({
       // spaNavigationBypass above.
       '/account': { target: apiTarget, bypass: spaNavigationBypass },
       '/admin': { target: apiTarget, bypass: spaNavigationBypass },
+      // #0710: the /guides card thumbnails. A leading '^' makes Vite treat the
+      // key as a RegExp; no SPA route ends in .jpg, so nothing collides.
+      '^/guides/[^/]+/thumb\\.jpg$': apiTarget,
     },
   },
   // #0094: under Vitest, Vite's default module resolution picks Svelte's

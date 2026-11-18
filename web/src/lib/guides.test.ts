@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import catalog from '../content/guides/guides.json';
-import { TOPIC_GUIDES, WORKSHOP_GUIDES, guidePath, topicGuideBySlug, workshopGuideForEventSlug } from './guides';
+import { TOPIC_GUIDES, WORKSHOP_GUIDES, guidePath, guideThumbPath, topicGuideBySlug, workshopGuideForEventSlug } from './guides';
 import { TOPIC_GUIDE_SLUGS, WORKSHOP_GUIDE_SLUGS, parsePath } from './router';
 import { formatTitle, titleForRoute } from './pageTitle';
 
@@ -49,5 +49,9 @@ describe('guide catalog (#0656)', () => {
   it('every topic carries post copy', () => {
     for (const t of TOPIC_GUIDES) expect(t.post.trim()).not.toBe('');
     for (const w of WORKSHOP_GUIDES) expect('post' in w).toBe(false);
+  });
+
+  it('guideThumbPath points at the Go thumbnail route', () => {
+    expect(guideThumbPath('baud-rate')).toBe('/guides/baud-rate/thumb.jpg');
   });
 });

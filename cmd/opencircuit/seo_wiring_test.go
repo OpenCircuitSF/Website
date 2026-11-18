@@ -862,6 +862,9 @@ func TestMountAndServe_GuideRoutes(t *testing.T) {
 	get("/guides/baud-rate/og.png", http.StatusOK)
 	get("/guides/programming-leds/og.png", http.StatusOK)
 	get("/guides/nope/og.png", http.StatusNotFound)
+	get("/guides/baud-rate/thumb.jpg", http.StatusOK)
+	get("/guides/programming-leds/thumb.jpg", http.StatusOK)
+	get("/guides/nope/thumb.jpg", http.StatusNotFound)
 	get("/workshops/solder-101", http.StatusMovedPermanently)
 	sitemap := get("/sitemap.xml", http.StatusOK)
 	for _, p := range []string{"/guides/baud-rate", "/workshops/programming-leds"} {

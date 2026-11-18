@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/guides"
 )
@@ -23,6 +24,8 @@ type Site struct {
 	cards    *cardCache
 	feed     *Feed
 	guideArt map[string]guideArt
+	thumbMu  sync.Mutex
+	thumbs   map[string]guideThumb
 }
 
 // NewSite constructs a Site from the built index.html template bytes
@@ -41,6 +44,7 @@ func NewSite(indexHTML []byte, baseURL string, source WorkshopSource, archive Ar
 func newSite(indexHTML []byte, baseURL string, source WorkshopSource, archive ArchiveSource, art map[string]guideArt) *Site {
 	return &Site{
 		guideArt: art,
+		thumbs:   map[string]guideThumb{},
 		renderer: newRenderer(indexHTML, baseURL, source, archive, art),
 		sitemap:  NewSitemap(baseURL, source, archive),
 		robots:   BuildRobotsTxt(baseURL),
@@ -192,8 +196,13 @@ func (s *Site) serveCard(w http.ResponseWriter, r *http.Request, key, title, met
 // writePNG serves body as a PNG with a one-hour Cache-Control and etag,
 // answering a matching If-None-Match with 304.
 func writePNG(w http.ResponseWriter, r *http.Request, body []byte, etag string) {
+	writeImage(w, r, "image/png", body, etag)
+}
+
+// writeImage is writePNG for any image content type (#0710).
+func writeImage(w http.ResponseWriter, r *http.Request, contentType string, body []byte, etag string) {
 	h := w.Header()
-	h.Set("Content-Type", "image/png")
+	h.Set("Content-Type", contentType)
 	h.Set("Cache-Control", "public, max-age=3600")
 	h.Set("ETag", etag)
 	if inm := r.Header.Get("If-None-Match"); inm != "" && inm == etag {
