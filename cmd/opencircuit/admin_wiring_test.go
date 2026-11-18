@@ -135,6 +135,10 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// #0652: attach the API tokens handler so its three admin routes are
 	// swept below, and /api/v1/token is mounted for the bearer checks.
 	apiTokensH := handlers.NewAPITokensHandler(apitokens.NewStore(pool), auditLogger)
+	// #0708: the ticket upload route, so its failed-auth limit is proved on
+	// the real mux. A wrong ticket is refused before the media directory is
+	// read, so none is set.
+	apiTokensH.SetMediaUpload(handlers.NewMediaV1(func() string { return "" }, cfg.BaseURL, auditLogger))
 	// #0659, #0676: the guide-posts handler, shared by its admin routes
 	// (mounted through adminOutreachH below) and the v1 guide-post ops.
 	guideStore := guideposts.NewStore(pool, outbox.NewStore(pool))
@@ -751,6 +755,27 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	// One bucket: the IP throttled on /api/v1 is throttled on /mcp too.
 	if code, _ := fromIP(http.MethodPost, mcpURL, unknownKey, "192.0.2.83", mcpInit); code != http.StatusTooManyRequests {
 		t.Errorf("/mcp from the IP throttled on /api/v1 = %d, want 429", code)
+	}
+	// #0708: the media upload route counts failed tickets (not API keys) in
+	// that same bucket, so an IP that exhausts it there is throttled on
+	// /api/v1 too.
+	uploadURL := baseURL + "/api/v1/media/uploads/wiring-0708"
+	fails, limited := 0, false
+	for i := 0; i < 3*middleware.APIAuthFailuresPerMinute && !limited; i++ {
+		switch code, b := fromIP(http.MethodPost, uploadURL, "oup_wrong", "192.0.2.86", ""); code {
+		case http.StatusUnauthorized:
+			fails++
+		case http.StatusTooManyRequests:
+			limited = true
+		default:
+			t.Fatalf("upload bad-ticket request %d = %d %s", i, code, b)
+		}
+	}
+	if !limited || fails < middleware.APIAuthFailuresPerMinute {
+		t.Errorf("upload: %d 401s before 429 (limited=%v), want >= %d then 429", fails, limited, middleware.APIAuthFailuresPerMinute)
+	}
+	if code, _ := fromIP(http.MethodGet, v1URL, unknownKey, "192.0.2.86", ""); code != http.StatusTooManyRequests {
+		t.Errorf("/api/v1 from the IP throttled on the upload route = %d, want 429", code)
 	}
 	if _, err := apiTokenStore.Revoke(context.Background(), bearerTok.ID, time.Now()); err != nil {
 		t.Fatalf("revoke bearer token: %v", err)
