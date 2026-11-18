@@ -23,6 +23,7 @@
 -->
 <script lang="ts">
   import { onMount, tick } from 'svelte';
+  import { setUnsaved } from '../../lib/unsavedWork';
   import {
     getCampaign,
     updateCampaign,
@@ -297,6 +298,12 @@
   let preflightSummaryClass = $derived(sendGuardSummaryClass(editorGuard));
   let hasUnmetItems = $derived(unmetDisplay.length > 0);
   let isSaving = $derived(saveState === 'saving');
+
+  // #0715: hold back an automatic reload onto a new build while this is unsaved.
+  $effect(() => {
+    setUnsaved('campaign-editor', dirty || saveState === 'saving');
+    return () => setUnsaved('campaign-editor', false);
+  });
   let isSaved = $derived(saveState === 'saved');
   let modeOptions = $derived(AUDIENCE_MODES.map((opt) => ({ ...opt, selected: opt.value === mode })));
   let interestOptions = $derived(

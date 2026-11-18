@@ -84,6 +84,10 @@ func versionString() string {
 	return fmt.Sprintf("opencircuit %s (%s)", version, commitHash)
 }
 
+// buildID is the build identity the SPA compares against GET /api/version
+// to notice that a newer build has been deployed (#0715).
+func buildID() string { return version + "+" + commitHash }
+
 func main() {
 	// Subcommand routing: `opencircuit serve` starts the HTTP server;
 	// `opencircuit seed` bootstraps the admin user; anything else (including
@@ -145,7 +149,9 @@ func buildSEOSite(cfg *config.Config, source seo.WorkshopSource, archive seo.Arc
 	if err != nil {
 		return nil, fmt.Errorf("buildSEOSite: read embedded index.html: %w", err)
 	}
-	return seo.NewSite(indexHTML, cfg.BaseURL, source, archive), nil
+	site := seo.NewSite(indexHTML, cfg.BaseURL, source, archive)
+	site.SetBuildID(buildID())
+	return site, nil
 }
 
 // servePostgres is the production path: connects to Postgres, constructs the
@@ -1847,6 +1853,7 @@ func mountAndServe(
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /health", handlers.NewHealthHandler(pinger))
+	mux.Handle("GET /api/version", handlers.NewVersionHandler(version, commitHash))
 
 	mux.Handle("POST /auth/register/start", registerLimiter.Middleware(http.HandlerFunc(authH.RegisterStart)))
 	mux.HandleFunc("GET /auth/register/verify", authH.RegisterVerify)

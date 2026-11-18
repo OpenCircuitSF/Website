@@ -25,6 +25,7 @@ const testTemplate = `<!doctype html>
 <meta name="twitter:card" content="%%OC_TWITTER_CARD%%" />
 <meta name="twitter:title" content="%%OC_TWITTER_TITLE%%" />
 <meta name="twitter:description" content="%%OC_TWITTER_DESCRIPTION%%" />
+<meta name="oc-build" content="%%OC_BUILD%%">
 %%OC_CANONICAL%%
 %%OC_JSONLD%%
 </head><body><div id="app">%%OC_BODY%%</div></body></html>`
@@ -527,7 +528,7 @@ func TestRender_AllTokensSubstituted(t *testing.T) {
 	tokens := []string{
 		tokenTitle, tokenDescription, tokenOGTitle, tokenOGDescription,
 		tokenOGImage, tokenOGURL, tokenOGType, tokenTwitterCard,
-		tokenTwitterTitle, tokenTwitterDescription, tokenCanonical, tokenJSONLD, tokenBody,
+		tokenTwitterTitle, tokenTwitterDescription, tokenCanonical, tokenJSONLD, tokenBody, tokenBuild,
 	}
 	for _, path := range []string{"/", "/about", "/privacy", "/events", "/subscribe", "/nonexistent", "/events/some-slug"} {
 		body := string(r.Render(path))
@@ -563,7 +564,7 @@ func TestSourceTemplate_EachTokenAppearsExactlyOnce(t *testing.T) {
 	tokens := []string{
 		tokenTitle, tokenDescription, tokenOGTitle, tokenOGDescription,
 		tokenOGImage, tokenOGURL, tokenOGType, tokenTwitterCard,
-		tokenTwitterTitle, tokenTwitterDescription, tokenCanonical, tokenJSONLD, tokenBody,
+		tokenTwitterTitle, tokenTwitterDescription, tokenCanonical, tokenJSONLD, tokenBody, tokenBuild,
 	}
 	for _, tok := range tokens {
 		if n := strings.Count(body, tok); n != 1 {
@@ -1054,5 +1055,37 @@ func TestEventJSONLDCarriesTypeAndEventsURL(t *testing.T) {
 	ld = extractJSONLD(t, string(newTestRenderer(fakeWorkshopSource{"solder": w}).Render("/events/solder")))
 	if _, present := ld["keywords"]; present {
 		t.Errorf("keywords present for a listing with no type name: %v", ld["keywords"])
+	}
+}
+
+// TestRender_StampsBuildID: SetBuildID's value lands in the oc-build meta on
+// every route bucket (#0715).
+func TestRender_StampsBuildID(t *testing.T) {
+	r := newTestRenderer(nil)
+	r.SetBuildID("0.16.2+abc")
+	for _, path := range []string{"/", "/nonexistent", "/events/x"} {
+		if body := string(r.Render(path)); !strings.Contains(body, `<meta name="oc-build" content="0.16.2+abc"`) {
+			t.Errorf("path %q: build id not stamped", path)
+		}
+	}
+}
+
+// TestRender_SetBuildIDClearsCache: a page rendered before SetBuildID is not
+// served from cache afterwards (#0715).
+func TestRender_SetBuildIDClearsCache(t *testing.T) {
+	r := newTestRenderer(nil)
+	_ = r.Render("/")
+	r.SetBuildID("new+id")
+	if body := string(r.Render("/")); !strings.Contains(body, `content="new+id"`) {
+		t.Errorf("cached render kept the old build id")
+	}
+}
+
+// TestRender_BuildIDEmptyByDefault: with no id set the meta is empty, which
+// the client treats as unknown (#0715).
+func TestRender_BuildIDEmptyByDefault(t *testing.T) {
+	r := newTestRenderer(nil)
+	if body := string(r.Render("/")); !strings.Contains(body, `<meta name="oc-build" content="">`) {
+		t.Errorf("default build id not empty")
 	}
 }

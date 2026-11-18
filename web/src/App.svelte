@@ -6,6 +6,8 @@
   import { getMe } from './lib/api';
   import { titleForRoute, shouldAnnounceNavigation } from './lib/pageTitle';
   import { updatePageMetaFor } from './lib/pageMeta';
+  import { reloadToSameURL, restoreScrollAfterReload, startVersionWatch } from './lib/versionCheck';
+  import Button from './lib/Button.svelte';
   import Login from './views/Login.svelte';
   import Account from './views/Account.svelte';
   import Admin from './views/Admin.svelte';
@@ -31,6 +33,13 @@
   import TopicGuide from './views/TopicGuide.svelte';
 
   let sessionChecked = $state(false);
+  // #0715: set when a newer build is out but unsaved work holds back the reload.
+  let updateAvailable = $state(false);
+
+  onMount(() => {
+    restoreScrollAfterReload();
+    return startVersionWatch({ onNotify: () => (updateAvailable = true) });
+  });
 
   // #0521: only the session-gated routes (router.ts's SESSION_GATED_ROUTES)
   // wait for GET /api/me before rendering. Every public route mounts its
@@ -202,3 +211,36 @@
 {/if}
 
 <Footer />
+
+<div class="update-notice" class:visible={updateAvailable}>
+  <p role="status">{updateAvailable ? 'A new version of the site is available.' : ''}</p>
+  {#if updateAvailable}<Button onclick={() => reloadToSameURL()}>Reload</Button>{/if}
+</div>
+
+<style>
+  .update-notice {
+    display: none;
+  }
+  .update-notice.visible {
+    position: fixed;
+    bottom: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 50;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    max-width: min(36rem, calc(100% - 2rem));
+    padding: 0.75rem 1rem;
+    background: var(--bg-panel);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+  }
+  .update-notice p {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+</style>
+

@@ -329,3 +329,7 @@ func copyHeader(dst, src http.Header) {
 		}
 	}
 }
+
+// SetBuildID stamps the running build's identity into every served page's
+// oc-build meta (#0715). Call it once, before serving.
+func (s *Site) SetBuildID(id string) { s.renderer.SetBuildID(id) }

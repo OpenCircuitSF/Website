@@ -102,6 +102,11 @@ const (
 	// occurrence just as readily as the real one (the #0055 review bounce
 	// this rule was written from).
 	tokenBody = "%%OC_BODY%%"
+
+	// tokenBuild is the running build's identity, stamped into a
+	// <meta name="oc-build"> tag so the SPA can compare it with
+	// GET /api/version (#0715). Empty until SetBuildID is called.
+	tokenBuild = "%%OC_BUILD%%"
 )
 
 // defaultCacheTTL is the short TTL PRD §7.4 calls for on the rendered
@@ -205,6 +210,16 @@ type Renderer struct {
 
 	mu    sync.RWMutex
 	cache map[string]cacheEntry
+	build string // guarded by mu; see SetBuildID (#0715)
+}
+
+// SetBuildID sets the build identity substituted for tokenBuild and clears
+// the render cache so no page keeps the old value (#0715).
+func (r *Renderer) SetBuildID(id string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.build = id
+	r.cache = make(map[string]cacheEntry)
 }
 
 type cacheEntry struct {
@@ -793,6 +808,9 @@ func (r *Renderer) store(key string, body []byte) {
 // cache for the whole TTL.
 func (r *Renderer) substitute(m RouteMeta) (body []byte, cacheable bool) {
 	pageHTML, cacheable := r.renderPage(m.page)
+	r.mu.RLock()
+	build := r.build
+	r.mu.RUnlock()
 	replacer := strings.NewReplacer(
 		tokenTitle, html.EscapeString(m.Title),
 		tokenDescription, html.EscapeString(m.Description),
@@ -807,6 +825,7 @@ func (r *Renderer) substitute(m RouteMeta) (body []byte, cacheable bool) {
 		tokenJSONLD, m.JSONLD,
 		tokenCanonical, canonicalLink(m.Canonical),
 		tokenBody, pageHTML,
+		tokenBuild, html.EscapeString(build),
 	)
 	return []byte(replacer.Replace(string(r.template))), cacheable
 }

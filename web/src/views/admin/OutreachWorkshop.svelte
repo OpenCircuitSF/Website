@@ -29,6 +29,7 @@
   import { asksBeforeLeaving } from '../../lib/outreachLeave';
   import Button from '../../lib/Button.svelte';
   import { onMount, tick } from 'svelte';
+  import { setUnsaved } from '../../lib/unsavedWork';
   import { resetOutreach, listOutreachFlyers, getOutreachLuma, ApiError } from '../../lib/api';
   import { lumaByWorkshop, lumaEventLine, lumaStatusLine, OPEN_ON_LUMA } from '../../lib/outreachLuma';
   import type { OutreachLuma } from '../../lib/types';
@@ -145,6 +146,12 @@
   }
 
   const anyUnsaved = $derived(Object.values(unsavedWaves).some(Boolean));
+
+  // #0715: hold back an automatic reload onto a new build while this is unsaved.
+  $effect(() => {
+    setUnsaved('outreach', anyUnsaved);
+    return () => setUnsaved('outreach', false);
+  });
   let leaving = false;
   let pendingLink = $state<HTMLAnchorElement | null>(null);
   function onBeforeUnload(e: BeforeUnloadEvent): void {

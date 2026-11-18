@@ -894,3 +894,19 @@ func TestMountAndServe_PageMetaRoute(t *testing.T) {
 	}
 	get("/api/page-meta", http.StatusBadRequest)
 }
+
+// TestMountAndServe_VersionRouteAndShellStamp: GET /api/version is mounted and
+// reports the same build id the served shell's oc-build meta carries (#0715).
+func TestMountAndServe_VersionRouteAndShellStamp(t *testing.T) {
+	_, _, _, _, _, get := seoWiringServer(t)
+	var v struct{ Build string }
+	if err := json.Unmarshal([]byte(get("/api/version", http.StatusOK)), &v); err != nil {
+		t.Fatalf("decode /api/version: %v", err)
+	}
+	if v.Build != buildID() {
+		t.Errorf("build=%q, want %q", v.Build, buildID())
+	}
+	if body := get("/", http.StatusOK); !strings.Contains(body, `name="oc-build" content="`+buildID()+`"`) {
+		t.Errorf("served shell lacks oc-build meta %q", buildID())
+	}
+}

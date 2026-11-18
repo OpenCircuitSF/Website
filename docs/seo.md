@@ -284,6 +284,12 @@ For every other route (private/token-bearing routes, an unknown path, a
 draft workshop, a withheld/unsent archive entry) the substituted value is
 `""`, so the served HTML is byte-for-byte what it was before this issue.
 
+A later token, `tokenBuild` (`%%OC_BUILD%%`, `#0715`), fills
+`<meta name="oc-build">` with the running build id (`<version>+<commit>`,
+set once by `(*Site).SetBuildID`). It is HTML-escaped and empty until set.
+The SPA's version check compares it with `GET /api/version`; see
+`docs/frontend.md`'s "Version check" section.
+
 **Never coexists with the SPA.** Svelte 5's `mount()` *appends* to its
 target rather than replacing it, so the server's fallback nodes would
 duplicate once Svelte mounts, unless cleared first. `web/src/lib/mountTarget.ts`'s

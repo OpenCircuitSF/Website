@@ -78,6 +78,7 @@
 -->
 <script lang="ts">
   import { onMount, tick } from 'svelte';
+  import { setUnsaved } from '../../lib/unsavedWork';
   import {
     getAdminWorkshop,
     createWorkshop,
@@ -183,6 +184,13 @@
   // structural guard was added for this wiring (issues/0433.md's plan): if
   // that assignment were ever missing, the field would visibly stay empty.
   let uploadingCover = $state(false);
+  const formDirty = $derived(workshop != null && JSON.stringify(fields) !== JSON.stringify(workshopToFormFields(workshop)));
+
+  // #0715: hold back an automatic reload onto a new build while this is unsaved.
+  $effect(() => {
+    setUnsaved('workshop-editor', formDirty || saving || uploadingCover);
+    return () => setUnsaved('workshop-editor', false);
+  });
   let uploadCoverError = $state<string | null>(null);
 
   async function handleCoverImageFileChange(e: Event) {

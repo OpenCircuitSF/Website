@@ -41,6 +41,7 @@
 -->
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
+  import { setUnsaved } from '../lib/unsavedWork';
   import { currentUser } from '../lib/stores';
   import { navigate } from '../lib/router';
   import SubNav from '../lib/SubNav.svelte';
@@ -223,6 +224,12 @@
   });
 
   const addressDirty = $derived(addressInput !== savedAddress);
+
+  // #0715: hold back an automatic reload onto a new build while this is unsaved.
+  $effect(() => {
+    setUnsaved('admin-address', addressDirty || savingAddress);
+    return () => setUnsaved('admin-address', false);
+  });
 
   async function saveAddress() {
     savingAddress = true;

@@ -101,6 +101,7 @@ const distIndexPath = "../../web/dist/index.html"
 // they are exactly the tokens Render substitutes into this same file at
 // request time.
 var distPlaceholderTokens = []string{
+	tokenBuild,
 	tokenTitle,
 	tokenDescription,
 	tokenOGTitle,
@@ -204,6 +205,7 @@ func TestValidateDistPlaceholder(t *testing.T) {
 <meta name="twitter:card" content="%%OC_TWITTER_CARD%%" />
 <meta name="twitter:title" content="%%OC_TWITTER_TITLE%%" />
 <meta name="twitter:description" content="%%OC_TWITTER_DESCRIPTION%%" />
+<meta name="oc-build" content="%%OC_BUILD%%" />
 %%OC_CANONICAL%%
 %%OC_JSONLD%%
 </head><body><div id="app">%%OC_BODY%%</div></body></html>`

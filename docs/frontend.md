@@ -105,6 +105,22 @@ error in either case. Always preview with `./scripts/dev.sh` or
 `index.html`'s `<head>` are unaffected — only elements using the
 `mask-image` technique.
 
+## Version check (`#0715`)
+
+An open tab notices a newer deploy and moves onto it. The server stamps its
+build id into `<meta name="oc-build">` and answers `GET /api/version`
+(public, `no-store`) with the same id. `web/src/lib/versionCheck.ts` compares
+the two on `visibilitychange` to visible and on a back/forward-cache
+`pageshow`, at most once an hour (timestamp in `localStorage`, falling back to
+memory; a failed check retries after five minutes). On a mismatch it calls
+`reloadToSameURL()`, which is `location.reload()` plus a saved scroll offset,
+so path, query and hash are kept. If work is unsaved, it shows a "Reload"
+notice instead. Unsaved work means a key registered through
+`web/src/lib/unsavedWork.ts`'s `setUnsaved` (the campaign, workshop and
+outreach editors and the admin address form) or a focused text field. It
+uses no service worker and no polling. In Vite dev the token is never
+substituted, so the check is off there.
+
 ## Testing
 
 ```bash
