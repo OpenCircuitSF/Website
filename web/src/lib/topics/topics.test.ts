@@ -3,6 +3,7 @@ import { TOPIC_GUIDE_SLUGS, parsePath } from '../router';
 import { TOPICS, TOPIC_BODIES } from './topics';
 import { TOPIC_GUIDES } from '../guides';
 import { renderTemps } from '../temperature';
+import { TOPIC_DEMOS } from './demoLoaders';
 import IronTempDemo from './IronTempDemo.svelte';
 import SolderWireDemo from './SolderWireDemo.svelte';
 import MosfetSwitchDemo from './MosfetSwitchDemo.svelte';
@@ -29,11 +30,11 @@ describe('topic guides', () => {
       }
   });
 
-  it('temps flag matches content', () => {
+  it('temps flag matches content', async () => {
     const tempDemos = new Set<unknown>([IronTempDemo, SolderWireDemo, MosfetSwitchDemo, SwitchPickerDemo]);
     for (const [slug, b] of Object.entries(TOPIC_BODIES)) {
       const prose = [b.tryIt, b.takeaway, ...b.ideas.flatMap((i) => [i.title, i.body])].some((x) => x.includes('{temp:'));
-      expect(b.temps === true, slug).toBe(prose || tempDemos.has(b.demo));
+      expect(b.temps === true, slug).toBe(prose || tempDemos.has((await TOPIC_DEMOS[slug]()).default));
     }
     const importers = Object.entries(demoSources)
       .filter(([, src]) => src.includes('tempUnit.svelte'))

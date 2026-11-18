@@ -5,13 +5,12 @@
   import { currentRoute } from '../lib/router';
   import TerminalPanel from '../lib/TerminalPanel.svelte';
   import Prompt from '../lib/Prompt.svelte';
-  import { TOPICS } from '../lib/topics/topics';
-  import { GUIDE_SETS, GUIDE_THUMB, WORKSHOP_GUIDES, guideThumbPath } from '../lib/guides';
+  import { GUIDE_SETS, GUIDE_THUMB, TOPIC_GUIDES, WORKSHOP_GUIDES, guideThumbPath } from '../lib/guides';
   import { ALL, countsBySet, groupBySet, hrefForSet, setFromQuery } from '../lib/guideSets';
 
   const filter = $derived(setFromQuery($currentRoute.query?.get('set')));
-  const groups = $derived(groupBySet(TOPICS, filter));
-  const counts = countsBySet(TOPICS);
+  const groups = $derived(groupBySet(TOPIC_GUIDES, filter));
+  const counts = countsBySet(TOPIC_GUIDES);
   const workshops = $derived(WORKSHOP_GUIDES.filter((g) => filter === ALL || g.set === filter));
   const choices = [{ id: ALL, title: 'All' }, ...GUIDE_SETS];
 </script>

@@ -324,3 +324,53 @@ func TestSPANoAssetsDirStillConstructs(t *testing.T) {
 		t.Errorf("status %d", rec.Code)
 	}
 }
+
+// TestSPAMissingStaleChunkReturns404NotShell: a chunk hash from a previous
+// build 404s with no-cache, never the HTML shell (#0717).
+func TestSPAMissingStaleChunkReturns404NotShell(t *testing.T) {
+	for _, p := range []string{"/assets/TopicGuide-OLDHASH.js", "/assets/Admin-OLDHASH.css", "/assets/noext"} {
+		req := httptest.NewRequest(http.MethodGet, p, nil)
+		req.Header.Set("Accept-Encoding", "gzip")
+		rec := serveSPAReq(assetFS(), req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s: status %d, want 404", p, rec.Code)
+		}
+		if strings.Contains(strings.ToLower(rec.Body.String()), "<!doctype html>") {
+			t.Errorf("%s: body is the HTML shell", p)
+		}
+		if ct := rec.Header().Get("Content-Type"); strings.HasPrefix(ct, "text/html") {
+			t.Errorf("%s: Content-Type = %q", p, ct)
+		}
+		if cc := rec.Header().Get("Cache-Control"); strings.Contains(cc, "immutable") {
+			t.Errorf("%s: Cache-Control = %q", p, cc)
+		}
+	}
+}
+
+// TestSPAPrecompressesEveryChunk: every split chunk, JS and CSS, is served
+// gzipped and immutable (#0717).
+func TestSPAPrecompressesEveryChunk(t *testing.T) {
+	css := strings.Repeat(".a{color:red}\n", 500)
+	files := map[string]string{
+		"index.html":             "<!doctype html><title>Open Circuit SF</title>",
+		"assets/index-A.js":      compressibleJS,
+		"assets/Admin-B.js":      compressibleJS,
+		"assets/TopicGuide-C.js": compressibleJS,
+		"assets/Admin-B.css":     css,
+	}
+	fsys := distFS(files)
+	for name := range files {
+		if !strings.HasPrefix(name, "assets/") {
+			continue
+		}
+		req := httptest.NewRequest(http.MethodGet, "/"+name, nil)
+		req.Header.Set("Accept-Encoding", "gzip")
+		rec := serveSPAReq(fsys, req)
+		if rec.Code != http.StatusOK || rec.Header().Get("Content-Encoding") != "gzip" {
+			t.Errorf("%s: status %d, Content-Encoding %q", name, rec.Code, rec.Header().Get("Content-Encoding"))
+		}
+		if cc := rec.Header().Get("Cache-Control"); !strings.Contains(cc, "immutable") {
+			t.Errorf("%s: Cache-Control = %q", name, cc)
+		}
+	}
+}

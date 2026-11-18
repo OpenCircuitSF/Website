@@ -121,6 +121,26 @@ outreach editors and the admin address form) or a focused text field. It
 uses no service worker and no polling. In Vite dev the token is never
 substituted, so the check is off there.
 
+## Code splitting (`#0717`)
+
+The public landing pages (home, about, privacy, subscribe, workshops, guides
+index, archive, not-found) stay in the entry chunk. Everything else -- the
+admin console, account and login, the magic-link landings, the subscription
+pages, the workshop guide, the topic guide view, and each topic guide's demo
+-- is a dynamic `import()` owned by `web/src/lib/routeViews.ts`
+(`LAZY_ROUTE_LOADERS`, plus `web/src/lib/topics/demoLoaders.ts` for demos).
+`App.svelte` renders them through `LazyView.svelte`.
+
+- `main.ts` awaits the current route's chunks before mounting, so a direct
+  load or a reload keeps the server fallback (`#0519`) on screen rather than a
+  blank shell. App's focus move to the `<h1>` waits for `routeViewReady`.
+- Chunks prefetch on link hover, focus or touch, never during idle time.
+- A chunk that fails to load (a stale tab after a deploy; `static.go` 404s any
+  missing `assets/` path with `no-cache`) triggers `reloadToSameURL()` once
+  per URL, guarded by a `sessionStorage` key `oc.chunkReload:<href>` that a
+  later successful load clears. A second failure shows a "didn't load" page
+  with a Reload button.
+
 ## Testing
 
 ```bash

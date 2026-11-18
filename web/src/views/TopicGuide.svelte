@@ -1,6 +1,7 @@
 <script lang="ts">
   // /guides/{slug} -- one short topic guide. Static and client-side; the
-  // content and demo come from lib/topics/topics.ts. router.ts only routes
+  // content comes from lib/topics/topics.ts and the demo, loaded lazily
+  // (#0717), from lib/topics/demoLoaders.ts. router.ts only routes
   // slugs in TOPIC_GUIDE_SLUGS here, so `topic` is always found; the
   // not-found branch is a guard, not a real state.
   import { currentRoute } from '../lib/router';
@@ -11,6 +12,8 @@
   import ShareBar from '../lib/topics/ShareBar.svelte';
   import MiniStrip from '../lib/topics/MiniStrip.svelte';
   import { TOPICS, topicBySlug } from '../lib/topics/topics';
+  import LazyView from '../lib/LazyView.svelte';
+  import { demoKey } from '../lib/routeViews';
   import TempUnitToggle from '../lib/TempUnitToggle.svelte';
   import { renderTemps } from '../lib/temperature';
   import { tempUnit } from '../lib/tempUnit.svelte';
@@ -21,7 +24,6 @@
 </script>
 
 {#if topic}
-  {@const Demo = topic.demo}
   <main id="main-content" class="app-shell topic">
     <TerminalPanel title="guides // {topic.slug.replaceAll('-', '_')}">
       <Prompt text="guide --time {topic.minutes}m" />
@@ -41,7 +43,7 @@
       </div>
       <p class="try">{renderTemps(topic.tryIt, tempUnit.value)}</p>
       <div class="demo-frame">
-        <Demo />
+        <LazyView key={demoKey(topic.slug)} placeholder="none" />
       </div>
     </section>
 

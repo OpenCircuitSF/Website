@@ -2,17 +2,14 @@
   import { onMount, tick } from 'svelte';
   import { get } from 'svelte/store';
   import { currentUser, pendingVerifyToken } from './lib/stores';
-  import { currentRoute, initRouter, navigate, needsSessionGate } from './lib/router';
+  import { currentRoute, initRouter, navigate, needsSessionGate, parsePath } from './lib/router';
+  import { prefetchForRoute, routeViewReady } from './lib/routeViews';
   import { getMe } from './lib/api';
   import { titleForRoute, shouldAnnounceNavigation } from './lib/pageTitle';
   import { updatePageMetaFor } from './lib/pageMeta';
   import { reloadToSameURL, restoreScrollAfterReload, startVersionWatch } from './lib/versionCheck';
   import Button from './lib/Button.svelte';
-  import Login from './views/Login.svelte';
-  import Account from './views/Account.svelte';
-  import Admin from './views/Admin.svelte';
-  import RegisterVerify from './views/RegisterVerify.svelte';
-  import RecoverVerify from './views/RecoverVerify.svelte';
+  import LazyView from './lib/LazyView.svelte';
   import Header from './lib/Header.svelte';
   import Footer from './lib/Footer.svelte';
   import Home from './views/Home.svelte';
@@ -24,13 +21,8 @@
   import PrivacyPolicy from './views/PrivacyPolicy.svelte';
   import Subscribe from './views/Subscribe.svelte';
   import SubscribeThanks from './views/SubscribeThanks.svelte';
-  import ConfirmSubscription from './views/ConfirmSubscription.svelte';
-  import PreferenceCenter from './views/PreferenceCenter.svelte';
-  import Unsubscribe from './views/Unsubscribe.svelte';
   import NotFound from './views/NotFound.svelte';
-  import GuideProgrammingLeds from './views/GuideProgrammingLeds.svelte';
   import GuidesIndex from './views/GuidesIndex.svelte';
-  import TopicGuide from './views/TopicGuide.svelte';
 
   let sessionChecked = $state(false);
   // #0715: set when a newer build is out but unsaved work holds back the reload.
@@ -38,7 +30,28 @@
 
   onMount(() => {
     restoreScrollAfterReload();
-    return startVersionWatch({ onNotify: () => (updateAvailable = true) });
+    // #0717: fetch a lazy route's chunk when the visitor is about to follow
+    // its link (hover, keyboard focus, touch) -- no idle prefetch, so a phone
+    // spends no data on pages it never opens.
+    const onIntent = (e: Event) => {
+      const a = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
+      if (!a) return;
+      let url: URL;
+      try {
+        url = new URL(a.href);
+      } catch {
+        return;
+      }
+      if (url.origin !== location.origin) return;
+      prefetchForRoute(parsePath(url.pathname, url.search));
+    };
+    const intents = ['pointerover', 'focusin', 'touchstart'] as const;
+    for (const t of intents) document.addEventListener(t, onIntent, { passive: true });
+    const stopWatch = startVersionWatch({ onNotify: () => (updateAvailable = true) });
+    return () => {
+      for (const t of intents) document.removeEventListener(t, onIntent);
+      stopWatch();
+    };
   });
 
   // #0521: only the session-gated routes (router.ts's SESSION_GATED_ROUTES)
@@ -142,10 +155,15 @@
     // to 0/0 after Back). preventScroll: true keeps the focus move purely
     // an accessibility signal -- it does not touch scroll position -- so it
     // composes with router.ts's restoreScroll instead of racing it.
-    void tick().then(() => {
-      const heading = document.querySelector('h1[tabindex="-1"]') as HTMLElement | null;
-      heading?.focus({ preventScroll: true });
-    });
+    // #0717: a lazily loaded view's <h1> exists only once its chunk is in,
+    // so wait for routeViewReady first; skip if the route moved on meanwhile.
+    void routeViewReady(route)
+      .then(() => tick())
+      .then(() => {
+        if (get(currentRoute) !== route) return;
+        const heading = document.querySelector('h1[tabindex="-1"]') as HTMLElement | null;
+        heading?.focus({ preventScroll: true });
+      });
   });
 </script>
 
@@ -154,15 +172,15 @@
     <p class="text-muted">Loading…</p>
   </div>
 {:else if $currentRoute.name === 'login'}
-  <Login />
+  <LazyView key="login" />
 {:else if $currentRoute.name === 'account'}
-  <Account />
+  <LazyView key="account" />
 {:else if $currentRoute.name === 'admin'}
-  <Admin />
+  <LazyView key="admin" />
 {:else if $currentRoute.name === 'register-verify'}
-  <RegisterVerify />
+  <LazyView key="register-verify" />
 {:else if $currentRoute.name === 'recover-verify'}
-  <RecoverVerify />
+  <LazyView key="recover-verify" />
 {:else}
   <!-- Every other route is a public marketing page (PRD §5.1), and shares
        the site header shell (#0017). not-found is a real 404, not a
@@ -176,11 +194,11 @@
     <WorkshopDetail />
   {:else if $currentRoute.name === 'workshop-guide'}
     <!-- WORKSHOP_GUIDE_SLUGS (router.ts) has one entry so far. -->
-    <GuideProgrammingLeds />
+    <LazyView key="workshop-guide" />
   {:else if $currentRoute.name === 'guides'}
     <GuidesIndex />
   {:else if $currentRoute.name === 'topic-guide'}
-    <TopicGuide />
+    <LazyView key="topic-guide" />
   {:else if $currentRoute.name === 'archive'}
     <ArchiveIndex />
   {:else if $currentRoute.name === 'archive-detail'}
@@ -194,13 +212,13 @@
   {:else if $currentRoute.name === 'subscribe-thanks'}
     <SubscribeThanks />
   {:else if $currentRoute.name === 'confirm'}
-    <ConfirmSubscription />
+    <LazyView key="confirm" />
   {:else if $currentRoute.name === 'preferences'}
     <main id="main-content" class="app-shell">
-      <PreferenceCenter />
+      <LazyView key="preferences" />
     </main>
   {:else if $currentRoute.name === 'unsubscribe'}
-    <Unsubscribe />
+    <LazyView key="unsubscribe" />
   {:else if $currentRoute.name === 'not-found'}
     <NotFound />
   {:else}

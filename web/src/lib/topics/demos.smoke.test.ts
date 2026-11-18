@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { TOPICS } from './topics';
+import { TOPIC_DEMOS } from './demoLoaders';
 import { resetTempUnitForTest, setTempUnit } from '../tempUnit.svelte';
 import Playground from '../guide/Playground.svelte';
 import CableDemo from './CableDemo.svelte';
@@ -57,8 +58,8 @@ afterEach(cleanup);
 
 describe('guide demos', () => {
   for (const t of TOPICS) {
-    it(`${t.slug} demo mounts`, () => {
-      const { container } = render(t.demo);
+    it(`${t.slug} demo mounts`, async () => {
+      const { container } = render((await TOPIC_DEMOS[t.slug]()).default);
       expect(container.innerHTML.length).toBeGreaterThan(100);
     });
   }

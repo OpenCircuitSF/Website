@@ -4,60 +4,9 @@
 // web/src/content/guides/guides.json, which the router and the Go server also read;
 // this file holds only each topic's page body, keyed by slug.
 import { TOPIC_GUIDES, type TopicMeta } from '../guides';
-import type { Component } from 'svelte';
-import ChainDemo from '../guide/ChainDemo.svelte';
-import BaudDemo from './BaudDemo.svelte';
-import CableDemo from './CableDemo.svelte';
-import DelayDemo from './DelayDemo.svelte';
-import PinoutExplorer from './PinoutExplorer.svelte';
-import PowerDemo from './PowerDemo.svelte';
-import ProbesDemo from './ProbesDemo.svelte';
-import ContinuityDemo from './ContinuityDemo.svelte';
-import VoltageDemo from './VoltageDemo.svelte';
-import CurrentDemo from './CurrentDemo.svelte';
-// Soldering guides (#0667)
-import SolderWireDemo from './SolderWireDemo.svelte';
-import IronTempDemo from './IronTempDemo.svelte';
-import TinningDemo from './TinningDemo.svelte';
-import JointQuiz from './JointQuiz.svelte';
-import TipCareDemo from './TipCareDemo.svelte';
-import HeaderPinsDemo from './HeaderPinsDemo.svelte';
-// ESP32-C3: code on the board (#0670)
-import BootButtonsDemo from './BootButtonsDemo.svelte';
-import UploadDoctor from './UploadDoctor.svelte';
-import SerialOutputDemo from './SerialOutputDemo.svelte';
-import IniBuilderDemo from './IniBuilderDemo.svelte';
-import OtaDemo from './OtaDemo.svelte';
-// ESP32-C3: wireless and sleep (#0672)
-import WifiConnectDemo from './WifiConnectDemo.svelte';
-import BleWifiPicker from './BleWifiPicker.svelte';
-import BleBasicsDemo from './BleBasicsDemo.svelte';
-import BrownoutDemo from './BrownoutDemo.svelte';
-import DeepSleepDemo from './DeepSleepDemo.svelte';
-// ESP32-C3: pins and power (#0671)
-import C3BootPinsDemo from './C3BootPinsDemo.svelte';
-import C3PinChooserDemo from './C3PinChooserDemo.svelte';
-import C3AnalogDemo from './C3AnalogDemo.svelte';
-import C3PwmDemo from './C3PwmDemo.svelte';
-import C3PowerDemo from './C3PowerDemo.svelte';
-// Components: capacitors (#0691)
-import CapCodeDemo from './CapCodeDemo.svelte';
-import RcChargeDemo from './RcChargeDemo.svelte';
-import DecouplingDemo from './DecouplingDemo.svelte';
-// Components: transistors and MOSFETs (#0692)
-import BjtSwitchDemo from './BjtSwitchDemo.svelte';
-import MosfetSwitchDemo from './MosfetSwitchDemo.svelte';
-import FlybackDemo from './FlybackDemo.svelte';
-import SwitchPickerDemo from './SwitchPickerDemo.svelte';
-// Components: resistors and LEDs (#0690)
-import ResistorBandsDemo from './ResistorBandsDemo.svelte';
-import OhmsLawDemo from './OhmsLawDemo.svelte';
-import LedBasicsDemo from './LedBasicsDemo.svelte';
-import LedResistorDemo from './LedResistorDemo.svelte';
 
 /** The page body of one topic guide; its metadata comes from the catalog. */
 export interface TopicBody {
-  demo: Component;
   /** Shown above the demo: what to do with it. */
   tryIt: string;
   /** The short explanation after the demo. */
@@ -72,7 +21,6 @@ export type Topic = TopicMeta & TopicBody;
 
 export const TOPIC_BODIES: Record<string, TopicBody> = {
   'one-wire-many-leds': {
-    demo: ChainDemo,
     tryIt: 'Send a frame and watch each LED take the first color and pass the rest along. Then break it.',
     ideas: [
       {
@@ -91,7 +39,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Addressable LEDs are a relay, not a bus. Follow the arrows printed on the strip.',
   },
   'delay-vs-millis': {
-    demo: DelayDemo,
     tryIt: 'Both boards blink the same LED. Tap the button a few times and compare the scores.',
     ideas: [
       {
@@ -110,7 +57,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'If anything else will ever need to happen, use millis(), not delay().',
   },
   'baud-rate': {
-    demo: BaudDemo,
     tryIt: 'The board sends at 115200 baud. Change the speed the monitor listens at and watch where it samples the wire.',
     ideas: [
       {
@@ -129,7 +75,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Garbage means the connection works. Check that both baud rates match.',
   },
   'charge-only-cables': {
-    demo: CableDemo,
     tryIt: 'Pick a cable, plug it in, and compare what the board and the laptop each notice.',
     ideas: [
       {
@@ -148,7 +93,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'No serial port? Swap the cable first. It’s the answer most of the time.',
   },
   'led-power-budget': {
-    demo: PowerDemo,
     tryIt: 'Push brightness to full on white and watch the current. Then turn on the power limit.',
     ideas: [
       {
@@ -167,7 +111,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Color and brightness decide the current. Budget for white at full brightness.',
   },
   'esp32-c3-supermini-pinout': {
-    demo: PinoutExplorer,
     tryIt: 'Tap a pin on the photo, or use the filters to find the analog pins, the strapping pins and the onboard LED.',
     ideas: [
       {
@@ -186,7 +129,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Most pins are free to use. Treat 2, 8 and 9 with care, and never put 5V on a GPIO.',
   },
   'multimeter-probes': {
-    demo: ProbesDemo,
     tryIt: 'Pick a meter, then click the jack where the black probe goes, then the red one. Try the wrong jacks too.',
     ideas: [
       {
@@ -205,7 +147,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Black in COM, red in V. Move red to an A jack only to measure current, then move it straight back.',
   },
   'multimeter-continuity': {
-    demo: ContinuityDemo,
     tryIt: 'Turn the dial to the beep symbol (a diode with sound waves). Then touch the probes to each thing and listen, or here, look.',
     ideas: [
       {
@@ -224,7 +165,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Power off, dial to the beep, touch both ends. Beep is connected; silence is open.',
   },
   'multimeter-voltage': {
-    demo: VoltageDemo,
     tryIt: 'Turn the dial to DC volts (V with a straight line), pick something to measure, then swap the probes. On the 3-jack meter, try a range that is too low.',
     ideas: [
       {
@@ -243,7 +183,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Dial to V with a straight line, black on ground, red on the point. A minus sign just means the probes are swapped.',
   },
   'multimeter-current': {
-    demo: CurrentDemo,
     tryIt: 'Measure the LED’s current: move red to the right jack, set the dial, and put the meter in series. Then try the probes across the battery.',
     ideas: [
       {
@@ -263,7 +202,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
   },
   // Soldering guides (#0667)
   'soldering-solder-wire': {
-    demo: SolderWireDemo,
     temps: true,
     tryIt: 'Pick a solder and a thickness, and compare what each one needs from your iron.',
     ideas: [
@@ -283,7 +221,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Start with 0.8 mm rosin-core solder. 63/37 is easiest; lead-free works too, with a hotter iron.',
   },
   'soldering-iron-temperature': {
-    demo: IronTempDemo,
     temps: true,
     tryIt: 'Start cold and turn the dial up. Then switch to lead-free, and try a fine tip at the same setting.',
     ideas: [
@@ -303,7 +240,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Aim for joints that flow in 2–3 seconds. If it’s slow, use a bigger tip before you add heat.',
   },
   'soldering-tinning': {
-    demo: TinningDemo,
     tryIt: 'Join the wire to the pad straight away. Then start over, tin both first, and compare.',
     ideas: [
       {
@@ -322,7 +258,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Tin both sides, then join. Two wet surfaces want to become one.',
   },
   'soldering-good-joint': {
-    demo: JointQuiz,
     tryIt: 'Each picture is a joint cut in half. Name what you see, then read what caused it.',
     ideas: [
       {
@@ -341,7 +276,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Shape first, then shine. A smooth, hollow-sided cone is a good joint.',
   },
   'soldering-tip-care': {
-    demo: TipCareDemo,
     tryIt: 'Treat the tip badly and watch it darken until solder won’t stick. Then find the habits that keep it shiny.',
     ideas: [
       {
@@ -360,7 +294,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'A shiny tip is a working tip. Tin it before each joint and before you switch off.',
   },
   'soldering-header-pins': {
-    demo: HeaderPinsDemo,
     tryIt: 'Step through soldering the header pins onto a SuperMini, seen from the side.',
     ideas: [
       {
@@ -380,7 +313,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
   },
   // ESP32-C3: code on the board (#0670)
   'esp32-c3-boot-reset-buttons': {
-    demo: BootButtonsDemo,
     tryIt: 'The code on this board went straight to sleep, so there is no port. Hold BOOT, tap RST, let go of BOOT, then upload.',
     ideas: [
       {
@@ -399,7 +331,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Hold BOOT, press and release RST, let go of BOOT, upload, then press RST.',
   },
   'esp32-c3-wont-upload': {
-    demo: UploadDoctor,
     tryIt: 'Answer each question about your board. Every path ends at something to try.',
     ideas: [
       {
@@ -418,7 +349,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Cable, port, monitor, then download mode. You don’t need a driver for the C3.',
   },
   'esp32-c3-serial-output': {
-    demo: SerialOutputDemo,
     tryIt: 'Upload with the defaults and look at the monitor. Then add the build flags, and finally make setup() wait.',
     ideas: [
       {
@@ -437,7 +367,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Blank monitor on a C3? Add the two USB build flags and wait for the monitor in setup().',
   },
   'platformio-first-project': {
-    demo: IniBuilderDemo,
     tryIt: 'Tap any line to see what it does. Then change a setting and see what breaks.',
     ideas: [
       {
@@ -456,7 +385,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'platform espressif32, board esp32-c3-devkitm-1, framework arduino, plus the two USB flags.',
   },
   'esp32-ota-updates': {
-    demo: OtaDemo,
     tryIt: 'Try WiFi first. Then upload by cable, and send a few updates over WiFi. Break one with the checkboxes.',
     ideas: [
       {
@@ -476,7 +404,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
   },
   // ESP32-C3: wireless and sleep (#0672)
   'esp32-c3-wifi': {
-    demo: WifiConnectDemo,
     tryIt: 'Pick a network and watch the serial monitor. Then tick the antenna problem and find the fix.',
     ideas: [
       {
@@ -499,7 +426,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Connect with a timeout, use a 2.4 GHz network, and keep your password out of shared code.',
   },
   'ble-vs-wifi': {
-    demo: BleWifiPicker,
     tryIt: 'Tick everything your project needs to do and read the recommendation.',
     ideas: [
       {
@@ -518,7 +444,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Internet or lots of data: WiFi. A phone nearby, small data, a battery: BLE.',
   },
   'ble-basics': {
-    demo: BleBasicsDemo,
     tryIt: 'Scan, connect, read the LED value, then write 01 to switch it on. Subscribe and press BOOT on the board.',
     ideas: [
       {
@@ -537,7 +462,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'A BLE device is a set of named values. The phone reads them, writes them, or asks to be told when they change.',
   },
   'wifi-brownout-resets': {
-    demo: BrownoutDemo,
     tryIt: 'Start with the thin cable and watch the voltage dip on each WiFi burst. Then try the fixes one at a time.',
     ideas: [
       {
@@ -556,7 +480,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Resets when WiFi starts are a power problem. Better cable first, then a capacitor.',
   },
   'esp32-c3-deep-sleep': {
-    demo: DeepSleepDemo,
     tryIt: 'Turn WiFi and the board’s parts on and off, and change how long it sleeps. Watch the battery life.',
     ideas: [
       {
@@ -576,7 +499,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
   },
   // ESP32-C3: pins and power (#0671)
   'esp32-c3-boot-pins': {
-    demo: C3BootPinsDemo,
     tryIt: 'Pick a pin, hang a part on it, and press RESET. Try a button on GPIO 9, held and not held.',
     ideas: [
       {
@@ -595,7 +517,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Board won’t start your code? Check what’s wired to GPIO 2, 8 and 9.',
   },
   'esp32-c3-reserved-pins': {
-    demo: C3PinChooserDemo,
     tryIt: 'Pick a job. Green pins are good, amber work with care, red to avoid. Tap a pin to see why.',
     ideas: [
       {
@@ -614,7 +535,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'First choices: 0, 1, 3, 4 for analog, 4 to 7 and 10 for everything else.',
   },
   'esp32-c3-analog-input': {
-    demo: C3AnalogDemo,
     tryIt: 'Slide the voltage and compare the three readings. Press "Read again" to see the noise. Then go above 2.5 V.',
     ideas: [
       {
@@ -633,7 +553,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Use pins 0 to 4, stay under 2.5 V, average a few analogReadMilliVolts() readings.',
   },
   'esp32-c3-pwm': {
-    demo: C3PwmDemo,
     tryIt: 'Drag the duty cycle to 50% and see how bright it looks. Turn on gamma correction. Then try other frequencies.',
     ideas: [
       {
@@ -652,7 +571,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Duty cycle sets brightness. analogWrite(pin, 0–255) works everywhere; ledcAttach and ledcWrite give you control on arduino-esp32 3.x.',
   },
   'esp32-c3-power': {
-    demo: C3PowerDemo,
     tryIt: 'Pick a power source and where it connects. Then tick "USB cable also plugged in".',
     ideas: [
       {
@@ -672,7 +590,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
   },
   // Components: capacitors (#0691)
   'capacitor-types': {
-    demo: CapCodeDemo,
     tryIt: 'Type the marking off a capacitor, or tap one of the examples. Then flip the electrolytic, switch to a tantalum, and flip it again.',
     ideas: [
       {
@@ -691,7 +608,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Three digits means two digits plus that many zeros, in pF. Electrolytic stripe is negative, tantalum band is positive. Rate it well above your rail.',
   },
   'capacitor-rc-charging': {
-    demo: RcChargeDemo,
     tryIt: 'Press Charge and watch the curve. Then Discharge. Change R or C and notice τ change, or drag the time slider yourself.',
     ideas: [
       {
@@ -710,7 +626,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'τ = R × C. After 1τ it’s 63% charged, after 5τ it’s full.',
   },
   'decoupling-capacitors': {
-    demo: DecouplingDemo,
     tryIt: 'Watch the rail dip with no capacitor. Fit one, try the three sizes, then slide it away from the chip.',
     ideas: [
       {
@@ -730,7 +645,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
   },
   // Components: transistors and MOSFETs (#0692)
   'bjt-transistor-switch': {
-    demo: BjtSwitchDemo,
     tryIt: 'Toggle the pin, then drag the base resistor up to 10 kΩ and watch the transistor stop fully turning on. Try a 300 mA load on each part.',
     ideas: [
       {
@@ -753,7 +667,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Base current = load current ÷ 10. From 3.3 V that’s 2.6 V ÷ base resistor.',
   },
   'mosfet-switch': {
-    demo: MosfetSwitchDemo,
     temps: true,
     tryIt: 'Start with the AO3400A, then pick the IRFZ44N and see what 3.3 V on its gate does. Set the gate to 10 V. Then untick the pull-down and pick "board booting".',
     ideas: [
@@ -777,7 +690,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'From 3.3 V, pick a MOSFET with Rds(on) given at 2.5 V, like the AO3400A, and add a 10 kΩ pull-down.',
   },
   'flyback-diodes': {
-    demo: FlybackDemo,
     tryIt: 'Switch off with no diode and watch the spike. Then add the diode, band to +, and switch off again. Try it reversed too, while switched on.',
     ideas: [
       {
@@ -800,7 +712,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Every coil you switch gets a diode across it, band to the positive supply.',
   },
   'bjt-vs-mosfet': {
-    demo: SwitchPickerDemo,
     temps: true,
     tryIt: 'Start at 50 mA, then drag the current up and watch the transistor drop out. Try 48 V, and a 5 V Arduino pin.',
     ideas: [
@@ -821,7 +732,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
   },
   // Components: resistors and LEDs (#0690)
   'resistor-color-codes': {
-    demo: ResistorBandsDemo,
     tryIt: 'Tap a band to change its color, or type a value like 4.7k. Then switch to 5 bands to see a precision part.',
     ideas: [
       {
@@ -840,7 +750,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Two digits, then the number of zeros, then the tolerance. When in doubt, measure.',
   },
   'ohms-law-resistors': {
-    demo: OhmsLawDemo,
     tryIt: 'Drag the voltage and the resistance. Then switch to series and to parallel and watch the current and the power in each resistor.',
     ideas: [
       {
@@ -859,7 +768,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Current = voltage ÷ resistance, and power = voltage × current. Check the power before you pick a small resistor.',
   },
   'led-basics': {
-    demo: LedBasicsDemo,
     tryIt: 'Flip the LED around, take the resistor out, and try each color on the 3.3 V pin.',
     ideas: [
       {
@@ -878,7 +786,6 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     takeaway: 'Long leg to plus, flat edge to ground, and always a resistor in series.',
   },
   'led-resistor-calculator': {
-    demo: LedResistorDemo,
     tryIt: 'Pick where the power comes from, the LED color and the current you want. The resistor and its color bands update as you go.',
     ideas: [
       {

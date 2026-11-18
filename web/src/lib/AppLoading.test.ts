@@ -16,6 +16,8 @@ import * as api from './api';
 import { currentRoute, parsePath } from './router';
 import type { User } from './types';
 import App from '../App.svelte';
+import { TOPIC_GUIDES } from './guides';
+import { preloadForRoute } from './routeViews';
 
 vi.stubGlobal(
   'fetch',
@@ -113,6 +115,10 @@ describe('App.svelte #0521: no Loading flash between server content and the moun
     expect(appLevelLoading()).toHaveLength(1);
 
     resolveMe({ id: 1, email: 'a@b.c', is_admin: true });
+    // #0717: Admin is a lazy chunk; LazyView shows the same placeholder until
+    // it is in, so wait for the import itself rather than racing waitFor's
+    // timeout against the transform of a large module.
+    await preloadForRoute(parsePath('/admin'));
     await waitFor(() => expect(appLevelLoading()).toHaveLength(0));
   });
 
@@ -123,6 +129,19 @@ describe('App.svelte #0521: no Loading flash between server content and the moun
     await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'About Open Circuit SF' })).toBeTruthy());
     // After mount: the server fallback was replaced (prepareMountTarget), so
     // the document carries exactly one h1 -- the view's own.
+    expect(document.querySelectorAll('h1').length).toBe(1);
+  });
+
+  // #0717: a topic guide is a lazy chunk, so its <h1> appears only after the
+  // import resolves; App's focus move must wait for it (#0238).
+  it('client navigation to a lazy route focuses its <h1> once the chunk loads', async () => {
+    vi.spyOn(api, 'getMe').mockRejectedValue(new Error('signed out')); // sessionChecked must flip
+    currentRoute.set(parsePath('/about'));
+    render(App);
+    await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'About Open Circuit SF' })).toBeTruthy());
+    currentRoute.set(parsePath(`/guides/${TOPIC_GUIDES[0].slug}`));
+    await waitFor(() => expect(document.activeElement?.tagName).toBe('H1'));
+    expect(document.activeElement?.textContent).toBe(TOPIC_GUIDES[0].title);
     expect(document.querySelectorAll('h1').length).toBe(1);
   });
 });

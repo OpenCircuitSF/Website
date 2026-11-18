@@ -168,6 +168,18 @@ func (h *SPAHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// #0717: the SPA is split into hashed chunks under assets/. A stale tab
+	// asking for a chunk from a previous build must get a 404 -- never the
+	// HTML shell served as JavaScript -- so its import() rejects and the
+	// SPA reloads the same URL (web/src/lib/routeViews.ts). This holds even
+	// for an extensionless assets/ path. no-cache keeps the 404 from being
+	// heuristically cached past the next deploy.
+	if strings.HasPrefix(name, "assets/") {
+		w.Header().Set("Cache-Control", cacheShell)
+		http.NotFound(w, r)
+		return
+	}
+
 	// A request for a path that looks like a static asset (it has a file
 	// extension, e.g. /favicon.ico) but has no matching embedded file must NOT
 	// fall back to the HTML shell. Returning index.html for /favicon.ico made
