@@ -3,6 +3,8 @@
   // voltage, the load, and whether there’s a pull-down, and see Rds(on), the
   // heat in the MOSFET and how much of the load turns on. Model in transistors.ts.
   import { GATE_DRIVES, MOSFETS, MOSFET_LOADS, amps, mosfetSwitch, watts, type GateState, type MosfetId } from './transistors';
+  import { formatTemp } from '../temperature';
+  import { tempUnit } from '../tempUnit.svelte';
 
   let partId = $state<MosfetId>('AO3400A');
   let gate = $state<GateState>('high');
@@ -121,7 +123,7 @@
     <div><dt>Rds(on)</dt><dd>{r.state === 'on' || r.state === 'partly' ? rdsText(r.rds) : '–'}{r.rdsEstimate ? ' *' : ''}</dd></div>
     <div><dt>Load gets</dt><dd>{Math.round(share * 100)}%</dd></div>
     <div><dt>Heat in it</dt><dd class:warn={r.heat === 'hot'} class:bad={r.heat === 'too-hot'}>{watts(r.power)}</dd></div>
-    <div><dt>Temperature</dt><dd class:warn={r.heat === 'hot'} class:bad={r.heat === 'too-hot'}>{Math.round(r.tj)} °C</dd></div>
+    <div><dt>Temperature</dt><dd class:warn={r.heat === 'hot'} class:bad={r.heat === 'too-hot'}>{formatTemp(r.tj, tempUnit.value)}</dd></div>
   </dl>
 
   <div class="result {tone}" aria-live="polite">
@@ -133,7 +135,7 @@
       <p>While the board boots, the pin isn’t driven. The gate holds whatever charge it last had, so the load might be off, on, or half on and heating the MOSFET. Add a 10 kΩ pull-down.</p>
     {:else if r.state === 'on'}
       <p>
-        With {drive} V on the gate, Rds(on) is about {rdsText(r.rds)}. At {amps(r.id)} that’s {watts(r.power)} of heat, so it sits near {Math.round(r.tj)} °C with no heatsink.
+        With {drive} V on the gate, Rds(on) is about {rdsText(r.rds)}. At {amps(r.id)} that’s {watts(r.power)} of heat, so it sits near {formatTemp(r.tj, tempUnit.value)} with no heatsink.
         {#if r.heat === 'hot'}That’s hot: add copper or a heatsink.{:else if r.heat === 'too-hot'}Too hot: it needs a heatsink or a bigger part.{/if}
       </p>
     {:else}

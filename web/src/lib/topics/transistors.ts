@@ -7,6 +7,7 @@
 // one (minimum hFE, maximum Vce(sat), maximum Rds(on)). Where it doesn't,
 // the value is an estimate and is marked `estimate: true` so the demo can say
 // so. These are simplified teaching models, not SPICE.
+import { formatTemp, type TempUnit } from '../temperature';
 
 /** The ESP32-C3's high output level. */
 export const PIN_VOLTS = 3.3;
@@ -485,7 +486,7 @@ export interface PickResult {
 }
 
 /** Recommend a switch for `loadA` on a `supply`-volt rail, driven from a `drive`-volt pin. */
-export function pickSwitch(loadA: number, supply: number, drive: number, throughHole: boolean): PickResult {
+export function pickSwitch(loadA: number, supply: number, drive: number, throughHole: boolean, unit: TempUnit = 'F'): PickResult {
   // BJT: 2N2222A (PN2222A) at Ic/Ib = 10.
   const p2222 = BJTS.PN2222A;
   const ib = loadA / FORCED_GAIN;
@@ -518,7 +519,7 @@ export function pickSwitch(loadA: number, supply: number, drive: number, through
     tj = 25 + fetLoss * fet.rthJA;
     if (supply > fet.vdsMax * 0.8) fetWhy = `${supply} V is too close to the ${fet.label}’s ${fet.vdsMax} V rating.`;
     else if (loadA > pt.idLimit) fetWhy = `At ${drive} V on the gate the ${fet.label} won’t fully turn on at ${amps(loadA)}.`;
-    else if (tj > 125) fetWhy = `The ${fet.label} would reach about ${Math.round(tj)} °C without a heatsink.`;
+    else if (tj > 125) fetWhy = `The ${fet.label} would reach about ${formatTemp(tj, unit)} without a heatsink.`;
     else {
       fetOk = true;
       fetWhy = `The ${fet.label} turns fully on at ${drive} V and loses ${watts(fetLoss)} as heat.`;

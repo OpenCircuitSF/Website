@@ -5,6 +5,7 @@
 // Illustrations are drawn SVGs (assets/guides/soldering) rendered to PNG by
 // scripts/render-soldering-art.sh. Every image goes through art(), so swapping
 // a drawing for a photo later is a one-line change here.
+import { formatTemp, type TempUnit } from '../temperature';
 
 export interface Art {
   src: string;
@@ -66,7 +67,7 @@ export const ALLOYS: Alloy[] = [
     finish: 'Bright and shiny.',
     forElectronics: true,
     verdict:
-      'The easiest to learn with. It is eutectic: it goes straight from solid to liquid at 183 °C, with no mushy in-between stage, so joints set cleanly.',
+      'The easiest to learn with. It is eutectic: it goes straight from solid to liquid at {temp:183}, with no mushy in-between stage, so joints set cleanly.',
   },
   {
     id: 'sn60',
@@ -77,7 +78,7 @@ export const ALLOYS: Alloy[] = [
     finish: 'Shiny.',
     forElectronics: true,
     verdict:
-      'Nearly as easy. Between 183 and 190 °C it is a paste, so hold the joint still a moment longer while it sets.',
+      'Nearly as easy. Between {temp:183} and {temp:190} it is a paste, so hold the joint still a moment longer while it sets.',
   },
   {
     id: 'sac305',
@@ -162,7 +163,7 @@ export const JOINT_ART = {
 } satisfies Record<string, Art>;
 
 /** What happens to a through-hole joint at a dial setting, alloy and tip. */
-export function jointAt(dialC: number, alloyId: 'sn63' | 'sac305', tip: TipShape): JointOutcome {
+export function jointAt(dialC: number, alloyId: 'sn63' | 'sac305', tip: TipShape, unit: TempUnit = 'F'): JointOutcome {
   const alloy = alloyById(alloyId);
   const [melt0, melt] = alloy.meltC!;
   const [lo, hi] = alloy.ironC!;
@@ -175,7 +176,7 @@ export function jointAt(dialC: number, alloyId: 'sn63' | 'sac305', tip: TipShape
       kind: 'no-melt',
       seconds: null,
       title: 'The solder won’t melt',
-      body: `At the joint the tip only reaches about ${tipC} °C. ${alloy.name} needs well over ${melt0} °C, so the solder just sits there.`,
+      body: `At the joint the tip only reaches about ${formatTemp(tipC, unit, 10)}. ${alloy.name} needs well over ${formatTemp(melt0, unit)}, so the solder just sits there.`,
       art: JOINT_ART.bare,
     };
   }

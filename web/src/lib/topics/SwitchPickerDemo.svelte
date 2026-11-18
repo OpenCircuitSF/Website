@@ -3,6 +3,7 @@
   // switch, and see which works, which doesn’t and why, drawn as the two
   // circuits side by side. Rules in transistors.ts.
   import { PICK_CURRENTS, PICK_DRIVES, PICK_SUPPLIES, amps, pickSwitch, watts } from './transistors';
+  import { tempUnit } from '../tempUnit.svelte';
 
   let currentIdx = $state(PICK_CURRENTS.indexOf(0.05));
   let supply = $state(5);
@@ -10,7 +11,7 @@
   let throughHole = $state(true);
 
   const load = $derived(PICK_CURRENTS[currentIdx]);
-  const r = $derived(pickSwitch(load, supply, drive, throughHole));
+  const r = $derived(pickSwitch(load, supply, drive, throughHole, tempUnit.value));
   const DRIVE_LABEL: Record<number, string> = { 3.3: '3.3 V pin (ESP32)', 5: '5 V pin (Arduino Uno)' };
   // Heat bars, scaled so 2 W fills the bar.
   const bar = (w: number) => Math.max(1, Math.min(100, (w / 2) * 100));

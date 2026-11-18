@@ -11,6 +11,9 @@
   import ShareBar from '../lib/topics/ShareBar.svelte';
   import MiniStrip from '../lib/topics/MiniStrip.svelte';
   import { TOPICS, topicBySlug } from '../lib/topics/topics';
+  import TempUnitToggle from '../lib/TempUnitToggle.svelte';
+  import { renderTemps } from '../lib/temperature';
+  import { tempUnit } from '../lib/tempUnit.svelte';
 
   const topic = $derived(topicBySlug($currentRoute.params.slug ?? ''));
   const index = $derived(topic ? TOPICS.indexOf(topic) : 0);
@@ -32,8 +35,11 @@
     </TerminalPanel>
 
     <section class="demo" aria-labelledby="try-it">
-      <p class="eyebrow" id="try-it">Try it</p>
-      <p class="try">{topic.tryIt}</p>
+      <div class="try-head">
+        <p class="eyebrow" id="try-it">Try it</p>
+        {#if topic.temps}<TempUnitToggle />{/if}
+      </div>
+      <p class="try">{renderTemps(topic.tryIt, tempUnit.value)}</p>
       <div class="demo-frame">
         <Demo />
       </div>
@@ -43,15 +49,15 @@
       {#each topic.ideas as idea, i (i)}
         <article class="idea">
           <span class="num" aria-hidden="true">{i + 1}</span>
-          <h2>{idea.title}</h2>
-          <p>{idea.body}</p>
+          <h2>{renderTemps(idea.title, tempUnit.value)}</h2>
+          <p>{renderTemps(idea.body, tempUnit.value)}</p>
         </article>
       {/each}
     </section>
 
     <aside class="takeaway">
       <span class="eyebrow">Remember</span>
-      <p>{topic.takeaway}</p>
+      <p>{renderTemps(topic.takeaway, tempUnit.value)}</p>
     </aside>
 
     <section class="cta">
@@ -143,6 +149,13 @@
     border: 2px solid var(--accent-dim);
     border-radius: 8px;
     background: var(--bg-panel);
+  }
+  .try-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
   }
   .ideas {
     display: grid;

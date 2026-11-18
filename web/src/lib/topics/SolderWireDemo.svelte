@@ -4,16 +4,16 @@
   // it belongs anywhere near a circuit board. Rules live in soldering.ts.
   import GuideArt from './GuideArt.svelte';
   import { ALLOYS, DIAMETERS_MM, SPOOL_ART, alloyById, diameterAdvice, type AlloyId } from './soldering';
+  import { formatTempRange, renderTemps } from '../temperature';
+  import { tempUnit } from '../tempUnit.svelte';
 
   let alloyId = $state<AlloyId>('sn63');
   let diameter = $state<number>(0.8);
 
   const alloy = $derived(alloyById(alloyId));
   const advice = $derived(diameterAdvice(diameter));
-  const melt = $derived(
-    alloy.meltC ? (alloy.meltC[0] === alloy.meltC[1] ? `${alloy.meltC[0]} °C` : `${alloy.meltC[0]}–${alloy.meltC[1]} °C`) : '—',
-  );
-  const iron = $derived(alloy.ironC ? `${alloy.ironC[0]}–${alloy.ironC[1]} °C` : '—');
+  const melt = $derived(alloy.meltC ? formatTempRange(alloy.meltC[0], alloy.meltC[1], tempUnit.value) : '—');
+  const iron = $derived(alloy.ironC ? formatTempRange(alloy.ironC[0], alloy.ironC[1], tempUnit.value, 10) : '—');
 </script>
 
 <div class="wire">
@@ -49,7 +49,7 @@
       </dl>
       <p class="verdict">
         <strong>{alloy.forElectronics ? 'Verdict:' : 'Don’t:'}</strong>
-        {alloy.verdict}
+        {renderTemps(alloy.verdict, tempUnit.value)}
       </p>
       {#if alloy.forElectronics}
         <p class="dia {advice.fit}"><strong>{diameter.toFixed(1)} mm:</strong> {advice.text}</p>

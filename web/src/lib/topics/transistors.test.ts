@@ -18,6 +18,9 @@ import {
   pickSwitch,
   suggestBaseResistor,
   watts,
+  PICK_CURRENTS,
+  PICK_DRIVES,
+  PICK_SUPPLIES,
 } from './transistors';
 
 describe('formatting', () => {
@@ -250,5 +253,17 @@ describe('BJT or MOSFET', () => {
   it('24 V: the AO3400A is still within 80% of its rating; through-hole picks the IRLZ44N', () => {
     expect(pickSwitch(1, 24, 3.3, false).mosfet.part).toBe('AO3400A');
     expect(pickSwitch(1, 24, 3.3, true).mosfet.part).toBe('IRLZ44N');
+  });
+
+  it('pickSwitch reports an over-hot MOSFET in the chosen unit', () => {
+    let hit: [number, number, number] | null = null;
+    for (const a of PICK_CURRENTS)
+      for (const v of PICK_SUPPLIES)
+        for (const d of PICK_DRIVES)
+          if (!hit && pickSwitch(a, v, d, true).mosfet.why.includes('without a heatsink')) hit = [a, v, d];
+    expect(hit).not.toBeNull();
+    const [a, v, d] = hit!;
+    expect(pickSwitch(a, v, d, true).mosfet.why).toMatch(/about \d+ °F without/);
+    expect(pickSwitch(a, v, d, true, 'C').mosfet.why).toMatch(/about \d+ °C without/);
   });
 });

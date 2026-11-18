@@ -1,6 +1,7 @@
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { renderTemps } from '../temperature';
 import {
   ALLOYS,
   ART_BASE,
@@ -65,6 +66,21 @@ describe('iron temperature', () => {
     expect(jointAt(250, 'sn63', 'chisel').kind).toBe('cold');
     expect(jointAt(380, 'sn63', 'chisel').kind).toBe('hot');
     expect(jointAt(450, 'sn63', 'chisel').kind).toBe('scorch');
+  });
+
+  it('no-melt text follows the unit', () => {
+    const f = jointAt(150, 'sn63', 'chisel').body;
+    expect(f).toContain('about 280 °F');
+    expect(f).toContain('well over 361 °F');
+    const c = jointAt(150, 'sn63', 'chisel', 'C').body;
+    expect(c).toContain('about 135 °C');
+    expect(c).toContain('well over 183 °C');
+  });
+
+  it('every alloy verdict renders without leftover tokens', () => {
+    for (const a of ALLOYS)
+      for (const u of ['F', 'C'] as const) expect(renderTemps(a.verdict, u)).not.toContain('{temp');
+    expect(renderTemps(ALLOYS.find((a) => a.id === 'sn60')!.verdict, 'F')).toContain('Between 361 °F and 374 °F');
   });
 
   it('a too-hot joint is never described as a cold one', () => {

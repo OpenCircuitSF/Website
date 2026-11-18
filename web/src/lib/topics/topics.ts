@@ -64,6 +64,8 @@ export interface TopicBody {
   ideas: { title: string; body: string }[];
   /** The one thing to remember. */
   takeaway: string;
+  /** The guide shows a temperature, so it gets the °F/°C switch. */
+  temps?: true;
 }
 
 export type Topic = TopicMeta & TopicBody;
@@ -262,11 +264,12 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
   // Soldering guides (#0667)
   'soldering-solder-wire': {
     demo: SolderWireDemo,
+    temps: true,
     tryIt: 'Pick a solder and a thickness, and compare what each one needs from your iron.',
     ideas: [
       {
         title: 'Leaded is easiest to learn',
-        body: '63/37 solder melts at exactly 183 °C and sets cleanly, with a bright, shiny finish. Lead-free SAC305 melts at about 217–220 °C, so it needs a hotter iron, and even its good joints look a little dull. Both make good joints.',
+        body: '63/37 solder melts at exactly {temp:183} and sets cleanly, with a bright, shiny finish. Lead-free SAC305 melts at about {temp:217-220}, so it needs a hotter iron, and even its good joints look a little dull. Both make good joints.',
       },
       {
         title: 'The flux is inside the wire',
@@ -281,11 +284,12 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
   },
   'soldering-iron-temperature': {
     demo: IronTempDemo,
+    temps: true,
     tryIt: 'Start cold and turn the dial up. Then switch to lead-free, and try a fine tip at the same setting.',
     ideas: [
       {
-        title: 'Start at 330–350 °C',
-        body: 'That suits leaded solder. Lead-free wants 350–380 °C. Both are well above the melting point, because the joint pulls heat out of the tip the moment they touch.',
+        title: 'Start at {temp:330-350:10}',
+        body: 'That suits leaded solder. Lead-free wants {temp:350-380:10}. Both are well above the melting point, because the joint pulls heat out of the tip the moment they touch.',
       },
       {
         title: 'Too cold, too hot',
@@ -750,6 +754,7 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
   },
   'mosfet-switch': {
     demo: MosfetSwitchDemo,
+    temps: true,
     tryIt: 'Start with the AO3400A, then pick the IRFZ44N and see what 3.3 V on its gate does. Set the gate to 10 V. Then untick the pull-down and pick "board booting".',
     ideas: [
       {
@@ -796,6 +801,7 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
   },
   'bjt-vs-mosfet': {
     demo: SwitchPickerDemo,
+    temps: true,
     tryIt: 'Start at 50 mA, then drag the current up and watch the transistor drop out. Try 48 V, and a 5 V Arduino pin.',
     ideas: [
       {

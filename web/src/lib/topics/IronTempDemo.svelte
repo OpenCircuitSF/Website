@@ -5,29 +5,56 @@
   // than the dial says, which is why tip size matters more than the number.
   import GuideArt from './GuideArt.svelte';
   import { alloyById, jointAt, MAX_SECONDS, type TipShape } from './soldering';
+  import { TEMP_UNIT_SYMBOL, cToF, fToC, formatTemp, tempValue } from '../temperature';
+  import { tempUnit } from '../tempUnit.svelte';
+
+  // The dial steps in the visitor's unit (10 °F or 5 °C); the model stays in
+  // °C and always evaluates exactly the setting the label shows.
+  const RANGE = { F: { min: 300, max: 840, step: 10 }, C: { min: 150, max: 450, step: 5 } } as const;
 
   type Solder = 'sn63' | 'sac305';
-  let dial = $state(250);
+  let dialC = $state(250);
   let solder = $state<Solder>('sn63');
   let tip = $state<TipShape>('chisel');
 
-  const result = $derived(jointAt(dial, solder, tip));
+  const unit = $derived(tempUnit.value);
+  const range = $derived(RANGE[unit]);
+  const shown = $derived.by(() => {
+    const raw = unit === 'F' ? cToF(dialC) : dialC;
+    const v = Math.round(raw / range.step) * range.step;
+    return Math.min(range.max, Math.max(range.min, v));
+  });
+  const modelC = $derived(unit === 'F' ? fToC(shown) : shown);
+  const result = $derived(jointAt(modelC, solder, tip, unit));
   const sweet = $derived(alloyById(solder).ironC!);
-  const MIN = 150;
-  const MAX = 450;
-  const pct = (c: number) => ((c - MIN) / (MAX - MIN)) * 100;
+  const sweetLo = $derived(tempValue(sweet[0], unit, 10));
+  const sweetHi = $derived(tempValue(sweet[1], unit, 10));
+  const pct = (v: number) => ((v - range.min) / (range.max - range.min)) * 100;
   const tone = $derived(result.kind === 'good' ? 'good' : result.kind === 'slow' ? 'meh' : 'bad');
+
+  function onDial(e: Event & { currentTarget: HTMLInputElement }) {
+    const v = Number(e.currentTarget.value);
+    dialC = unit === 'F' ? fToC(v) : v;
+  }
 </script>
 
 <div class="temp">
   <div class="controls">
     <label class="dial">
-      <span>Iron set to <strong>{dial} °C</strong></span>
-      <input type="range" min={MIN} max={MAX} step="5" bind:value={dial} />
+      <span>Iron set to <strong>{shown} {TEMP_UNIT_SYMBOL[unit]}</strong></span>
+      <input
+        type="range"
+        min={range.min}
+        max={range.max}
+        step={range.step}
+        value={shown}
+        aria-valuetext={formatTemp(modelC, unit, unit === 'F' ? 10 : 1)}
+        oninput={onDial}
+      />
       <span class="band" aria-hidden="true">
-        <span class="win" style:left="{pct(sweet[0])}%" style:width="{pct(sweet[1]) - pct(sweet[0])}%"></span>
+        <span class="win" style:left="{pct(sweetLo)}%" style:width="{pct(sweetHi) - pct(sweetLo)}%"></span>
       </span>
-      <span class="scale" aria-hidden="true"><span>{MIN}</span><span>sweet spot {sweet[0]}–{sweet[1]}</span><span>{MAX}</span></span>
+      <span class="scale" aria-hidden="true"><span>{range.min}</span><span>sweet spot {sweetLo}–{sweetHi}</span><span>{range.max}</span></span>
     </label>
     <div class="group" role="radiogroup" aria-label="Solder">
       <button type="button" role="radio" aria-checked={solder === 'sn63'} class:on={solder === 'sn63'} onclick={() => (solder = 'sn63')}>Leaded 63/37</button>

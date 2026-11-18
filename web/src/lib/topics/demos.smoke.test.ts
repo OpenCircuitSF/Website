@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { TOPICS } from './topics';
+import { resetTempUnitForTest, setTempUnit } from '../tempUnit.svelte';
 import Playground from '../guide/Playground.svelte';
 import CableDemo from './CableDemo.svelte';
 import BaudDemo from './BaudDemo.svelte';
@@ -157,19 +158,38 @@ describe('guide demos', () => {
   });
 
   // Soldering guides (#0667)
-  it('solder wire: plumbing solder is flagged, 63/37 melts at 183 °C', async () => {
+  it('solder wire: 63/37 melts at 361 (°F by default, 183 in °C); plumbing solder is flagged', async () => {
+    resetTempUnitForTest();
     const r = render(SolderWireDemo);
+    expect(r.container.textContent).toContain('361 °F');
+    expect(r.container.textContent).toContain('630–660 °F');
+    setTempUnit('C');
+    await tick();
     expect(r.container.textContent).toContain('183 °C');
+    resetTempUnitForTest();
+    await tick();
     await fireEvent.click(r.getByRole('radio', { name: 'Plumbing solder' }));
     expect(r.container.textContent).toContain('Never use it on electronics');
   });
 
-  it('iron temperature: 340 °C makes a good leaded joint, too cool for lead-free', async () => {
+  it('iron temperature: 640 (°F) / 340 (°C) makes a good leaded joint, too cool for lead-free', async () => {
+    resetTempUnitForTest();
     const r = render(IronTempDemo);
-    await fireEvent.input(r.getByRole('slider'), { target: { value: '340' } });
+    expect(r.container.textContent).toContain('Iron set to 480 °F');
+    await fireEvent.input(r.getByRole('slider'), { target: { value: '640' } });
+    expect(r.container.textContent).toContain('Iron set to 640 °F');
     expect(r.getByRole('heading', { name: 'Good joint' })).toBeTruthy();
     await fireEvent.click(r.getByRole('radio', { name: 'Lead-free SAC305' }));
     expect(r.getByRole('heading', { name: 'It works, slowly' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: 'Leaded 63/37' }));
+    setTempUnit('C');
+    await tick();
+    await fireEvent.input(r.getByRole('slider'), { target: { value: '340' } });
+    expect(r.container.textContent).toContain('Iron set to 340 °C');
+    expect(r.getByRole('heading', { name: 'Good joint' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: 'Lead-free SAC305' }));
+    expect(r.getByRole('heading', { name: 'It works, slowly' })).toBeTruthy();
+    resetTempUnitForTest();
   });
 
   it('tinning: both tinned joins in about a second; bare makes a blob', async () => {
@@ -475,6 +495,17 @@ describe('guide demos', () => {
     expect(r.getByRole('heading', { name: 'Off' })).toBeTruthy();
     await fireEvent.click(r.getByRole('checkbox', { name: /pull-down/ }));
     expect(r.getByRole('heading', { name: 'Floating: it could be half on' })).toBeTruthy();
+  });
+
+  it('mosfet switch shows junction temperature in °F by default', async () => {
+    resetTempUnitForTest();
+    const r = render(MosfetSwitchDemo);
+    expect(r.container.textContent).toMatch(/Temperature\d+ °F/);
+    expect(r.container.textContent).not.toContain('°C');
+    setTempUnit('C');
+    await tick();
+    expect(r.container.textContent).toMatch(/Temperature\d+ °C/);
+    resetTempUnitForTest();
   });
 
   it('flyback: no diode breaks the transistor down; band to + clamps; reversed shorts when on', async () => {
