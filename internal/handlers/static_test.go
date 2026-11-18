@@ -287,6 +287,20 @@ func TestSPAPrecompressedAssetGzip(t *testing.T) {
 	}
 }
 
+// TestSPAPrecompressedAssetHead: a HEAD for a precompressed asset gets the
+// gzip variant's headers and no body (#0716 review).
+func TestSPAPrecompressedAssetHead(t *testing.T) {
+	req := httptest.NewRequest(http.MethodHead, "/assets/index-abc.js", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := serveSPAReq(assetFS(), req)
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("status %d, Content-Encoding %q", rec.Code, rec.Header().Get("Content-Encoding"))
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("HEAD wrote a %d-byte body", rec.Body.Len())
+	}
+}
+
 func TestSPAPrecompressedAssetIdentity(t *testing.T) {
 	rec := serveSPA(assetFS(), "/assets/index-abc.js")
 	if rec.Header().Get("Content-Encoding") != "" || rec.Body.String() != compressibleJS {

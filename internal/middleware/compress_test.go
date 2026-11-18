@@ -135,14 +135,26 @@ func TestCompressSkipsEventStreamAndFlushes(t *testing.T) {
 }
 
 func TestCompressFlushWhileCompressing(t *testing.T) {
+	var flushed []byte
 	rec := runCompress(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"a":`)
 		w.(http.Flusher).Flush()
+		// Review (#0716): what Flush handed the client must already decode
+		// to the first write, or a compressed stream is buffered in gzip.
+		flushed = append([]byte(nil), w.(interface{ Unwrap() http.ResponseWriter }).Unwrap().(*httptest.ResponseRecorder).Body.Bytes()...)
 		_, _ = io.WriteString(w, `1}`)
 	}, gzReq(http.MethodGet))
 	if !rec.Flushed {
 		t.Errorf("not flushed")
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(flushed))
+	if err != nil {
+		t.Fatalf("flushed prefix has no gzip header: %v", err)
+	}
+	prefix := make([]byte, len(`{"a":`))
+	if _, err := io.ReadFull(zr, prefix); err != nil || string(prefix) != `{"a":` {
+		t.Errorf("flushed prefix decodes to %q, %v; want the first write", prefix, err)
 	}
 	if got := gunzip(t, rec.Body.Bytes()); got != `{"a":1}` {
 		t.Errorf("body = %q", got)
