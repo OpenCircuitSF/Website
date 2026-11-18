@@ -55,6 +55,7 @@ function post(over: Partial<GuidePostRow> = {}): GuidePostRow {
     updated_at: null,
     clicks: 4,
     signups: { requested: 2, confirmed: 1 },
+    engagement: null,
     ...over,
   };
 }

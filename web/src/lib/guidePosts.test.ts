@@ -19,6 +19,7 @@ import {
   groupPosts,
   groupShares,
   outcomeSummary,
+  postResultRows,
   shareChannelLabels,
   isValidCampaign,
   linkErrorMessage,
@@ -53,6 +54,7 @@ function post(over: Partial<GuidePostRow> = {}): GuidePostRow {
     updated_at: null,
     clicks: 0,
     signups: { requested: 0, confirmed: 0 },
+    engagement: null,
     ...over,
   };
 }
@@ -324,5 +326,19 @@ describe('#0665 one draft, several channels', () => {
   it('names a share\'s channels', () => {
     expect(shareChannelLabels([post({ channel: 'bluesky' }), post({ channel: 'mastodon' })], [bluesky, mastodon])).toBe('Bluesky and Mastodon');
     expect(shareChannelLabels([post({ channel: 'bluesky' })], [bluesky])).toBe('Bluesky');
+  });
+});
+
+describe('postResultRows reactions (#0708)', () => {
+  it('carries reactions into result rows', () => {
+    const rows = postResultRows(
+      [
+        post({ id: 1, status: 'posted', posted_at: '2026-11-02T00:00:00Z', engagement: { likes: 4, reposts: 2, replies: 1, quotes: 0, captured_at: '2026-11-03T00:00:00Z' } }),
+        post({ id: 2 }),
+      ],
+      [],
+    );
+    expect(rows.find((r) => r.id === 1)?.reactions).toBe('7 reactions');
+    expect(rows.find((r) => r.id === 2)?.reactions).toBe('—');
   });
 });

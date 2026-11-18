@@ -1366,7 +1366,12 @@ export interface GuidePost {
   updated_at: string | null;
 }
 
-export type GuidePostRow = GuidePost & { clicks: number | null; signups: GuideSignupCounts | null };
+export type GuidePostRow = GuidePost & {
+  clicks: number | null;
+  signups: GuideSignupCounts | null;
+  /** A posted post's latest reaction snapshot (#0708); null until captured. */
+  engagement: (OutreachReactions & { captured_at: string }) | null;
+};
 
 /** GET /admin/guide-posts. */
 export interface GuidePostsList {

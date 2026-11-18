@@ -4,7 +4,7 @@
 
 import { asSentence, countCharacters, isOverLimit, LINK_TOKEN, toLocalInputValue } from './outreach';
 import { linkFailureReasonLabel } from './outreachLinks';
-import { formatClicks, postStatusWords } from './outreachResults';
+import { formatClicks, formatReactionTotal, postStatusWords } from './outreachResults';
 import { formatPacificDateTime } from './pacificTime';
 import type {
   GuidePost,
@@ -249,6 +249,8 @@ export interface PostResultRow {
   posted_at: string | null;
   clicks: number | null;
   signups: GuideSignupCounts | null;
+  /** "N reactions", or "—" before the tracker captures the post (#0708). */
+  reactions: string;
   short_url: string;
 }
 
@@ -271,6 +273,7 @@ export function postResultRows(
       posted_at: p.posted_at,
       clicks: p.clicks,
       signups: p.signups,
+      reactions: formatReactionTotal(p.engagement ?? null),
       short_url: p.short_url as string,
     }))
     .sort((a, b) => {

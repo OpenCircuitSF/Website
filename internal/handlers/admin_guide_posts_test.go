@@ -18,6 +18,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/guides"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
+	"github.com/brennanMKE/OpenCircuitSF/internal/outreach"
 	"github.com/brennanMKE/OpenCircuitSF/internal/shortlinks"
 	"github.com/brennanMKE/OpenCircuitSF/internal/subscribers"
 )
@@ -126,8 +127,9 @@ type testGuidePostsList struct {
 	} `json:"topics"`
 	Posts []struct {
 		guideposts.Post
-		Clicks  *int64             `json:"clicks"`
-		Signups *guideSignupCounts `json:"signups"`
+		Clicks     *int64             `json:"clicks"`
+		Signups    *guideSignupCounts `json:"signups"`
+		Engagement *engagementView    `json:"engagement"`
 	} `json:"posts"`
 	Channels []struct {
 		Name       string `json:"name"`
@@ -512,5 +514,44 @@ func TestAdminGuidePosts_SignupsFailureIsNotFatal(t *testing.T) {
 	o := e.overview(t)
 	if o.SignupsError == nil || o.Guides[0].Signups != nil {
 		t.Errorf("overview signups_error = %v", o.SignupsError)
+	}
+}
+
+// TestAdminGuidePosts_ListCarriesEngagement: a posted post carries its latest
+// reaction snapshot, and a draft carries null (#0708).
+func TestAdminGuidePosts_ListCarriesEngagement(t *testing.T) {
+	e := newGuidePostsEnv(t, true, nil)
+	posted := e.create(t, "bluesky", "c-react").Post.ID
+	draft := e.create(t, "mastodon", "c-react").Post.ID
+	e.markPosted(t, posted)
+	gs := guideposts.NewStore(e.pool, outbox.NewStore(e.pool))
+	ctx := context.Background()
+	if err := gs.RecordEngagement(ctx, posted, time.Now().Add(-time.Hour), outreach.Counts{Likes: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := gs.RecordEngagement(ctx, posted, time.Now(), outreach.Counts{Likes: 5, Reposts: 2, Replies: 1, Quotes: 3}); err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, p := range e.list(t).Posts {
+		switch p.ID {
+		case posted:
+			seen++
+			if p.Engagement == nil {
+				t.Fatal("posted post has no engagement")
+			}
+			got := p.Engagement.reactionsView
+			if got != (reactionsView{Likes: 5, Reposts: 2, Replies: 1, Quotes: 3}) || p.Engagement.CapturedAt == "" {
+				t.Errorf("engagement = %+v", *p.Engagement)
+			}
+		case draft:
+			seen++
+			if p.Engagement != nil {
+				t.Errorf("draft engagement = %+v, want null", *p.Engagement)
+			}
+		}
+	}
+	if seen != 2 {
+		t.Fatalf("saw %d of 2 posts", seen)
 	}
 }

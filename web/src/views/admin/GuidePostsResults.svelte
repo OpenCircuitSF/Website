@@ -42,7 +42,7 @@
         <thead>
           <tr>
             <th scope="col">Guide</th><th scope="col">Channel</th><th scope="col">Campaign</th><th scope="col">Status</th>
-            <th scope="col">Posted</th><th scope="col">Clicks</th><th scope="col">Signups</th><th scope="col">Short link</th>
+            <th scope="col">Posted</th><th scope="col">Clicks</th><th scope="col">Signups</th><th scope="col">Reactions</th><th scope="col">Short link</th>
           </tr>
         </thead>
         <tbody>
@@ -50,7 +50,7 @@
             <tr>
               <td>{r.guide}</td><td>{r.channel}</td><td>{r.campaign}</td><td>{r.status}</td>
               <td>{r.posted_at ? formatPacificDateTime(r.posted_at) : '—'}</td>
-              <td>{formatClicks(r.clicks)}</td><td>{formatSignups(r.signups)}</td><td><code>{r.short_url}</code></td>
+              <td>{formatClicks(r.clicks)}</td><td>{formatSignups(r.signups)}</td><td>{r.reactions}</td><td><code>{r.short_url}</code></td>
             </tr>
           {/each}
         </tbody>

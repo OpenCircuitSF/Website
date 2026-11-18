@@ -167,6 +167,9 @@ type guidePostView struct {
 	guideposts.Post
 	Clicks  *int64             `json:"clicks"`
 	Signups *guideSignupCounts `json:"signups"`
+	// Engagement is a posted post's latest reaction snapshot (#0708), or
+	// null until the tracker captures one.
+	Engagement *engagementView `json:"engagement"`
 }
 
 type guideShareView struct {
@@ -301,11 +304,43 @@ func (h *AdminGuidePostsHandler) List(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.Posts = append(resp.Posts, v)
 	}
+	if err := h.fillGuideEngagement(ctx, resp.Posts); err != nil {
+		writeGuidePostError(w, err)
+		return
+	}
 	for _, name := range []string{"bluesky", "mastodon"} {
 		ch, _ := outreach.ChannelByName(name)
 		resp.Channels = append(resp.Channels, guideChannelView{Name: ch.Name, Label: ch.Label, CharLimit: ch.CharLimit, Configured: h.configured(ch.Name)})
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// fillGuideEngagement sets each posted post's latest reaction snapshot
+// (#0708), when the store can read them.
+func (h *AdminGuidePostsHandler) fillGuideEngagement(ctx context.Context, posts []guidePostView) error {
+	reader, ok := h.store.(guidePostEngagementReader)
+	if !ok {
+		return nil
+	}
+	var ids []int64
+	for _, p := range posts {
+		if p.Status == "posted" {
+			ids = append(ids, p.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	latest, err := reader.LatestEngagement(ctx, ids)
+	if err != nil {
+		return err
+	}
+	for i := range posts {
+		if e, ok := latest[posts[i].ID]; ok {
+			posts[i].Engagement = &engagementView{reactionsView: *toReactions(e.Counts), CapturedAt: e.CapturedAt.UTC().Format(time.RFC3339)}
+		}
+	}
+	return nil
 }
 
 // Overview handles GET /admin/guide-posts-overview: one row per topic guide.
