@@ -840,7 +840,9 @@ func TestMountAndServe_GuideRoutes(t *testing.T) {
 	body := get("/workshops/programming-leds", http.StatusOK)
 	for _, needle := range []string{
 		`rel="canonical" href="` + baseURL + `/workshops/programming-leds"`,
-		`property="og:image" content="` + baseURL + `/guides/programming-leds/og.png"`,
+		// No closing quote: with hand-made art embedded (#0709) the URL
+		// carries a ?v=<hash> suffix, and without it ends at og.png.
+		`property="og:image" content="` + baseURL + `/guides/programming-leds/og.png`,
 	} {
 		if !strings.Contains(body, needle) {
 			t.Errorf("/workshops/programming-leds missing %q", needle)
