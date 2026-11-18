@@ -143,3 +143,25 @@ func TestGuideThumb_EmbeddedSetWeight(t *testing.T) {
 	}
 	t.Logf("guide thumbnails: %d images, %d bytes total, largest %d", len(slugs), total, largest)
 }
+
+// TestGuideThumb_CachedOnce pins that a thumbnail is generated once per slug
+// and then served from s.thumbs (#0710 review): the second call must return
+// the very same backing bytes, not a fresh, identical re-encode.
+func TestGuideThumb_CachedOnce(t *testing.T) {
+	site := newSite([]byte(testTemplate), testBaseURL, nil, nil, nil)
+	slug := guides.All()[0].Slug
+	first, err := site.guideThumb(slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := site.guideThumb(slug)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.data) == 0 || &first.data[0] != &second.data[0] {
+		t.Error("second guideThumb call re-generated the thumbnail instead of serving the cached one")
+	}
+	if _, ok := site.thumbs[slug]; !ok {
+		t.Errorf("thumbs cache has no entry for %q", slug)
+	}
+}
