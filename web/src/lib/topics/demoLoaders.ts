@@ -1,6 +1,7 @@
 // #0717: one lazy loader per topic guide's demo, keyed by slug. Kept out of
-// topics.ts so a guide page can fetch its demo in parallel with TopicGuide,
-// and so no demo is bundled into the entry chunk.
+// topics.ts so a guide page can fetch its demo in parallel with TopicGuide.
+// routeViews.ts imports this module lazily too, so neither the demos nor this
+// map is in the entry chunk.
 import type { Component } from 'svelte';
 
 export type DemoModule = { default: Component };

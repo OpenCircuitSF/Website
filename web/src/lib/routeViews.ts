@@ -15,9 +15,17 @@
 // rethrows unless preventDefault() is called. Every import() here runs
 // through importOnce, so the rejection always reaches loadComponent's
 // handler; a listener would run the same recovery twice for one failure.
+//
+// The demo loader map is itself a lazy chunk (topics/demoLoaders.ts). Kept in
+// the entry, its 42 import() calls and their preload-dependency lists cost
+// ~2.9 KB gzipped on every page, `/` included. A guide page fetches it in
+// parallel with TopicGuide (preloadForRoute), so the demo still does not wait
+// for the guide view. Which slugs have a demo is read from the catalog
+// (lib/guides.ts, already in the entry); routeViews.test.ts asserts the
+// demo map and the catalog name the same slugs.
 import type { Component } from 'svelte';
 import type { Route, RouteName } from './router';
-import { TOPIC_DEMOS } from './topics/demoLoaders';
+import { topicGuideBySlug } from './guides';
 import { reloadToSameURL } from './versionCheck';
 
 export type ViewModule = { default: Component<any> };
@@ -55,8 +63,36 @@ export const defaultDeps: RecoveryDeps = {
 const cache = new Map<string, Component<any>>();
 const inflight = new Map<string, Promise<ViewModule>>();
 
+// The guard is cleared only once every load started under a URL has settled
+// and none of them failed in this document. A topic guide loads its view and
+// its demo in parallel (preloadForRoute); clearing on the view's success while
+// the demo is still in flight -- or after it failed -- would let a demo chunk
+// that fails every time reload the page forever.
+const pendingByHref = new Map<string, number>();
+const failedHrefs = new Set<string>();
+
+let demoMap: Promise<Readonly<Record<string, Loader>>> | null = null;
+function demoLoaders(): Promise<Readonly<Record<string, Loader>>> {
+  demoMap ??= import('./topics/demoLoaders').then(
+    (m) => m.TOPIC_DEMOS,
+    (err) => {
+      demoMap = null;
+      throw err;
+    },
+  );
+  return demoMap;
+}
+
 function loaderFor(key: string): Loader | undefined {
-  if (key.startsWith(DEMO_PREFIX)) return TOPIC_DEMOS[key.slice(DEMO_PREFIX.length)];
+  if (key.startsWith(DEMO_PREFIX)) {
+    const slug = key.slice(DEMO_PREFIX.length);
+    return () =>
+      demoLoaders().then((m) => {
+        const load = m[slug];
+        if (!load) throw new Error(`no demo loader for ${slug}`);
+        return load();
+      });
+  }
   return LAZY_ROUTE_LOADERS[key as RouteName];
 }
 
@@ -85,13 +121,23 @@ export function loadComponent(
 ): Promise<Component<any> | null> {
   const hit = cache.get(key);
   if (hit) return Promise.resolve(hit);
+  const href = deps.href();
+  pendingByHref.set(href, (pendingByHref.get(href) ?? 0) + 1);
+  const settle = (): boolean => {
+    const left = (pendingByHref.get(href) ?? 1) - 1;
+    if (left > 0) pendingByHref.set(href, left);
+    else pendingByHref.delete(href);
+    return left <= 0;
+  };
   return importOnce(key, loader).then(
     (mod) => {
       cache.set(key, mod.default);
-      clearChunkRecovery(deps);
+      if (settle() && !failedHrefs.has(href)) clearChunkRecovery(deps, href);
       return mod.default;
     },
     () => {
+      settle();
+      failedHrefs.add(href);
       recoverFromChunkError(deps);
       return null;
     },
@@ -129,9 +175,9 @@ export function recoverFromChunkError(deps: RecoveryDeps = defaultDeps): boolean
   return true;
 }
 
-export function clearChunkRecovery(deps: RecoveryDeps = defaultDeps): void {
+export function clearChunkRecovery(deps: RecoveryDeps = defaultDeps, href = deps.href()): void {
   try {
-    deps.getSession()?.removeItem(recoveryKey(deps));
+    deps.getSession()?.removeItem(CHUNK_RELOAD_KEY_PREFIX + href);
   } catch {
     // storage unavailable: nothing to clear
   }
@@ -143,7 +189,7 @@ export function lazyKeyForRoute(route: Route): string | null {
 
 function topicDemoKey(route: Route): string | null {
   const slug = route.params?.slug;
-  return route.name === 'topic-guide' && slug && TOPIC_DEMOS[slug] ? demoKey(slug) : null;
+  return route.name === 'topic-guide' && slug && topicGuideBySlug(slug) ? demoKey(slug) : null;
 }
 
 /** Loads the route's view and (for a topic guide) its demo; never rejects. */
@@ -168,4 +214,7 @@ export function routeViewReady(route: Route): Promise<void> {
 export function __resetForTest(): void {
   cache.clear();
   inflight.clear();
+  pendingByHref.clear();
+  failedHrefs.clear();
+  demoMap = null;
 }

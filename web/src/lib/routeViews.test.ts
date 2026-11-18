@@ -66,6 +66,24 @@ describe('routeViews', () => {
     expect(store.getItem(KEY)).toBeNull();
   });
 
+  it('a view that loads while its sibling chunk fails keeps the guard, so the reload cannot loop', async () => {
+    // A topic guide's view and demo load in parallel (preloadForRoute). After
+    // the one recovery reload the guard is set; the view succeeding must not
+    // clear it while the demo is still in flight, or a demo chunk that fails
+    // every time would reload the page forever.
+    store.setItem(KEY, '1');
+    const late: Loader = () => new Promise((_, rej) => setTimeout(() => rej(new TypeError('404')), 5));
+    await Promise.all([loadComponent('view', deps, ok), loadComponent('demo', deps, late)]);
+    expect(deps.reload).not.toHaveBeenCalled();
+    expect(store.getItem(KEY)).not.toBeNull();
+    // and in the other order: the failure settles first
+    __resetForTest();
+    const slowOk: Loader = () => new Promise((r) => setTimeout(() => r({ default: Fake }), 5));
+    await Promise.all([loadComponent('view', deps, slowOk), loadComponent('demo', deps, fail)]);
+    expect(deps.reload).not.toHaveBeenCalled();
+    expect(store.getItem(KEY)).not.toBeNull();
+  });
+
   it('does not reload when sessionStorage is unavailable', async () => {
     const throwing = { ...deps, getSession: () => { throw new Error('denied'); } };
     expect(await loadComponent('x', throwing, fail)).toBeNull();
