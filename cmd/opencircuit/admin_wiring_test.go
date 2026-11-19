@@ -673,9 +673,10 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	if code, _, _ := mcpPost(http.MethodGet, bearerSecret, "", ""); code != http.StatusMethodNotAllowed {
 		t.Errorf("GET /admin/mcp with Bearer = %d, want 405 (stateless)", code)
 	}
-	// #0728: /mcp is reserved for #0729's public server; until then the
-	// admin handler must not answer there. POST and DELETE get the mux's
-	// 405 (the path matches the SPA's "GET /"), GET gets the SPA's 404.
+	// #0728, #0729: public handlers are nil here, so /mcp is unmounted;
+	// public_mcp_wiring_test.go covers the public server. What matters is
+	// that the admin handler never answers at /mcp. POST and DELETE get the
+	// mux's 405 (the path matches the SPA's "GET /"), GET gets the SPA's 404.
 	for _, c := range []struct {
 		method, body string
 		want         int

@@ -54,6 +54,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outreach"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outreachconn"
+	"github.com/brennanMKE/OpenCircuitSF/internal/publicmcp"
 	"github.com/brennanMKE/OpenCircuitSF/internal/seo"
 	"github.com/brennanMKE/OpenCircuitSF/internal/serversettings"
 	"github.com/brennanMKE/OpenCircuitSF/internal/sesnotify"
@@ -2007,6 +2008,15 @@ func mountAndServe(
 	if publicArchiveH != nil {
 		mux.Handle("GET /api/archive", http.HandlerFunc(publicArchiveH.List))
 		mux.Handle("GET /api/archive/{slug}", http.HandlerFunc(publicArchiveH.GetBySlug))
+	}
+
+	// #0729: the public, read-only MCP server at /mcp. Its own registry and its
+	// own *mcp.Server: nothing here is shared with the admin /admin/mcp above,
+	// and no Authorization header is read. Mounted only when both public
+	// stores exist (never under STORAGE=json).
+	if publicWorkshopsH != nil && publicArchiveH != nil {
+		publicReg := handlers.BuildPublicRegistry(handlers.PublicDeps{Workshops: publicWorkshopsH, Archive: publicArchiveH, About: seo.About, BaseURL: cfg.BaseURL, Version: version})
+		publicmcp.Mount(mux, publicmcp.NewHandler(publicReg, slog.Default().With("component", "public-mcp")))
 	}
 
 	// Preference center (#0031) and confirmation (#0030) — public,

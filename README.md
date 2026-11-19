@@ -74,6 +74,13 @@ go build -o opencircuit ./cmd/opencircuit
 Full production topology (Apache vhost, systemd unit, DNS, SES setup) is
 documented in `docs/deployment.md`.
 
+## MCP servers
+
+- **Public, `/mcp`**: read-only events, newsletter issues and About copy for anyone's agent, no key needed.
+- **Admin, `/admin/mcp`**: runs the site; needs an Agent API key.
+
+Both are described in [`docs/mcp.md`](docs/mcp.md).
+
 ## Documentation
 
 Start with [`docs/README.md`](docs/README.md) for the full documentation

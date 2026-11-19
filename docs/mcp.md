@@ -1,4 +1,4 @@
-# Admin MCP server (`/admin/mcp`): Claude Code and Claude Desktop
+# MCP servers: public (`/mcp`) and admin (`/admin/mcp`)
 
 `https://www.opencircuitsf.com/admin/mcp` serves the [`/api/v1`](api.md) operations
 as MCP tools. It uses Streamable HTTP, is stateless and answers in JSON. Each
@@ -13,6 +13,13 @@ pointed at `/mcp` gets no error, just the public server's much smaller tool
 list. To re-point Claude Code: `claude mcp remove ocsf`, then
 `scripts/mcp-connect.sh`. For a hand-written `.mcp.json` or
 `claude_desktop_config.json`, change the URL to `/admin/mcp`.
+
+**Which one?** This site runs two separate MCP servers. The **public** one at
+`https://www.opencircuitsf.com/mcp` is read-only, needs no key, and answers
+questions about upcoming events, newsletter issues and the group itself; it is
+for anyone's agent, and is described in the last section,
+[Public MCP server](#public-mcp-server-mcp). The **admin** one at `/admin/mcp`
+needs an Agent API key and runs the site; sections 1 to 7 below are about it.
 
 ## 1. Make a key for the agent
 
@@ -399,3 +406,47 @@ depth, use `get_outreach_results`.
   other agents' keys keep working.
 - **Never use project scope with a key.** `--scope project` writes the key
   into `.mcp.json`, which may be committed. The script refuses it.
+
+## Public MCP server (`/mcp`)
+
+`https://www.opencircuitsf.com/mcp` is a public, read-only MCP server
+(`internal/publicmcp`, `#0729`). Anyone's agent can use it with no account and
+no key. Always use the `www` host: the apex redirects, and an MCP client's POST
+may not follow a redirect.
+
+Connect Claude Code:
+
+    claude mcp add --transport http opencircuitsf https://www.opencircuitsf.com/mcp
+
+Or, in a client that takes an `mcpServers` JSON config:
+
+    {"mcpServers":{"opencircuitsf":{"type":"http","url":"https://www.opencircuitsf.com/mcp"}}}
+
+Tools (all read-only, idempotent and closed-world; each returns structured
+JSON plus a one-line text summary; times are RFC 3339 in America/Los_Angeles,
+and every event and issue carries its public `url`):
+
+- `list_upcoming_events`: upcoming events, soonest first (`limit` default 10, max 50; optional `after`, `before`).
+- `search_events`: events whose title, description or tags contain every word of `query` (cut to 200 characters); optional `from`, `to`, `include_past`, `limit`.
+- `get_event`: one event by `slug` (an event's `id` is its slug), with its plain-text description.
+- `list_newsletter_issues`: sent newsletter issues on the public archive, newest first (`limit`).
+- `get_newsletter_issue`: one issue by `slug`, its body as plain text.
+- `get_about`: the About page's copy, plus the subscribe URL, contact address, Discord and calendar links.
+
+**Auth.** None. The server ignores any `Authorization` header, never answers
+401, and serves no OAuth metadata. It is a separate server from `/admin/mcp`
+with its own registry (`internal/publicapi`); no admin operation can be added
+to it. `GET /mcp` answers 405 (the server is stateless).
+
+**Never returned:** draft, unpublished or never-published events; draft,
+unsent or withheld newsletter issues (all of these are the same "not found"
+as an unknown slug); attendees, RSVPs, subscribers, internal notes, capacity
+and costs. It returns only what the public website already shows.
+
+**Tests.** `internal/publicapi` (the registry's refusals and limits),
+`internal/publicmcp` (the SDK client against the handler),
+`internal/handlers` (`public_v1_test.go`, and the DB-backed
+`TestPublicToolsNeverReturnUnpublished`) and `cmd/opencircuit`
+(`TestMountAndServe_PublicMCPMounted`):
+
+    ISSUE=NNNN scripts/check.sh go ./internal/publicapi/... ./internal/publicmcp/... ./internal/handlers/... ./cmd/opencircuit/...

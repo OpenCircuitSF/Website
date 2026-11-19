@@ -7,8 +7,8 @@ import (
 )
 
 // TestMountServesOnlyAdminPath (#0728): Mount answers on /admin/mcp for
-// every Streamable HTTP method and never on /mcp, which #0729's public
-// server will take. Beside an SPA-style "GET /", /mcp gets the mux's 405
+// every Streamable HTTP method and never on /mcp, which is #0729's public
+// server (publicmcp.Mount). Beside an SPA-style "GET /", /mcp gets the mux's 405
 // for POST and DELETE and the SPA's 404 for GET.
 func TestMountServesOnlyAdminPath(t *testing.T) {
 	if Path != "/admin/mcp" {

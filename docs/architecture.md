@@ -110,6 +110,8 @@ Built to `web/dist/` and embedded into the Go binary at compile time via
 | `internal/apitokens` | Admin-created, scoped bearer tokens for `/api/v1/`, with optional expiry and read or write scopes | 11 |
 | `internal/api` | v1 operation registry, HTTP adapter, OpenAPI document, idempotency keys | 11 |
 | `internal/mcpserver` | The admin MCP server at `/admin/mcp`: the v1 registry's operations as tools, filtered by the key's scopes, over stateless Streamable HTTP; `mcptest` connects the SDK client for tool tests | 11 |
+| `internal/publicapi` | The public, read-only API's shared definition (`#0729`): a registry separate from `api.Registry` that refuses any scoped, non-GET or non-`/api/public/v1/` operation, plus limits and the one call path | 12 |
+| `internal/publicmcp` | The public MCP server at `/mcp` (`#0729`): the public registry as read-only tools over stateless Streamable HTTP, no auth | 12 |
 | `internal/cadence` | Event cadence rules (`event_cadence_rules`) and the pure month-coverage calculation behind `event_coverage`, all in America/Los_Angeles | 11 |
 | `internal/defaults` | Locks and writes `settings` rows that name another table's row, such as the default event type; the owning store enforces the rules through it | 6 |
 | `internal/guides` | The guide catalog (`web/src/content/guides/guides.json`, embedded): workshop and topic guide slugs, titles and hooks for routes, meta, cards and the sitemap | 6 |
