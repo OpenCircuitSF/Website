@@ -1976,6 +1976,7 @@ func mountAndServe(
 	// see serveDevMode's comment).
 	if publicWorkshopsH != nil {
 		mux.Handle("GET /api/workshops", http.HandlerFunc(publicWorkshopsH.List))
+		mux.Handle("GET /events.ics", publicWorkshopsH.CalendarHandler(cfg.BaseURL)) // #0732: upcoming events as iCalendar
 		// #0274: aggregate mailing-list counts for the home page's live CRT.
 		// Public because it exposes no PII -- two integers, no addresses, no
 		// ids. `pending` is bucketed and the response cached; see the

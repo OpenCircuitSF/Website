@@ -28,6 +28,7 @@ var compressibleTypes = map[string]bool{
 	"application/rss+xml":       true,
 	"application/manifest+json": true,
 	"image/svg+xml":             true,
+	"text/calendar":             true,
 }
 
 var gzipPool = sync.Pool{New: func() any {

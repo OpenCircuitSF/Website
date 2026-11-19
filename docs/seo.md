@@ -463,6 +463,22 @@ a stale response is dropped by a sequence number, and a failed fetch leaves
 the head as it was. JSON-LD is not refreshed: share sheets do not read it and
 crawlers fetch fresh HTML.
 
+## Events calendar feed (`#0732`)
+
+`GET /events.ics` (`internal/handlers/public_events_ics.go`, written by
+`internal/ical`) serves upcoming events as `text/calendar; charset=utf-8`
+with `Cache-Control: public, max-age=300`. It reads the same
+`ListVisible` upcoming slice as `GET /api/workshops`, re-applies the
+detail page's published check so drafts never appear, and skips events
+with no start time. Each `VEVENT` has `UID:event-<id>@<host>`, times with
+`TZID=America/Los_Angeles` plus one `VTIMEZONE`, a `URL` to the canonical
+`/events/<slug>`, and a plain-text `DESCRIPTION` (the summary, then the
+URL). A canceled event that is still listed gets `STATUS:CANCELLED`. There is
+no `DTEND` when `ends_at` is unset. The shared SPA head links it with
+`<link rel="alternate" type="text/calendar">` next to the Atom feed, and
+`middleware.Compress` gzips it. In `STORAGE=json` dev mode the route is absent,
+the same as `/api/workshops`.
+
 ## Deliberate limits
 
 These are settled decisions, not gaps waiting to be closed. A doc that

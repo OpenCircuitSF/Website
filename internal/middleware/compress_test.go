@@ -68,7 +68,7 @@ func TestAcceptsGzip(t *testing.T) {
 
 func TestCompressGzipsTextTypes(t *testing.T) {
 	body := strings.Repeat("hello compressible world\n", 200)
-	for _, ct := range []string{"text/html; charset=utf-8", "application/javascript", "application/json", "image/svg+xml", "application/xml"} {
+	for _, ct := range []string{"text/html; charset=utf-8", "application/javascript", "application/json", "image/svg+xml", "application/xml", "text/calendar; charset=utf-8"} {
 		t.Run(ct, func(t *testing.T) {
 			rec := runCompress(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", ct)

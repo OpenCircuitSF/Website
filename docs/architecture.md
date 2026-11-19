@@ -114,6 +114,7 @@ Built to `web/dist/` and embedded into the Go binary at compile time via
 | `internal/defaults` | Locks and writes `settings` rows that name another table's row, such as the default event type; the owning store enforces the rules through it | 6 |
 | `internal/guides` | The guide catalog (`web/src/content/guides/guides.json`, embedded): workshop and topic guide slugs, titles and hooks for routes, meta, cards and the sitemap | 6 |
 | `internal/seo` | Server-injected meta tags per route, sitemap, structured data | 2/7 |
+| `internal/ical` | RFC 5545 iCalendar writer for `GET /events.ics`: TEXT escaping, 75-octet folding, the Los Angeles `VTIMEZONE` (`#0732`) | 12 |
 
 ---
 
