@@ -104,7 +104,8 @@ func TestAdminRoutesRegisteredOnlyViaTable(t *testing.T) {
 			// /api/v1/ loop with one api.Mount call (which registers its
 			// patterns inside internal/api, and is
 			// TestAPIV1AndMCPMountedOnlyViaRegistry's subject, as is #0679's
-			// mcpserver.Mount), that is the only
+			// mcpserver.Mount, which registers /admin/mcp, the one /admin
+			// path behind an API key instead of requireAdmin, #0728), that is the only
 			// non-literal pattern mux.Handle/HandleFunc is called with in
 			// this file (verified by inspection), so it is not further
 			// validated here —
@@ -143,13 +144,13 @@ func TestAdminRoutesRegisteredOnlyViaTable(t *testing.T) {
 }
 
 // TestAPIV1AndMCPMountedOnlyViaRegistry (#0675, #0679) is the /api/v1 and
-// /mcp twin of the test above. Every v1 route comes from the operation
+// /admin/mcp (#0728) twin of the test above. Every v1 route comes from the operation
 // registry (handlers.BuildV1Registry), and api.NewHTTPRouter puts each behind
-// RequireAPIToken, the per-token rate limit and the scope check; /mcp is the
+// RequireAPIToken, the per-token rate limit and the scope check; /admin/mcp is the
 // same registry served by mcpserver.NewHandler, behind the same token and
 // rate-limit middleware. A route mounted on mux directly, beside either,
 // would get none of that. So: no mux.Handle/HandleFunc in main.go may have
-// a literal pattern whose path starts with /api/v1 or /mcp; api.Mount must
+// a literal pattern whose path starts with /api/v1, /admin/mcp or /mcp; api.Mount must
 // be called exactly once, with mux and a call to api.NewHTTPRouter; and
 // mcpserver.Mount exactly once, with mux and a call to
 // mcpserver.NewHandler. (Both Mounts register one "<METHOD> <path>" pattern
@@ -157,7 +158,7 @@ func TestAdminRoutesRegisteredOnlyViaTable(t *testing.T) {
 // "GET /" in Go's ServeMux.)
 func TestAPIV1AndMCPMountedOnlyViaRegistry(t *testing.T) {
 	if v := v1MountViolations(t, "main.go"); len(v) > 0 {
-		t.Fatalf("/api/v1 and /mcp must each be mounted once, as api.Mount(mux, api.NewHTTPRouter(...)) and mcpserver.Mount(mux, mcpserver.NewHandler(...)):\n%s", strings.Join(v, "\n"))
+		t.Fatalf("/api/v1 and /admin/mcp must each be mounted once, as api.Mount(mux, api.NewHTTPRouter(...)) and mcpserver.Mount(mux, mcpserver.NewHandler(...)):\n%s", strings.Join(v, "\n"))
 	}
 }
 
@@ -185,6 +186,8 @@ func TestAPIV1MountGuardCatchesRogueRoute(t *testing.T) {
 		"twice":    strings.Replace(string(src), mount, `api.Mount(mux, api.NewHTTPRouter(t.V1(), api.RouterDeps{}))`+"\n\t\t"+mount, 1),
 		"mcp rogue": strings.Replace(string(src), mcpMount,
 			`mux.Handle("POST /mcp", http.NotFoundHandler())`+"\n\t\t"+mcpMount, 1),
+		"admin mcp rogue": strings.Replace(string(src), mcpMount,
+			`mux.Handle("POST /admin/mcp", http.NotFoundHandler())`+"\n\t\t"+mcpMount, 1),
 		"mcp subpath": strings.Replace(string(src), mcpMount,
 			`mux.HandleFunc("/mcp/x", nil)`+"\n\t\t"+mcpMount, 1),
 		"mcp bypassed": strings.Replace(string(src), mcpMount, `mcpserver.Mount(mux, handlers.NotAnMCPHandler(`, 1),
@@ -202,7 +205,7 @@ func TestAPIV1MountGuardCatchesRogueRoute(t *testing.T) {
 	}
 }
 
-// v1MountViolations parses path and lists every /api/v1 or /mcp mux
+// v1MountViolations parses path and lists every /api/v1, /admin/mcp or /mcp mux
 // registration that is not the one registry mount of each.
 func v1MountViolations(t *testing.T, path string) []string {
 	t.Helper()
@@ -254,7 +257,8 @@ func v1MountViolations(t *testing.T, path string) []string {
 			if strings.HasPrefix(p, "/api/v1") {
 				violations = append(violations, fmt.Sprintf("%s: mux.%s(%q, ...) bypasses the v1 registry", pos, sel.Sel.Name, pattern))
 			}
-			if p == "/mcp" || strings.HasPrefix(p, "/mcp/") {
+			// #0729 must revisit this line: it will take /mcp for the public server.
+			if p == "/mcp" || strings.HasPrefix(p, "/mcp/") || p == "/admin/mcp" || strings.HasPrefix(p, "/admin/mcp/") {
 				violations = append(violations, fmt.Sprintf("%s: mux.%s(%q, ...) bypasses mcpserver.Mount", pos, sel.Sel.Name, pattern))
 			}
 		}

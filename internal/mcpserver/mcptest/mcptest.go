@@ -1,4 +1,4 @@
-// Package mcptest helps test the /mcp adapter (#0679) and the tools #0676,
+// Package mcptest helps test the /admin/mcp adapter (#0679) and the tools #0676,
 // #0677 and #0678 add: it connects the official SDK client to a handler over
 // a real HTTP server, so the auth, rate-limit and transport path in front of
 // the tools is the one production runs.
@@ -43,7 +43,7 @@ func (t *Transport) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 // Serve starts an httptest server for h, closed at cleanup, and returns its
-// /mcp URL.
+// MCP endpoint URL (mcpserver.Path).
 func Serve(t testing.TB, h http.Handler) string {
 	t.Helper()
 	srv := httptest.NewServer(h)

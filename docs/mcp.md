@@ -1,11 +1,18 @@
-# MCP server (`/mcp`): Claude Code and Claude Desktop
+# Admin MCP server (`/admin/mcp`): Claude Code and Claude Desktop
 
-`https://www.opencircuitsf.com/mcp` serves the [`/api/v1`](api.md) operations
+`https://www.opencircuitsf.com/admin/mcp` serves the [`/api/v1`](api.md) operations
 as MCP tools. It uses Streamable HTTP, is stateless and answers in JSON. Each
 tool is one registry operation (`internal/mcpserver`), so it has the same name
 as the operation's `operationId` in `/api/v1/openapi.json`, the same fields,
 the same validation and the same error envelope. Keys, scopes and the rate
 limit are the same too: one key has one budget across REST and MCP.
+
+**Moved in #0728 (deployed `<deploy date>`).** This server was at `/mcp`,
+which now belongs to the public read-only MCP server (#0729). A client still
+pointed at `/mcp` gets no error, just the public server's much smaller tool
+list. To re-point Claude Code: `claude mcp remove ocsf`, then
+`scripts/mcp-connect.sh`. For a hand-written `.mcp.json` or
+`claude_desktop_config.json`, change the URL to `/admin/mcp`.
 
 ## 1. Make a key for the agent
 
@@ -26,7 +33,7 @@ so a read-only key never sees `send_guide_post`.
 
 ```sh
 export OCSF_API_KEY='ocsf_…'
-claude mcp add --transport http ocsf https://www.opencircuitsf.com/mcp \
+claude mcp add --transport http ocsf https://www.opencircuitsf.com/admin/mcp \
   --header "Authorization: Bearer $OCSF_API_KEY"
 ```
 
@@ -41,7 +48,7 @@ repository. To share the server definition without the key, check in a
   "mcpServers": {
     "ocsf": {
       "type": "http",
-      "url": "https://www.opencircuitsf.com/mcp",
+      "url": "https://www.opencircuitsf.com/admin/mcp",
       "headers": { "Authorization": "Bearer ${OCSF_API_KEY}" }
     }
   }
@@ -56,7 +63,7 @@ checks it against `/api/v1/me`, and adds the server at **user** scope. Pass
 `--scope local --dir <path>` to add it for one directory instead (see
 [§7](#7-more-than-one-agent-on-one-machine)).
 
-For a local server, use `http://localhost:8080/mcp` with a key made in your
+For a local server, use `http://localhost:8080/admin/mcp` with a key made in your
 local admin console. The mailing list and these tools need Postgres; they are
 not served under `STORAGE=json`.
 
@@ -72,7 +79,7 @@ field for a bearer header. Instead, bridge it with the `mcp-remote` npm package
   "mcpServers": {
     "ocsf": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "https://www.opencircuitsf.com/mcp",
+      "args": ["-y", "mcp-remote", "https://www.opencircuitsf.com/admin/mcp",
                "--header", "Authorization:${OCSF_AUTH}"],
       "env": { "OCSF_AUTH": "Bearer ocsf_…" }
     }

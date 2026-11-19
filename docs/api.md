@@ -2,7 +2,7 @@
 
 The site has a small REST API for scripts and agents. With it they can read the
 guide catalog, create and schedule guide posts on Bluesky and Mastodon, and
-manage events. The same operations are also served as MCP tools at `/mcp`. To
+manage events. The same operations are also served as MCP tools at `/admin/mcp`. To
 connect Claude Code or Claude Desktop, see [`mcp.md`](mcp.md).
 
 Both adapters are built from one operation registry

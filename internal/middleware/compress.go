@@ -12,7 +12,7 @@ import (
 // compressibleTypes are the media types Compress gzips (#0716), compared
 // after mime.ParseMediaType strips parameters. Everything else passes
 // through untouched, deliberately: text/event-stream (the SSE stream on
-// /api/events and the MCP SDK's streams on /mcp) must reach the client
+// /api/events and the MCP SDK's streams on /admin/mcp) must reach the client
 // unbuffered, text/csv (the subscriber export) flushes as it goes, and image
 // and font types are already compressed.
 var compressibleTypes = map[string]bool{

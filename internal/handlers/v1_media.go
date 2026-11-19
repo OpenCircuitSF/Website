@@ -340,7 +340,7 @@ func (m *MediaV1) Upload(w http.ResponseWriter, r *http.Request) {
 
 // UploadHandler is Upload behind the failed-auth limiter (#0708). A ticket
 // is not an API token, so it uses BearerAuthFailureLimit, which counts any
-// bearer's 401; pass the same limiter as /api/v1/ and /mcp. A nil limiter
+// bearer's 401; pass the same limiter as /api/v1/ and /admin/mcp. A nil limiter
 // disables the limit.
 func (m *MediaV1) UploadHandler(authFail *middleware.RateLimiter) http.Handler {
 	return middleware.BearerAuthFailureLimit(authFail)(http.HandlerFunc(m.Upload))

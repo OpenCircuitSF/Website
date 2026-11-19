@@ -156,7 +156,7 @@ type apiErrorBody struct {
 }
 
 // writeAPIError writes {"error":{"code":...,"message":...}}. RequireAPIToken
-// guards only /api/v1/ (and, later, /mcp), so no other caller sees it.
+// guards only /api/v1/ and /admin/mcp, so no other caller sees it.
 func writeAPIError(w http.ResponseWriter, status int, code, message string) {
 	var b apiErrorBody
 	b.Error.Code, b.Error.Message = code, message

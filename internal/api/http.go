@@ -26,11 +26,11 @@ const MaxBodyBytes = 64 << 10
 type RouterDeps struct {
 	Resolver middleware.APITokenResolver
 	// Limiter is the per-token limiter (middleware.NewAPITokenRateLimiter).
-	// Share one instance with #0679's /mcp so a key has one budget.
+	// Share one instance with #0679's /admin/mcp so a key has one budget.
 	Limiter *middleware.RateLimiter
 	// AuthFailLimiter (#0683, middleware.NewAPIAuthFailureLimiter) counts
 	// failed authentication per client IP and refuses an IP that is over it
-	// before the token lookup. Share one instance with /mcp. nil = no limit.
+	// before the token lookup. Share one instance with /admin/mcp. nil = no limit.
 	AuthFailLimiter *middleware.RateLimiter
 	BaseURL         string // the OpenAPI servers entry
 }

@@ -1909,7 +1909,7 @@ func mountAndServe(
 	// Token-authenticated /api/v1/ (#0652, #0675): one router built from the
 	// operation registry; no session cookie is ever read there. #0674: one
 	// per-token limiter, apiTokenLimiter, gives each key one budget across
-	// every v1 route (and #0679's /mcp shares it).
+	// every v1 route (and #0679's /admin/mcp shares it).
 	if t := settingsH.APITokens(); t != nil && t.V1() != nil {
 		apiTokenLimiter := middleware.NewAPITokenRateLimiter()
 		// #0683: one per-IP failed-authentication limiter, shared by both.
@@ -1920,7 +1920,7 @@ func mountAndServe(
 			mux.Handle(handlers.MediaUploadPattern, m.UploadHandler(authFailLimiter))
 		}
 		api.Mount(mux, api.NewHTTPRouter(t.V1(), api.RouterDeps{Resolver: t.Resolver(), Limiter: apiTokenLimiter, AuthFailLimiter: authFailLimiter, BaseURL: cfg.BaseURL}))
-		// MCP (#0679): Streamable HTTP, stateless JSON, over the same
+		// MCP (#0679, at /admin/mcp since #0728): Streamable HTTP, stateless JSON, over the same
 		// registry and the same per-key limiter as /api/v1/. Bearer only;
 		// no session cookie is read.
 		mcpserver.Mount(mux, mcpserver.NewHandler(mcpserver.Deps{Registry: t.V1(), Resolver: t.Resolver(), Limiter: apiTokenLimiter, AuthFailLimiter: authFailLimiter, Logger: slog.Default().With("component", "mcp")}))

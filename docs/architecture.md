@@ -109,7 +109,7 @@ Built to `web/dist/` and embedded into the Go binary at compile time via
 | `internal/venues` | The admin-managed venues a workshop listing can point at | 6 |
 | `internal/apitokens` | Admin-created, scoped bearer tokens for `/api/v1/`, with optional expiry and read or write scopes | 11 |
 | `internal/api` | v1 operation registry, HTTP adapter, OpenAPI document, idempotency keys | 11 |
-| `internal/mcpserver` | The MCP server at `/mcp`: the v1 registry's operations as tools, filtered by the key's scopes, over stateless Streamable HTTP; `mcptest` connects the SDK client for tool tests | 11 |
+| `internal/mcpserver` | The admin MCP server at `/admin/mcp`: the v1 registry's operations as tools, filtered by the key's scopes, over stateless Streamable HTTP; `mcptest` connects the SDK client for tool tests | 11 |
 | `internal/cadence` | Event cadence rules (`event_cadence_rules`) and the pure month-coverage calculation behind `event_coverage`, all in America/Los_Angeles | 11 |
 | `internal/defaults` | Locks and writes `settings` rows that name another table's row, such as the default event type; the owning store enforces the rules through it | 6 |
 | `internal/guides` | The guide catalog (`web/src/content/guides/guides.json`, embedded): workshop and topic guide slugs, titles and hooks for routes, meta, cards and the sitemap | 6 |

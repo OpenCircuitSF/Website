@@ -5,7 +5,7 @@ description: Run Open Circuit SF site operations through the `ocsf` MCP server, 
 
 # Open Circuit SF operations
 
-The tools come from the `ocsf` MCP server (`https://www.opencircuitsf.com/mcp`).
+The tools come from the `ocsf` MCP server (`https://www.opencircuitsf.com/admin/mcp`).
 Setup, scopes, every tool, and full step-by-step versions of the workflows
 below are in `docs/mcp.md`. The REST reference is `docs/api.md`. If the tools
 aren't connected, point the user to `docs/mcp.md` §2 rather than guessing at

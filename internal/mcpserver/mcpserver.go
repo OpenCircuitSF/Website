@@ -18,8 +18,9 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 )
 
-// Path is where the MCP endpoint is mounted.
-const Path = "/mcp"
+// Path is where the admin MCP endpoint is mounted (#0728). /mcp is reserved
+// for the public server (#0729).
+const Path = "/admin/mcp"
 
 // MaxBodyBytes caps an MCP request body, the same as a v1 REST body.
 const MaxBodyBytes = api.MaxBodyBytes
@@ -63,7 +64,7 @@ type handler struct {
 	servers sync.Map // sorted scopes joined by "," -> *mcp.Server
 }
 
-// NewHandler freezes d.Registry and returns the /mcp handler. The chain,
+// NewHandler freezes d.Registry and returns the /admin/mcp handler. The chain,
 // outermost first: the per-IP failed-authentication limit (#0683),
 // middleware.RequireAPIToken (the v1 401 with
 // WWW-Authenticate), the per-token rate limit, the SDK's RequireBearerToken
@@ -111,7 +112,7 @@ func newHandler(d Deps) (*handler, http.Handler) {
 		// Apache proxies with ProxyPreserveHost On, so a production request
 		// arrives on 127.0.0.1 with Host www.opencircuitsf.com, which the
 		// SDK's DNS-rebinding guard would 403. Every request here already
-		// carries a valid bearer key, and no cookie authenticates /mcp.
+		// carries a valid bearer key, and no cookie authenticates /admin/mcp.
 		// TestMCPAcceptsProxiedHost pins this.
 		DisableLocalhostProtection: true,
 		MaxRequestBodyBytes:        MaxBodyBytes,
@@ -130,8 +131,10 @@ func newHandler(d Deps) (*handler, http.Handler) {
 }
 
 // Mount registers h for Path on mux, one pattern per method the Streamable
-// HTTP transport uses. A bare "/mcp" pattern cannot be used: it conflicts
+// HTTP transport uses. A pattern with no method cannot be used: it conflicts
 // with the SPA's "GET /" catch-all in Go's ServeMux. Call it once.
+// /admin/mcp is token-authenticated, not session-authenticated, so it is
+// mounted here and not through main.go's adminRoutes table.
 func Mount(mux *http.ServeMux, h http.Handler) {
 	for _, m := range []string{http.MethodPost, http.MethodGet, http.MethodDelete} {
 		mux.Handle(m+" "+Path, h)

@@ -1,5 +1,5 @@
 // Package mcpserver serves the /api/v1 operation registry (#0675) as an MCP
-// server at /mcp (#0679), so Claude Code and other MCP clients can call the
+// server at /admin/mcp (#0679, moved by #0728), so Claude Code and other MCP clients can call the
 // same operations the REST adapter serves.
 //
 // It is the second adapter over internal/api's Registry. Every tool is an

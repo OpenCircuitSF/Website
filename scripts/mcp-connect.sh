@@ -10,7 +10,7 @@
 # it when asked (input is hidden). Re-run any time to replace the key.
 #
 # Environment:
-#   OCSF_MCP_URL          server URL (default https://www.opencircuitsf.com/mcp)
+#   OCSF_MCP_URL          server URL (default https://www.opencircuitsf.com/admin/mcp)
 #   OCSF_API_KEY          the key itself; skips the hidden prompt
 #   OCSF_SKIP_KEY_CHECK=1 skip the live whoami check before saving the key
 #
@@ -23,7 +23,7 @@
 # Bash 3.2 compatible (AGENTS.md §8).
 set -euo pipefail
 
-URL="${OCSF_MCP_URL:-https://www.opencircuitsf.com/mcp}"
+URL="${OCSF_MCP_URL:-https://www.opencircuitsf.com/admin/mcp}"
 NAME=ocsf
 SCOPE=user
 DIR=
@@ -71,7 +71,7 @@ KEY="$(printf '%s' "$KEY" | tr -d '[:space:]')"
 # testing against a dummy key without contacting the site.
 if [ "${OCSF_SKIP_KEY_CHECK:-}" != "1" ]; then
   STATUS="$(curl -s -o /dev/null -w '%{http_code}' \
-    -H "Authorization: Bearer $KEY" "${URL%/mcp}/api/v1/me")"
+    -H "Authorization: Bearer $KEY" "${URL%/admin/mcp}/api/v1/me")"
   if [ "$STATUS" != "200" ]; then
     echo "The site rejected that key (HTTP $STATUS). Check it was copied whole and has not expired." >&2
     exit 1

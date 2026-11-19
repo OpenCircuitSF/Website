@@ -10,14 +10,14 @@ import (
 )
 
 // APIAuthFailuresPerMinute is how many failed bearer authentications (401s)
-// one client IP may make on /api/v1/ and /mcp before it is refused (#0683).
+// one client IP may make on /api/v1/ and /admin/mcp before it is refused (#0683).
 // The bucket holds a minute's allowance, so a client with a mistyped key sees
 // its 401s first and only then the 429.
 const APIAuthFailuresPerMinute = 10
 
 // NewAPIAuthFailureLimiter returns the limiter for failed API authentication:
 // APIAuthFailuresPerMinute per client IP. Build one and share it between
-// /api/v1/ and /mcp, so an IP has one failure budget across both.
+// /api/v1/ and /admin/mcp, so an IP has one failure budget across both.
 func NewAPIAuthFailureLimiter() *RateLimiter {
 	return NewRateLimiter(rate.Every(time.Minute/APIAuthFailuresPerMinute), APIAuthFailuresPerMinute)
 }

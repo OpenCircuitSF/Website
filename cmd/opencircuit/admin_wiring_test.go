@@ -31,6 +31,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 	"github.com/brennanMKE/OpenCircuitSF/internal/interests"
 	"github.com/brennanMKE/OpenCircuitSF/internal/mailing"
+	"github.com/brennanMKE/OpenCircuitSF/internal/mcpserver"
 	"github.com/brennanMKE/OpenCircuitSF/internal/middleware"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outreach"
@@ -623,16 +624,19 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	if got := v1(http.MethodGet, engURL, "", "wiring-admin-token"); got != http.StatusUnauthorized {
 		t.Errorf("GET /api/v1/engagement with admin session cookie = %d, want 401", got)
 	}
-	// #0679: /mcp on the real mux — Bearer only, stateless JSON. Raw HTTP,
-	// so this package needs no MCP client.
-	mcpURL := baseURL + "/mcp"
-	mcpPost := func(method, bearer, cookie, body string) (int, string, []byte) {
+	// #0679: /admin/mcp (#0728) on the real mux — Bearer only, stateless
+	// JSON. Raw HTTP, so this package needs no MCP client.
+	if mcpserver.Path != "/admin/mcp" {
+		t.Fatalf("mcpserver.Path = %q, want /admin/mcp (#0728)", mcpserver.Path)
+	}
+	mcpURL := baseURL + mcpserver.Path
+	mcpAt := func(url, method, bearer, cookie, body string) (int, string, []byte) {
 		t.Helper()
 		var rd io.Reader
 		if body != "" {
 			rd = strings.NewReader(body)
 		}
-		req, err := http.NewRequest(method, mcpURL, rd)
+		req, err := http.NewRequest(method, url, rd)
 		if err != nil {
 			t.Fatalf("build mcp request: %v", err)
 		}
@@ -652,18 +656,38 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 		b, _ := io.ReadAll(resp.Body)
 		return resp.StatusCode, resp.Header.Get("Content-Type"), b
 	}
+	mcpPost := func(method, bearer, cookie, body string) (int, string, []byte) {
+		t.Helper()
+		return mcpAt(mcpURL, method, bearer, cookie, body)
+	}
 	const mcpInit = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"wiring","version":"0"}}}`
-	if code, _, b := mcpPost(http.MethodPost, "", "", mcpInit); code != http.StatusUnauthorized || v1ErrCode(b) != api.CodeUnauthorized {
-		t.Errorf("POST /mcp with no key = %d %s, want 401 unauthorized", code, b)
+	if code, ct, b := mcpPost(http.MethodPost, "", "", mcpInit); code != http.StatusUnauthorized || v1ErrCode(b) != api.CodeUnauthorized || !strings.HasPrefix(ct, "application/json") || strings.Contains(strings.ToLower(string(b)), "<!doctype") {
+		t.Errorf("POST /admin/mcp with no key = %d %q %s, want 401 unauthorized as JSON, not the SPA", code, ct, b)
 	}
 	if code, _, _ := mcpPost(http.MethodPost, "", "wiring-admin-token", mcpInit); code != http.StatusUnauthorized {
-		t.Errorf("POST /mcp with admin session cookie = %d, want 401", code)
+		t.Errorf("POST /admin/mcp with admin session cookie = %d, want 401", code)
 	}
 	if code, ct, b := mcpPost(http.MethodPost, bearerSecret, "", mcpInit); code != http.StatusOK || !strings.HasPrefix(ct, "application/json") || !strings.Contains(string(b), `"wiring-version"`) {
-		t.Errorf("POST /mcp initialize with Bearer = %d %q %s, want 200 application/json naming wiring-version", code, ct, b)
+		t.Errorf("POST /admin/mcp initialize with Bearer = %d %q %s, want 200 application/json naming wiring-version", code, ct, b)
 	}
 	if code, _, _ := mcpPost(http.MethodGet, bearerSecret, "", ""); code != http.StatusMethodNotAllowed {
-		t.Errorf("GET /mcp with Bearer = %d, want 405 (stateless)", code)
+		t.Errorf("GET /admin/mcp with Bearer = %d, want 405 (stateless)", code)
+	}
+	// #0728: /mcp is reserved for #0729's public server; until then the
+	// admin handler must not answer there. POST and DELETE get the mux's
+	// 405 (the path matches the SPA's "GET /"), GET gets the SPA's 404.
+	for _, c := range []struct {
+		method, body string
+		want         int
+	}{
+		{http.MethodPost, mcpInit, http.StatusMethodNotAllowed},
+		{http.MethodGet, "", http.StatusNotFound},
+		{http.MethodDelete, "", http.StatusMethodNotAllowed},
+	} {
+		code, _, b := mcpAt(baseURL+"/mcp", c.method, bearerSecret, "", c.body)
+		if code != c.want || strings.Contains(string(b), "wiring-version") || strings.Contains(string(b), `"jsonrpc"`) {
+			t.Errorf("%s /mcp with Bearer = %d %s, want %d and never the admin MCP handler", c.method, code, b, c.want)
+		}
 	}
 	// #0674: the real mux rate-limits /api/v1 per token. A fresh token gets
 	// at least its full minute's budget, then a 429; the bucket refills
@@ -690,7 +714,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 		t.Errorf("another token after one was throttled = %d, want 200", got)
 	}
 	// #0683: failed bearer authentication is limited per client IP across
-	// /api/v1/ and /mcp, with one shared bucket. The client is this test's
+	// /api/v1/ and /admin/mcp, with one shared bucket. The client is this test's
 	// loopback peer, so X-Forwarded-For names the IP (ClientIP's rule);
 	// distinct documentation addresses keep the loopback bucket the rest of
 	// this test uses untouched.
@@ -724,7 +748,7 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 	}
 	for _, c := range []struct{ name, method, url, body, xff string }{
 		{"/api/v1", http.MethodGet, v1URL, "", "192.0.2.83"},
-		{"/mcp", http.MethodPost, mcpURL, mcpInit, "192.0.2.84"},
+		{"/admin/mcp", http.MethodPost, mcpURL, mcpInit, "192.0.2.84"},
 	} {
 		fails, limited := 0, false
 		for i := 0; i < 3*middleware.APIAuthFailuresPerMinute && !limited; i++ {
@@ -752,9 +776,9 @@ func TestMountAndServe_AdminRoutesRequireSessionAndAdmin(t *testing.T) {
 			t.Errorf("%s valid key from another IP = %d, want 200", c.name, code)
 		}
 	}
-	// One bucket: the IP throttled on /api/v1 is throttled on /mcp too.
+	// One bucket: the IP throttled on /api/v1 is throttled on /admin/mcp too.
 	if code, _ := fromIP(http.MethodPost, mcpURL, unknownKey, "192.0.2.83", mcpInit); code != http.StatusTooManyRequests {
-		t.Errorf("/mcp from the IP throttled on /api/v1 = %d, want 429", code)
+		t.Errorf("/admin/mcp from the IP throttled on /api/v1 = %d, want 429", code)
 	}
 	// #0708: the media upload route counts failed tickets (not API keys) in
 	// that same bucket, so an IP that exhausts it there is throttled on
