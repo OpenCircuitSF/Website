@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Smoke test: every guide demo mounts, and the main buttons respond.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, within } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { TOPICS } from './topics';
 import { TOPIC_DEMOS } from './demoLoaders';
@@ -61,6 +61,9 @@ import PiBookwormDemo from './PiBookwormDemo.svelte';
 import PiUndervoltageDemo from './PiUndervoltageDemo.svelte';
 import ThrottledDecoder from './ThrottledDecoder.svelte';
 import SdWriteDemo from './SdWriteDemo.svelte';
+// Raspberry Pi: Volumio and RGB panels (#0721)
+import VolumioDemo from './VolumioDemo.svelte';
+import RgbMatrixDemo from './RgbMatrixDemo.svelte';
 
 afterEach(cleanup);
 
@@ -691,5 +694,36 @@ describe('guide demos', () => {
     expect(r.getByRole('heading', { name: 'Corrupted: other files damaged' })).toBeTruthy();
     await fireEvent.click(r.getByRole('checkbox', { name: /Overlay file system/ }));
     expect(r.getByRole('heading', { name: 'Card untouched: the save was in memory' })).toBeTruthy();
+  });
+
+  // Raspberry Pi: Volumio and RGB panels (#0721)
+  it('volumio: AirPlay is free, Bluetooth needs Premium, a Zero 2W has no jack', async () => {
+    const r = render(VolumioDemo);
+    await fireEvent.click(r.getByRole('radio', { name: /iPhone or Mac/ }));
+    expect(r.container.textContent).toContain('Free in Volumio OS');
+    await fireEvent.click(r.getByRole('radio', { name: /Bluetooth/ }));
+    expect(r.container.textContent).toContain('Needs Volumio Premium');
+    await fireEvent.click(r.getByRole('radio', { name: 'Headphone jack' }));
+    expect(r.getByRole('heading', { name: 'No headphone jack on a Zero 2W' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: 'Pi 4' }));
+    expect(r.queryByRole('heading', { name: 'No headphone jack on a Zero 2W' })).toBeNull();
+    expect(r.getByRole('link', { name: /2.4 GHz/ }).getAttribute('href')).toBe('/guides/pi-wifi-2-4ghz');
+  });
+
+  it('rgb panel: sound, mapping and slowdown fixes bring the panel up, steady', async () => {
+    const r = render(RgbMatrixDemo);
+    const h = () => r.getByRole('heading', { level: 3 }).textContent ?? '';
+    expect(h()).toMatch(/won’t start/);
+    await fireEvent.click(r.getByRole('checkbox', { name: /Onboard sound off/ }));
+    expect(h()).toMatch(/mapping/);
+    await fireEvent.click(r.getByRole('radio', { name: 'adafruit-hat' }));
+    expect(h()).toMatch(/Shimmer/);
+    await fireEvent.click(within(r.getByRole('radiogroup', { name: /slowdown/ })).getByRole('radio', { name: '2' }));
+    expect(h()).toMatch(/Uneven/);
+    await fireEvent.click(r.getByRole('checkbox', { name: /Core 3/ }));
+    expect(h()).toBe('Steady');
+    expect(r.container.textContent).toContain('178 Hz');
+    expect(r.container.querySelectorAll('animate, animateTransform, animateMotion').length).toBe(0);
+    expect(r.container.querySelectorAll('.cell').length).toBe(512);
   });
 });

@@ -612,6 +612,31 @@
       ],
       "post": "Pulled the plug on a Raspberry Pi and now it won’t boot? Cut the power at any moment of a file save and see what the SD card is left with, with and without the read-only overlay file system.",
       "set": "pi"
+    },
+    {
+      "slug": "pi-volumio-streaming",
+      "title": "A streaming speaker with Volumio",
+      "hook": "Plug a Pi into any speaker and anyone on the WiFi can play to it: from Spotify, an iPhone over AirPlay, or internet radio. No app accounts to share.",
+      "minutes": 4,
+      "tags": [
+        "Raspberry Pi",
+        "audio"
+      ],
+      "post": "Plug a Pi into any speaker and anyone on the WiFi can play to it: Spotify, AirPlay or internet radio. See which Volumio features are free and how to wire it up.",
+      "set": "pi"
+    },
+    {
+      "slug": "pi-rgb-matrix-flicker",
+      "title": "RGB LED panels on a Pi 4: fixing flicker and garbage",
+      "hook": "Garbage pixels, shimmer or flicker on a HUB75 panel usually comes down to five settings. Flip them one at a time and watch the panel settle.",
+      "minutes": 4,
+      "tags": [
+        "Raspberry Pi",
+        "LEDs",
+        "debugging"
+      ],
+      "post": "Garbage pixels or flicker on an RGB LED panel driven by a Pi 4? Flip the five settings that fix it, one at a time, and watch the panel settle.",
+      "set": "pi"
     }
   ]
 }

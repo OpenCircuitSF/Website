@@ -56,4 +56,7 @@ export const TOPIC_DEMOS: Readonly<Record<string, () => Promise<DemoModule>>> = 
   // Raspberry Pi: power and SD cards (#0720)
   'pi-undervoltage': () => import('./PiUndervoltageDemo.svelte'),
   'pi-sd-card-corruption': () => import('./SdWriteDemo.svelte'),
+  // Raspberry Pi: Volumio and RGB panels (#0721)
+  'pi-volumio-streaming': () => import('./VolumioDemo.svelte'),
+  'pi-rgb-matrix-flicker': () => import('./RgbMatrixDemo.svelte'),
 };

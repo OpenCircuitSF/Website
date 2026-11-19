@@ -899,6 +899,43 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     ],
     takeaway: 'Shut down before you unplug. If it will be unplugged anyway, turn on the overlay file system.',
   },
+  // Raspberry Pi: Volumio and RGB panels (#0721)
+  'pi-volumio-streaming': {
+    tryIt: 'Pick how people will play: a phone’s Spotify app, an iPhone, internet radio. See which Volumio feature handles it, whether it’s free, and the path the sound takes to the speakers.',
+    ideas: [
+      {
+        title: 'A music player set up from a web page',
+        body: 'Volumio is a whole operating system image for music. Flash it with Raspberry Pi Imager, boot, and open volumio.local in a browser on the same network. Everything after that, from the audio output to the plugins, is set in that page. If the Pi isn’t on your network yet, it starts its own WiFi hotspot so you can join it and finish setup. At our space one runs the front speakers on a Pi Zero 2W.',
+      },
+      {
+        title: 'Everyone plays from their own app',
+        body: 'The free version takes AirPlay from iPhones and Macs, UPnP/DLNA from laptop and Android apps, its own internet radio, and files on a USB stick or network share. Spotify Connect comes from a free plugin: each person casts from their own Spotify app, which needs their own Spotify Premium account, so nobody shares a login. Tidal Connect, Qobuz Connect and Bluetooth input need Volumio Premium, a paid subscription. Volumio moves features between plans, so check the current plans.',
+      },
+      {
+        title: 'Make it easy to share',
+        body: 'Give the player a clear name such as “Front Speakers” so people pick the right one, and set a maximum volume in its settings. A Zero 2W only sees 2.4 GHz WiFi, wants a proper power supply, and has no headphone jack: add a DAC HAT or a USB DAC, or run HDMI to a receiver, then an amplifier unless the speakers are powered. Volumio keeps its system read-only and writes only settings to the card, but shut it down from its menu when you can.',
+      },
+    ],
+    takeaway: 'Volumio turns a Pi into a speaker anyone on the WiFi can play to. AirPlay, UPnP, radio and Spotify are free; Tidal, Qobuz and Bluetooth need Premium.',
+  },
+  'pi-rgb-matrix-flicker': {
+    tryIt: 'The panel starts as a fresh install leaves it. Turn the sound off, match the mapping to the HAT and raise the slowdown, then reserve a core and trade PWM bits for refresh.',
+    ideas: [
+      {
+        title: 'The Pi 4 is too fast for the panel',
+        body: 'A HUB75 panel is fed by clocking pixels in over GPIO, and a Pi 4 can toggle the pins faster than the panel can take them. You get garbage or shimmering pixels. --led-slowdown-gpio adds wait states: try 2, then 3 or 4. --led-gpio-mapping must match the adapter: adafruit-hat for the Adafruit Bonnet or HAT, adafruit-hat-pwm only if you have soldered a wire between GPIO 4 and GPIO 18.',
+      },
+      {
+        title: 'Sound and Linux get in the way',
+        body: 'The onboard sound uses the same PWM hardware, and the library refuses to start while its driver (snd_bcm2835) is loaded. Put dtparam=audio=off in /boot/firmware/config.txt (or blacklist snd_bcm2835) and reboot. Linux also moves other work onto the core refreshing the panel; reserving core 3 with isolcpus in /boot/firmware/cmdline.txt (on the same line as everything else) steadies it. Run the program with sudo; the library drops root once it has set up the pins.',
+      },
+      {
+        title: 'Refresh against color, and a separate supply',
+        body: 'Fewer PWM bits mean fewer brightness levels per color but a higher refresh rate; the library’s --led-show-refresh prints the real number. Chaining panels lowers it. Power the panels from their own 5 V supply sized for every LED at full white, never from the Pi’s 5 V pin, and join the grounds.',
+      },
+    ],
+    takeaway: 'Sound off, the right mapping, a slowdown of 2 or more, a reserved core, and its own 5 V supply. Then trade PWM bits for refresh.',
+  },
 };
 
 export const TOPICS: Topic[] = TOPIC_GUIDES.map((m) => {
