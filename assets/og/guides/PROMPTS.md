@@ -483,3 +483,27 @@ Use the shared STYLE block. A tiny bare circuit board sits on top of a large boo
 - **Output:** `internal/seo/cardassets/guides/pi-rgb-matrix-flicker.png`, 1200×630 PNG
 
 Use the shared STYLE block. A coarse grid of large square LEDs seen face-on, only about sixteen across and eight down: the left half is a scramble of random coloured pixels, and across the middle it settles into a few clean, broad vertical colour bars on the right. Five small toggle switches along the bottom edge, all flipped to on. Plain near-black ground, no tools or other props. Crisp and still, no motion blur.
+
+### pi-wifi-dropouts
+
+- **Title:** Why your Raspberry Pi keeps dropping off the WiFi
+- **Hook:** It joins the network, then an hour later SSH hangs and ping times out. Usually it’s WiFi power saving, a changed address, a weak signal or the power supply.
+- **Output:** `internal/seo/cardassets/guides/pi-wifi-dropouts.png`, 1200×630 PNG
+
+Use the shared STYLE block. A home router on the left and a small unbranded single-board computer on the right, joined by a row of plain WiFi arcs (not a WiFi logo) that fade and break in the middle and then pick up again. A small crescent moon floats just above the board. Lots of dark space; simple flat line art.
+
+### pi-run-on-boot
+
+- **Title:** Start a program when your Pi boots, and restart it when it crashes
+- **Hook:** A systemd service starts your program at boot, waits for the network and brings it back after a crash. Turn off one line at a time and see what breaks.
+- **Output:** `internal/seo/cardassets/guides/pi-run-on-boot.png`, 1200×630 PNG
+
+Use the shared STYLE block. A small unbranded single-board computer in the centre, with one thick circular arrow looping around it in glowing green line art, and a plain power symbol (circle with a vertical bar) where the loop starts. Isometric, uncluttered, no screen and no text.
+
+### pi-backup-sd-card
+
+- **Title:** Back up your Pi’s SD card before you change anything
+- **Hook:** One dd command copies the whole card to a file. Pick the wrong disk, or swap if and of, and it erases a disk instead. Build the command and see the difference.
+- **Output:** `internal/seo/cardassets/guides/pi-backup-sd-card.png`, 1200×630 PNG
+
+Use the shared STYLE block. Two microSD cards side by side in macro photography: the left one solid, the right one a translucent glowing green copy of it, with a single arrow from left to right between them. Shallow depth of field, plain near-black ground, no printed markings.
