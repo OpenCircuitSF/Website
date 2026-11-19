@@ -72,6 +72,10 @@ import PiGpioHeader from './PiGpioHeader.svelte';
 import PiZeroPortsDemo from './PiZeroPortsDemo.svelte';
 import Pi4HdmiDemo from './Pi4HdmiDemo.svelte';
 import PiHeatDemo from './PiHeatDemo.svelte';
+// Raspberry Pi batch 2: WiFi dropouts, run on boot, SD backup (#0725)
+import PiWifiDoctor from './PiWifiDoctor.svelte';
+import PiServiceDemo from './PiServiceDemo.svelte';
+import PiBackupDemo from './PiBackupDemo.svelte';
 
 afterEach(cleanup);
 
@@ -814,5 +818,49 @@ describe('guide demos', () => {
     expect(r.container.textContent).toContain('87 °C');
     expect(r.container.querySelectorAll('animate, animateTransform, animateMotion').length).toBe(0);
     resetTempUnitForTest();
+  });
+
+  // Raspberry Pi batch 2: WiFi dropouts, run on boot, SD backup (#0725)
+  it('pi wifi doctor: clean power and power save on ends at turning it off', async () => {
+    const r = render(PiWifiDoctor);
+    expect(r.getByRole('heading', { name: /get_throttled/ })).toBeTruthy();
+    await fireEvent.click(r.getByRole('button', { name: 'No' }));
+    await fireEvent.click(r.getByRole('button', { name: 'Yes' }));
+    await tick();
+    const h = r.getByRole('heading', { name: 'Turn off WiFi power saving' });
+    expect(document.activeElement).toBe(h);
+    expect(r.container.textContent).toContain('802-11-wireless.powersave 2');
+    expect(r.container.textContent).toContain('Likely cause');
+    await fireEvent.click(r.getByRole('button', { name: 'Start over' }));
+    expect(r.getByRole('heading', { name: /get_throttled/ })).toBeTruthy();
+  });
+
+  it('pi service: no Restart stays dead after a crash; no [Install] never starts at boot', async () => {
+    const r = render(PiServiceDemo);
+    expect(r.getByRole('heading', { name: 'Running' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: 'The program crashes' }));
+    expect(r.getByRole('heading', { name: 'Crashed, back 5 s later' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('checkbox', { name: /Restart=on-failure/ }));
+    expect(r.getByRole('heading', { name: 'Crashed and stays dead' })).toBeTruthy();
+    expect(r.container.textContent).toContain('# Restart=on-failure');
+    await fireEvent.click(r.getByRole('radio', { name: 'The Pi boots' }));
+    await fireEvent.click(r.getByRole('checkbox', { name: /\[Install\]/ }));
+    expect(r.getByRole('heading', { name: 'Doesn’t start at boot' })).toBeTruthy();
+  });
+
+  it('pi backup: card to file shows dd with a warning; the Mac’s own disk is refused', async () => {
+    const r = render(PiBackupDemo);
+    const codes = () => [...r.container.querySelectorAll('pre code')].map((c) => c.textContent ?? '');
+    expect(r.getByRole('heading', { name: 'Backup: card → pi.img' })).toBeTruthy();
+    expect(codes().some((c) => c.includes('sudo dd if=/dev/rdisk4 of=pi.img'))).toBe(true);
+    expect(r.container.querySelector('.warning strong')?.textContent).toBe('Check the disk number twice.');
+    const dest = () => within(r.getByRole('radiogroup', { name: 'Destination (of=)' }));
+    await fireEvent.click(dest().getByRole('radio', { name: /disk0/ }));
+    expect(r.getByRole('heading', { name: 'Stop: that’s your computer’s own disk' })).toBeTruthy();
+    expect(r.container.querySelectorAll('pre').length).toBe(0);
+    expect(r.container.textContent).not.toContain('of=/dev/rdisk0');
+    await fireEvent.click(r.getByRole('radio', { name: 'Linux' }));
+    await fireEvent.click(dest().getByRole('radio', { name: /pi\.img/ }));
+    expect(codes().some((c) => c.includes('if=/dev/sdb of=pi.img'))).toBe(true);
   });
 });

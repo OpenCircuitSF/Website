@@ -67,4 +67,8 @@ export const TOPIC_DEMOS: Readonly<Record<string, () => Promise<DemoModule>>> = 
   'pi-zero-usb-ports': () => import('./PiZeroPortsDemo.svelte'),
   'pi4-micro-hdmi': () => import('./Pi4HdmiDemo.svelte'),
   'pi4-heat-throttling': () => import('./PiHeatDemo.svelte'),
+  // Raspberry Pi batch 2: WiFi dropouts, run on boot, SD backup (#0725)
+  'pi-wifi-dropouts': () => import('./PiWifiDoctor.svelte'),
+  'pi-run-on-boot': () => import('./PiServiceDemo.svelte'),
+  'pi-backup-sd-card': () => import('./PiBackupDemo.svelte'),
 };

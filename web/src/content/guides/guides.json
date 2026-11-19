@@ -709,6 +709,43 @@
       ],
       "post": "Raspberry Pi 4 slowing down under load? Once it gets too hot it throttles itself. Pick a load and the cooling and watch ten minutes of temperature climb and the clock speed drop.",
       "set": "pi"
+    },
+    {
+      "slug": "pi-wifi-dropouts",
+      "title": "Why your Raspberry Pi keeps dropping off the WiFi",
+      "hook": "It joins the network, then an hour later SSH hangs and ping times out. Usually it’s WiFi power saving, a changed address, a weak signal or the power supply.",
+      "minutes": 4,
+      "tags": [
+        "Raspberry Pi",
+        "WiFi",
+        "debugging"
+      ],
+      "post": "Your Raspberry Pi joins the WiFi, then drops off an hour later? Answer a few questions and find the likely cause: power saving, a new address, a weak signal or a sagging supply.",
+      "set": "pi"
+    },
+    {
+      "slug": "pi-run-on-boot",
+      "title": "Start a program when your Pi boots, and restart it when it crashes",
+      "hook": "A systemd service starts your program at boot, waits for the network and brings it back after a crash. Turn off one line at a time and see what breaks.",
+      "minutes": 5,
+      "tags": [
+        "Raspberry Pi",
+        "systemd"
+      ],
+      "post": "Want your Raspberry Pi project to start at boot and come back after a crash? Build a systemd service file one line at a time, then turn a line off and see what breaks.",
+      "set": "pi"
+    },
+    {
+      "slug": "pi-backup-sd-card",
+      "title": "Back up your Pi’s SD card before you change anything",
+      "hook": "One dd command copies the whole card to a file. Pick the wrong disk, or swap if and of, and it erases a disk instead. Build the command and see the difference.",
+      "minutes": 4,
+      "tags": [
+        "Raspberry Pi",
+        "SD cards"
+      ],
+      "post": "Before you change a working Raspberry Pi, copy its whole SD card to a file. Build the dd command by picking the source and the destination, and see what happens if you pick the wrong disk.",
+      "set": "pi"
     }
   ]
 }

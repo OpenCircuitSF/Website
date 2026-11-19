@@ -1047,6 +1047,61 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     ],
     takeaway: 'Under a long load, give a Pi 4 a heatsink and moving air; never a bare board in a sealed box.',
   },
+  // Raspberry Pi batch 2: WiFi dropouts, run on boot, SD backup (#0725)
+  'pi-wifi-dropouts': {
+    tryIt: 'Answer the questions in order. Each one is a command or a look at the router, and each Yes ends at the likely cause and its fix.',
+    ideas: [
+      {
+        title: 'Rule out the power first',
+        body: 'WiFi is one of the first things to fail when the supply sags. vcgencmd get_throttled prints 0x0 when the power has been fine since boot; anything with an under-voltage flag means fix the supply before anything else.',
+      },
+      {
+        title: 'Power saving makes a quiet Pi go deaf',
+        body: 'The WiFi chip can doze between packets. A Pi that mostly waits for SSH or a web page can stop answering. Check with iw wlan0 get power_save; turn it off for the connection with nmcli connection modify (connection name) 802-11-wireless.powersave 2. The value 2 means off, and it survives a reboot.',
+      },
+      {
+        title: 'Sometimes it never left',
+        body: 'The router may give it a new address, so the old one stops answering. Use the name, mypi.local, or reserve its address in the router. Weak signal (the Zero 2W’s small antenna, a metal case) and routers that move devices between 2.4 and 5 GHz under one network name cause real drops; a separate 2.4 GHz name fixes the second.',
+      },
+    ],
+    takeaway: 'Check get_throttled, then power saving, then the address. Most dropouts are one of those three.',
+  },
+  'pi-run-on-boot': {
+    tryIt: 'All seven lines start on and the service works. Turn one off, pick whether the Pi boots or the program crashes, and see what systemd does.',
+    ideas: [
+      {
+        title: 'A service file is a short recipe',
+        body: 'It lives in /etc/systemd/system/, named after the service. [Unit] says what it is and what to wait for; [Service] says what to run, where, as whom, and what to do when it stops; [Install] says when to start it. Then sudo systemctl daemon-reload and sudo systemctl enable --now (name).',
+      },
+      {
+        title: 'The lines that matter',
+        body: 'Full paths in ExecStart, because a service doesn’t start in your home folder. After= and Wants=network-online.target together, so it waits for the network. Restart=on-failure with a RestartSec of a few seconds, because Restart is off by default. WantedBy=multi-user.target, or enable has nothing to hook into.',
+      },
+      {
+        title: 'Why not rc.local or cron @reboot',
+        body: 'Both start a program once and forget it: no restart after a crash, no waiting for the network, and output that goes nowhere. A service gets all three, and systemctl status and journalctl -u (name) -f show what it’s doing.',
+      },
+    ],
+    takeaway: 'Full paths, wait for the network, Restart=on-failure, and an [Install] section. Then enable it.',
+  },
+  'pi-backup-sd-card': {
+    tryIt: 'Pick your computer, then the source and the destination. Copy the card to pi.img and see the command; pick your own disk as the destination and see why dd won’t be shown.',
+    ideas: [
+      {
+        title: 'Copy the whole card, not just your files',
+        body: 'An image of the card brings back the system exactly as it was: settings, installed programs, your project. Take one when it works, before an upgrade or a big change.',
+      },
+      {
+        title: 'dd copies whatever you point it at',
+        body: 'Find the card by its size with diskutil list on a Mac or lsblk on Linux, unmount it, then dd if= the card of= pi.img. if is the input, of is the output. Swap them, or pick the wrong disk number, and dd overwrites that disk without asking. On a Mac, the rdisk name reads much faster than disk. Compress the image with gzip afterwards: it is as big as the card.',
+      },
+      {
+        title: 'Other ways in and out',
+        body: 'On the Pi’s desktop, SD Card Copier copies the running card to a second card in a USB reader. To restore, Raspberry Pi Imager’s Use custom writes pi.img or pi.img.gz to a new card, and lists only removable drives.',
+      },
+    ],
+    takeaway: 'Image the card before you change anything. Check the disk number twice, and restore with Imager’s Use custom.',
+  },
 };
 
 export const TOPICS: Topic[] = TOPIC_GUIDES.map((m) => {
