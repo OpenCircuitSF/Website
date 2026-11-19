@@ -57,6 +57,10 @@ import LedResistorDemo from './LedResistorDemo.svelte';
 import PiImagerDemo from './PiImagerDemo.svelte';
 import PiWifiBandDemo from './PiWifiBandDemo.svelte';
 import PiBookwormDemo from './PiBookwormDemo.svelte';
+// Raspberry Pi: power and SD cards (#0720)
+import PiUndervoltageDemo from './PiUndervoltageDemo.svelte';
+import ThrottledDecoder from './ThrottledDecoder.svelte';
+import SdWriteDemo from './SdWriteDemo.svelte';
 
 afterEach(cleanup);
 
@@ -652,5 +656,40 @@ describe('guide demos', () => {
     expect(r.container.textContent).toContain('python3 -m venv');
     await fireEvent.click(r.getByRole('radio', { name: /config\.txt/ }));
     expect(r.container.textContent).toContain('/boot/firmware/config.txt');
+  });
+
+  // Raspberry Pi: power and SD cards (#0720)
+  it('pi undervoltage: a thin cable drops a busy Pi 4 under; the official supply fixes it', async () => {
+    const r = render(PiUndervoltageDemo);
+    expect(r.getByRole('heading', { name: 'Close to the line' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: /Thin long cable/ }));
+    expect(r.getByRole('heading', { name: 'Under-voltage: the Pi slows down' })).toBeTruthy();
+    expect(r.container.textContent).toContain('throttled=0x50005');
+    await fireEvent.click(r.getByRole('radio', { name: 'Official Raspberry Pi supply' }));
+    expect(r.getByRole('heading', { name: 'Plenty of margin' })).toBeTruthy();
+    expect((r.getByRole('radio', { name: /Thin long cable/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('throttled decoder: 0x50005, bad input, and the 0x0 preset', async () => {
+    const r = render(ThrottledDecoder);
+    expect(r.getByRole('heading', { name: 'Power problem now' })).toBeTruthy();
+    expect(r.container.textContent).toContain('Throttling has happened since boot');
+    await fireEvent.input(r.getByRole('textbox', { name: 'get_throttled value' }), { target: { value: 'zebra' } });
+    expect(r.getByRole('alert').textContent).toContain('isn’t a hex number');
+    await fireEvent.click(r.getByRole('button', { name: '0x0' }));
+    expect(r.getByRole('heading', { name: 'All clear' })).toBeTruthy();
+  });
+
+  it('sd card: a cut during the flash rewrite corrupts; the overlay protects', async () => {
+    const r = render(SdWriteDemo);
+    const slider = r.getByRole('slider', { name: /When the power is cut/ });
+    await fireEvent.input(slider, { target: { value: '20' } });
+    expect(r.getByRole('heading', { name: 'Change lost, card fine' })).toBeTruthy();
+    await fireEvent.input(slider, { target: { value: '65' } });
+    expect(r.getByRole('heading', { name: 'Saved: the journal finishes it at boot' })).toBeTruthy();
+    await fireEvent.input(slider, { target: { value: '90' } });
+    expect(r.getByRole('heading', { name: 'Corrupted: other files damaged' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('checkbox', { name: /Overlay file system/ }));
+    expect(r.getByRole('heading', { name: 'Card untouched: the save was in memory' })).toBeTruthy();
   });
 });

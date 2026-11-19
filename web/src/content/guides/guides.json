@@ -588,6 +588,30 @@
       ],
       "post": "Following an older Raspberry Pi tutorial? On Bookworm, config.txt moved, wpa_supplicant.conf is ignored and pip install refuses. See each old step next to the one that works now.",
       "set": "pi"
+    },
+    {
+      "slug": "pi-undervoltage",
+      "title": "Why a Raspberry Pi slows down: under-voltage",
+      "hook": "Random reboots, SD card errors, WiFi dropping out. Often it isn’t the Pi: the supply or the cable can’t hold 5 V when it gets busy.",
+      "minutes": 4,
+      "tags": [
+        "Raspberry Pi",
+        "power"
+      ],
+      "post": "Random reboots, SD card errors, WiFi dropping out? Your Raspberry Pi may be short of volts. Pick a supply, a cable and a load and watch the voltage sag, then decode vcgencmd get_throttled.",
+      "set": "pi"
+    },
+    {
+      "slug": "pi-sd-card-corruption",
+      "title": "Why pulling the plug corrupts a Pi’s SD card",
+      "hook": "Linux is always writing something. Cut the power at the wrong moment and the card can come back damaged. Shut down first, or make the card read-only.",
+      "minutes": 4,
+      "tags": [
+        "Raspberry Pi",
+        "SD cards"
+      ],
+      "post": "Pulled the plug on a Raspberry Pi and now it won’t boot? Cut the power at any moment of a file save and see what the SD card is left with, with and without the read-only overlay file system.",
+      "set": "pi"
     }
   ]
 }

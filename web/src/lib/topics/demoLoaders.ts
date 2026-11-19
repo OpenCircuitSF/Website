@@ -53,4 +53,7 @@ export const TOPIC_DEMOS: Readonly<Record<string, () => Promise<DemoModule>>> = 
   'pi-imager-setup': () => import('./PiImagerDemo.svelte'),
   'pi-wifi-2-4ghz': () => import('./PiWifiBandDemo.svelte'),
   'pi-bookworm-changes': () => import('./PiBookwormDemo.svelte'),
+  // Raspberry Pi: power and SD cards (#0720)
+  'pi-undervoltage': () => import('./PiUndervoltageDemo.svelte'),
+  'pi-sd-card-corruption': () => import('./SdWriteDemo.svelte'),
 };
