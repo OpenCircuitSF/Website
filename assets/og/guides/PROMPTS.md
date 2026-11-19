@@ -56,7 +56,8 @@ Use this before every prompt:
 > captions, and no legible screen text. Where a screen or display appears, its
 > content is abstract shapes or out of focus. No logos or brand marks of any
 > kind, including Espressif, Arduino, PlatformIO, USB-IF, Bluetooth and WiFi
-> logos, and none on parts, tools or packaging. No real people and no faces; a
+> logos, the Raspberry Pi raspberry, and Volumio, Spotify and Apple marks, and
+> none on parts, tools, devices or packaging. No real people and no faces; a
 > fingertip or hand is fine. Not a product photo of any real, identifiable
 > product or its packaging; boards and tools are generic and unbranded.
 
@@ -433,7 +434,7 @@ Use the shared STYLE block. Top-down view of a single circuit trace that forks i
 - **Hook:** Raspberry Pi Imager can set the WiFi, your user and SSH before the Pi ever boots. Switch each one off and see how the Pi fails without it.
 - **Output:** `internal/seo/cardassets/guides/pi-imager-setup.png`, 1200×630 PNG
 
-Use the shared STYLE block. A microSD card on the left, with a short checklist of five ticked boxes floating above it, slides toward a small bare Raspberry Pi board on the right. No keyboard or monitor anywhere; a faint WiFi arc rises from the Pi. Calm, orderly composition.
+Use the shared STYLE block. A microSD card on the left, with a short checklist of five ticked boxes floating above it, slides toward a small bare, unbranded single-board computer on the right. No keyboard or monitor anywhere; a few faint concentric radio arcs rise from the board (plain arcs, not a WiFi logo). Calm, orderly composition.
 
 ### pi-wifi-2-4ghz
 
@@ -441,7 +442,7 @@ Use the shared STYLE block. A microSD card on the left, with a short checklist o
 - **Hook:** You flashed the card, typed the WiFi password, and the Pi never appears. If your network is 5 GHz only, a Zero 2W can’t even see it.
 - **Output:** `internal/seo/cardassets/guides/pi-wifi-2-4ghz.png`, 1200×630 PNG
 
-Use the shared STYLE block. A home router on the left sends out two sets of rings, one wide and one tight. A tiny Raspberry Pi Zero board on the right sits inside the reach of only the wide rings, while the tight rings stop short of it. No text or numbers.
+Use the shared STYLE block. A home router on the left sends out two sets of rings, one wide and one tight. A tiny, unbranded stick-shaped single-board computer on the right sits inside the reach of only the wide rings, while the tight rings stop short of it. No text or numbers.
 
 ### pi-bookworm-changes
 
@@ -449,7 +450,7 @@ Use the shared STYLE block. A home router on the left sends out two sets of ring
 - **Hook:** config.txt moved, wpa_supplicant.conf is ignored and pip install refuses. Pick a step from an old tutorial and see what it does now, and what to type instead.
 - **Output:** `internal/seo/cardassets/guides/pi-bookworm-changes.png`, 1200×630 PNG
 
-Use the shared STYLE block. An open, dog-eared paper tutorial on the left, one of its steps struck through; an arrow leads to a clean terminal window on the right. A small bookworm peeks out of the old paper. Light, friendly mood.
+Use the shared STYLE block. An open, dog-eared paper tutorial on the left, its steps drawn as plain grey bars (no readable writing), one bar struck through; an arrow leads to a clean terminal window on the right showing only a `>` chevron, a few abstract bars and a block cursor. A small bookworm peeks out of the old paper. Light, friendly mood.
 
 ### pi-undervoltage
 
@@ -457,7 +458,7 @@ Use the shared STYLE block. An open, dog-eared paper tutorial on the left, one o
 - **Hook:** Random reboots, SD card errors, WiFi dropping out. Often it isn’t the Pi: the supply or the cable can’t hold 5 V when it gets busy.
 - **Output:** `internal/seo/cardassets/guides/pi-undervoltage.png`, 1200×630 PNG
 
-Use the shared STYLE block. A small single-board computer at the end of a long, very thin power cable that sags like a tired rope. A dim yellow lightning bolt hovers above the board. Lots of dark space; the thinness of the cable is the whole idea.
+Use the shared STYLE block. A small single-board computer at the end of a long, very thin power cable that sags like a tired rope. A dim yellow lightning bolt hovers above the board. The board sits just right of centre, well inside the frame, and the cable enters from the left edge. Lots of dark space; the thinness of the cable is the whole idea.
 
 ### pi-sd-card-corruption
 
@@ -473,7 +474,7 @@ Use the shared STYLE block. A microSD card in green line art with a hairline cra
 - **Hook:** Plug a Pi into any speaker and anyone on the WiFi can play to it: from Spotify, an iPhone over AirPlay, or internet radio. No app accounts to share.
 - **Output:** `internal/seo/cardassets/guides/pi-volumio-streaming.png`, 1200×630 PNG
 
-Use the shared STYLE block. A tiny bare circuit board sits on top of a large bookshelf speaker. Several phones and a laptop around it each send a thin glowing arc of sound waves to the little board, and broad rings of sound spread out from the speaker cone. Warm, social, no logos or brand names.
+Use the shared STYLE block. A tiny bare circuit board sits on top of a large bookshelf speaker. Several generic, unbranded phones and a laptop (screens glowing with abstract shapes, no logos on their backs or lids) around it each send a thin glowing arc of sound waves to the little board, and broad rings of sound spread out from the speaker cone. Plain near-black ground with no room, furniture, plants, string lights or workbench props. Social, uncluttered, no logos or brand names.
 
 ### pi-rgb-matrix-flicker
 
@@ -481,4 +482,4 @@ Use the shared STYLE block. A tiny bare circuit board sits on top of a large boo
 - **Hook:** Garbage pixels, shimmer or flicker on a HUB75 panel usually comes down to five settings. Flip them one at a time and watch the panel settle.
 - **Output:** `internal/seo/cardassets/guides/pi-rgb-matrix-flicker.png`, 1200×630 PNG
 
-Use the shared STYLE block. A grid of square LEDs seen face-on: the left half is a scramble of random coloured pixels, and across the middle it settles into clean vertical colour bars on the right. Five small toggle switches along the bottom edge, all flipped to on. Crisp and still, no motion blur.
+Use the shared STYLE block. A coarse grid of large square LEDs seen face-on, only about sixteen across and eight down: the left half is a scramble of random coloured pixels, and across the middle it settles into a few clean, broad vertical colour bars on the right. Five small toggle switches along the bottom edge, all flipped to on. Plain near-black ground, no tools or other props. Crisp and still, no motion blur.
