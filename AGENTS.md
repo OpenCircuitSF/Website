@@ -10,6 +10,7 @@ touching code.
 | Issue workflow — statuses, the plan → implement → review pipeline, commit conventions, work logs | [`issues/Issues.md`](issues/Issues.md) |
 | Product scope, schema, flows, brand, infrastructure | [`PRD.md`](PRD.md) — **extract the one section you need** (§11), never read it whole |
 | Current state, environment prerequisites, hard-won findings | [`HANDOFF.md`](HANDOFF.md) |
+| Copy for Bluesky and Mastodon posts — event outreach and guide posts: hashtags, shape, length | [`docs/social-posts.md`](docs/social-posts.md) — read it before drafting or editing any post |
 | Code and repo conventions (this file) | here |
 
 If `AGENTS.md` and `issues/Issues.md` disagree, prefer this file for code and

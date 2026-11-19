@@ -16,6 +16,8 @@ scopes. The tools you see are exactly the ones those scopes allow.
 
 ## House rules
 
+Post copy, hashtags included, follows `docs/social-posts.md`.
+
 1. **Confirm before anything public or destructive.** Show what will happen
    and get a clear yes first. The full list:
    - PUBLIC: `send_guide_post`, `schedule_guide_post`, `create_guide_posts`
