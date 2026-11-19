@@ -175,6 +175,8 @@ func TestMountAndServe_PublicMCPMounted(t *testing.T) {
 		}
 	}
 
+	checkPublicAPIMounted(t, baseURL)
+
 	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
 		t.Fatalf("send SIGTERM: %v", err)
 	}
@@ -187,4 +189,53 @@ func TestMountAndServe_PublicMCPMounted(t *testing.T) {
 		t.Fatal("mountAndServe did not return within 10s of SIGTERM")
 	}
 	signal.Reset(syscall.SIGTERM)
+}
+
+// checkPublicAPIMounted is #0734's wiring check, run inside
+// TestMountAndServe_PublicMCPMounted against the same real mountAndServe:
+// /api/public/v1/ is served as JSON with CORS *, noindex and gzip, and a
+// wrong method or unknown path is a JSON error, not the SPA.
+func checkPublicAPIMounted(t *testing.T, baseURL string) {
+	t.Helper()
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true, DisableCompression: true}, Timeout: wiringHTTPTimeout}
+	do := func(method, path string, gzip bool) (*http.Response, string) {
+		req, err := http.NewRequest(method, baseURL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if gzip {
+			req.Header.Set("Accept-Encoding", "gzip")
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp, string(b)
+	}
+	resp, _ := do(http.MethodGet, "/api/public/v1/about", false)
+	if resp.StatusCode != 200 || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") ||
+		resp.Header.Get("Access-Control-Allow-Origin") != "*" || resp.Header.Get("X-Robots-Tag") != "noindex" {
+		t.Errorf("GET about = %d %v", resp.StatusCode, resp.Header)
+	}
+	if resp, _ := do(http.MethodGet, "/api/public/v1/about", true); resp.Header.Get("Content-Encoding") != "gzip" {
+		t.Errorf("about with Accept-Encoding: gzip = Content-Encoding %q", resp.Header.Get("Content-Encoding"))
+	}
+	_, body := do(http.MethodGet, "/api/public/v1/events/public-mcp-wiring", false)
+	var ev struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal([]byte(body), &ev); err != nil || !strings.HasPrefix(ev.URL, baseURL+"/events/") {
+		t.Errorf("events/public-mcp-wiring url = %q (%v)", ev.URL, err)
+	}
+	for _, c := range []struct {
+		method, path string
+		code         int
+	}{{http.MethodPost, "/api/public/v1/events", 405}, {http.MethodGet, "/api/public/v1/openapi.json", 200}, {http.MethodGet, "/api/public/v1/nope", 404}} {
+		resp, body := do(c.method, c.path, false)
+		if resp.StatusCode != c.code || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") || strings.Contains(body, "<html") {
+			t.Errorf("%s %s = %d %q %.120s, want %d JSON", c.method, c.path, resp.StatusCode, resp.Header.Get("Content-Type"), body, c.code)
+		}
+	}
 }

@@ -438,6 +438,9 @@ and every event and issue carries its public `url`):
 with its own registry (`internal/publicapi`); no admin operation can be added
 to it. `GET /mcp` answers 405 (the server is stateless).
 
+The same operations are a REST API with no key at `/api/public/v1/`; see
+[`api.md`'s public API section](api.md#public-api-apipublicv1-no-key).
+
 **Never returned:** draft, unpublished or never-published events; draft,
 unsent or withheld newsletter issues (all of these are the same "not found"
 as an unknown slug); attendees, RSVPs, subscribers, internal notes, capacity

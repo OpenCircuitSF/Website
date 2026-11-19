@@ -54,6 +54,7 @@ import (
 	"github.com/brennanMKE/OpenCircuitSF/internal/outbox"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outreach"
 	"github.com/brennanMKE/OpenCircuitSF/internal/outreachconn"
+	"github.com/brennanMKE/OpenCircuitSF/internal/publicapi"
 	"github.com/brennanMKE/OpenCircuitSF/internal/publicmcp"
 	"github.com/brennanMKE/OpenCircuitSF/internal/seo"
 	"github.com/brennanMKE/OpenCircuitSF/internal/serversettings"
@@ -2017,6 +2018,9 @@ func mountAndServe(
 	if publicWorkshopsH != nil && publicArchiveH != nil {
 		publicReg := handlers.BuildPublicRegistry(handlers.PublicDeps{Workshops: publicWorkshopsH, Archive: publicArchiveH, About: seo.About, BaseURL: cfg.BaseURL, Version: version})
 		publicmcp.Mount(mux, publicmcp.NewHandler(publicReg, slog.Default().With("component", "public-mcp")))
+		// #0734: the same registry as REST, GET-only, CORS *, no auth.
+		// #0730 wires the shared per-IP limiter here (the nil).
+		publicapi.Mount(mux, publicapi.NewHTTPRouter(publicReg, cfg.BaseURL, nil))
 	}
 
 	// Preference center (#0031) and confirmation (#0030) — public,

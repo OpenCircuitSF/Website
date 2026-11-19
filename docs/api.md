@@ -598,3 +598,35 @@ unchanged. It is documented in
 [`home-assistant.md`](home-assistant.md).
 
 - **`get_post_performance`**, `GET /posts/performance`: the cumulative results of the event and guide posts posted in a window (`since`/`until`, default the last 7 days, at most 90; `kind` `event`, `guide` or `all`): each post's latest likes/reposts/replies/quotes and clicks, totals per channel and per kind, and a one-sentence summary. Times are Pacific. A ShortLinks failure still answers `200`, with clicks `null` and `clicks_error` set.
+
+## Public API (/api/public/v1/), no key
+
+`https://www.opencircuitsf.com/api/public/v1/` is a public, read-only REST API
+(`internal/publicapi`, `#0734`). It is separate from the admin `/api/v1/`
+above:
+
+- **No key.** An `Authorization` header is ignored; nothing answers 401 or 403.
+- **GET only.** Any other method is a JSON `405` with `Allow: GET, HEAD, OPTIONS`; `OPTIONS` is a `204` CORS preflight.
+- **CORS `*`.** Every response carries `Access-Control-Allow-Origin: *`, so a browser app on any site can read it. The admin `/api/v1/` sends no CORS headers.
+- **Cached.** A success is `Cache-Control: public, max-age=60`; an error is `no-store`.
+
+It serves the same operations as the public MCP server, built from one
+registry, so a route and its tool return the same JSON:
+
+| Route | MCP tool |
+|---|---|
+| `GET events` (`limit`, `after`, `before`) | `list_upcoming_events` |
+| `GET events/search` (`query`, `from`, `to`, `include_past`, `limit`) | `search_events` |
+| `GET events/{slug}` | `get_event` |
+| `GET newsletter` (`limit`) | `list_newsletter_issues` |
+| `GET newsletter/{slug}` | `get_newsletter_issue` |
+| `GET about` | `get_about` |
+
+The OpenAPI document is generated at startup:
+`https://www.opencircuitsf.com/api/public/v1/openapi.json`.
+
+    curl -s 'https://www.opencircuitsf.com/api/public/v1/events?limit=3'
+
+An event whose slug is `search` cannot be read at `events/{slug}`, because
+`events/search` takes that path; use the MCP `get_event` tool for it.
+Unknown, draft and unpublished items all return the same `404` body.

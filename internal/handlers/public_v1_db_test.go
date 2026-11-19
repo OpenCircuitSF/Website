@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -23,7 +24,7 @@ import (
 // TestPublicToolsNeverReturnUnpublished (#0729) seeds hidden events and
 // campaigns in a real database, calls every public tool through the real
 // MCP server, and asserts none of them comes back, while published controls
-// do.
+// do. Since #0734 it makes the same calls over the REST router too.
 func TestPublicToolsNeverReturnUnpublished(t *testing.T) {
 	pool := interestsTestPool(t)
 	ctx := context.Background()
@@ -104,6 +105,45 @@ func TestPublicToolsNeverReturnUnpublished(t *testing.T) {
 	}
 	if !strings.Contains(unknownEvent, `"not_found"`) || !strings.Contains(unknownIssue, `"not_found"`) {
 		t.Errorf("unknown texts = %q, %q", unknownEvent, unknownIssue)
+	}
+
+	// The REST twin of every call (#0734), through the real router.
+	rest := httptest.NewServer(publicapi.NewHTTPRouter(reg, "https://www.opencircuitsf.com", nil))
+	defer rest.Close()
+	get := func(path string) (int, string) {
+		t.Helper()
+		resp, err := rest.Client().Get(rest.URL + publicapi.Prefix + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		outputs = append(outputs, string(b))
+		return resp.StatusCode, string(b)
+	}
+	get("events?limit=50")
+	if code, body := get("events/search?query=" + token + "&include_past=true"); code != 200 || !strings.Contains(body, `"`+control.Slug+`"`) {
+		t.Errorf("REST search = %d %s, want the control", code, body)
+	}
+	get("newsletter?limit=50")
+	get("about")
+	_, restUnknownEvent := get("events/" + token + "-no-such-event")
+	for _, w := range hiddenEvents {
+		if code, body := get("events/" + w.Slug); code != 404 || body != restUnknownEvent {
+			t.Errorf("REST events/%s = %d %q, want the unknown-slug 404 %q", w.Slug, code, body, restUnknownEvent)
+		}
+	}
+	_, restUnknownIssue := get("newsletter/" + token + "-no-such-issue")
+	for _, c := range hiddenCampaigns {
+		if code, body := get("newsletter/" + c.Slug); code != 404 || body != restUnknownIssue {
+			t.Errorf("REST newsletter/%s = %d %q, want the unknown-slug 404 %q", c.Slug, code, body, restUnknownIssue)
+		}
+	}
+	if code, _ := get("events/" + control.Slug); code != 200 {
+		t.Errorf("REST control event = %d", code)
+	}
+	if code, _ := get("newsletter/" + controlC.Slug); code != 200 {
+		t.Errorf("REST control issue = %d", code)
 	}
 
 	all := strings.Join(outputs, "\n")

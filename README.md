@@ -81,6 +81,8 @@ documented in `docs/deployment.md`.
 
 Both are described in [`docs/mcp.md`](docs/mcp.md).
 
+- **Public REST, `/api/public/v1/`**: the public MCP server's data as a read-only JSON API, no key, CORS `*`; see [`docs/api.md`](docs/api.md#public-api-apipublicv1-no-key).
+
 ## Documentation
 
 Start with [`docs/README.md`](docs/README.md) for the full documentation

@@ -154,17 +154,20 @@ func TestAdminRoutesRegisteredOnlyViaTable(t *testing.T) {
 // be called exactly once, with mux and a call to api.NewHTTPRouter; and
 // mcpserver.Mount exactly once, with mux and a call to
 // mcpserver.NewHandler. /mcp is the public server (#0729): publicmcp.Mount
-// exactly once, with mux and a call to publicmcp.NewHandler. (The Mounts register one "<METHOD> <path>" pattern
+// exactly once, with mux and a call to publicmcp.NewHandler. /api/public/v1/
+// is the public REST API (#0734): no literal route under it, and
+// publicapi.Mount exactly once, with mux and a call to
+// publicapi.NewHTTPRouter. (The Mounts register one "<METHOD> <path>" pattern
 // per method, because a pattern with no method conflicts with the SPA's
 // "GET /" in Go's ServeMux.)
 func TestAPIV1AndMCPMountedOnlyViaRegistry(t *testing.T) {
 	if v := v1MountViolations(t, "main.go"); len(v) > 0 {
-		t.Fatalf("/api/v1, /admin/mcp and /mcp must each be mounted once, as api.Mount(mux, api.NewHTTPRouter(...)), mcpserver.Mount(mux, mcpserver.NewHandler(...)) and publicmcp.Mount(mux, publicmcp.NewHandler(...)):\n%s", strings.Join(v, "\n"))
+		t.Fatalf("/api/v1, /admin/mcp, /mcp and /api/public/v1 must each be mounted once, as api.Mount(mux, api.NewHTTPRouter(...)), mcpserver.Mount(mux, mcpserver.NewHandler(...)), publicmcp.Mount(mux, publicmcp.NewHandler(...)) and publicapi.Mount(mux, publicapi.NewHTTPRouter(...)):\n%s", strings.Join(v, "\n"))
 	}
 }
 
 // TestAPIV1MountGuardCatchesRogueRoute proves the guard above fails: copies
-// of main.go with a rogue literal v1 or MCP route, with the router or MCP
+// of main.go with a rogue literal v1, MCP or public REST route, with the router or MCP
 // handler swapped for another call, and with a second mount of either each
 // report a violation. The copies live in t.TempDir() and are only parsed,
 // never compiled; main.go itself is never touched.
@@ -176,7 +179,8 @@ func TestAPIV1MountGuardCatchesRogueRoute(t *testing.T) {
 	const mount = `api.Mount(mux, api.NewHTTPRouter(`
 	const mcpMount = `mcpserver.Mount(mux, mcpserver.NewHandler(`
 	const publicMount = `publicmcp.Mount(mux, publicmcp.NewHandler(`
-	for _, m := range []string{mount, mcpMount, publicMount} {
+	const publicAPIMount = `publicapi.Mount(mux, publicapi.NewHTTPRouter(`
+	for _, m := range []string{mount, mcpMount, publicMount, publicAPIMount} {
 		if strings.Count(string(src), m) != 1 {
 			t.Fatalf("main.go does not hold exactly one %q", m)
 		}
@@ -199,6 +203,12 @@ func TestAPIV1MountGuardCatchesRogueRoute(t *testing.T) {
 		"public mcp bypassed": strings.Replace(string(src), publicMount, `publicmcp.Mount(mux, handlers.NotAnMCPHandler(`, 1),
 		"public mcp twice":    strings.Replace(string(src), publicMount, `publicmcp.Mount(mux, publicmcp.NewHandler(nil, nil))`+"\n\t\t"+publicMount, 1),
 		"public mcp missing":  strings.Replace(string(src), publicMount, `noMount(mux, publicmcp.NewHandler(`, 1),
+		// A literal /api/public/v1 route bypasses publicapi.Mount (#0734).
+		"public api rogue": strings.Replace(string(src), publicAPIMount,
+			`mux.Handle("GET /api/public/v1/rogue", http.NotFoundHandler())`+"\n\t\t"+publicAPIMount, 1),
+		"public api bypassed": strings.Replace(string(src), publicAPIMount, `publicapi.Mount(mux, handlers.NotARouter(`, 1),
+		"public api twice":    strings.Replace(string(src), publicAPIMount, `publicapi.Mount(mux, publicapi.NewHTTPRouter(nil, "", nil))`+"\n\t\t"+publicAPIMount, 1),
+		"public api missing":  strings.Replace(string(src), publicAPIMount, `noMount(mux, publicapi.NewHTTPRouter(`, 1),
 	}
 	for name, body := range cases {
 		p := filepath.Join(t.TempDir(), "main.go")
@@ -211,7 +221,7 @@ func TestAPIV1MountGuardCatchesRogueRoute(t *testing.T) {
 	}
 }
 
-// v1MountViolations parses path and lists every /api/v1, /admin/mcp or /mcp mux
+// v1MountViolations parses path and lists every /api/v1, /admin/mcp, /mcp or /api/public/v1 mux
 // registration that is not the one registry mount of each.
 func v1MountViolations(t *testing.T, path string) []string {
 	t.Helper()
@@ -221,7 +231,7 @@ func v1MountViolations(t *testing.T, path string) []string {
 		t.Fatalf("parse %s: %v", path, err)
 	}
 	var violations []string
-	mounts, mcpMounts, publicMCPMounts := 0, 0, 0
+	mounts, mcpMounts, publicMCPMounts, publicAPIMounts := 0, 0, 0, 0
 	ast.Inspect(file, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok || len(call.Args) < 2 {
@@ -252,6 +262,11 @@ func v1MountViolations(t *testing.T, path string) []string {
 			if m, ok := call.Args[0].(*ast.Ident); !ok || m.Name != "mux" || !isPkgCall(call.Args[1], "publicmcp", "NewHandler") {
 				violations = append(violations, fmt.Sprintf("%s: publicmcp.Mount must be given mux and publicmcp.NewHandler(...)", pos))
 			}
+		case recv.Name == "publicapi" && sel.Sel.Name == "Mount":
+			publicAPIMounts++
+			if m, ok := call.Args[0].(*ast.Ident); !ok || m.Name != "mux" || !isPkgCall(call.Args[1], "publicapi", "NewHTTPRouter") {
+				violations = append(violations, fmt.Sprintf("%s: publicapi.Mount must be given mux and publicapi.NewHTTPRouter(...)", pos))
+			}
 		case recv.Name == "mux" && (sel.Sel.Name == "Handle" || sel.Sel.Name == "HandleFunc"):
 			lit, ok := call.Args[0].(*ast.BasicLit)
 			if !ok || lit.Kind != token.STRING {
@@ -273,6 +288,11 @@ func v1MountViolations(t *testing.T, path string) []string {
 			if p == "/mcp" || strings.HasPrefix(p, "/mcp/") {
 				violations = append(violations, fmt.Sprintf("%s: mux.%s(%q, ...) bypasses publicmcp.Mount", pos, sel.Sel.Name, pattern))
 			}
+			// /api/public/v1/ is the public REST API (#0734), mounted only by
+			// publicapi.Mount.
+			if p == "/api/public/v1" || strings.HasPrefix(p, "/api/public/v1/") {
+				violations = append(violations, fmt.Sprintf("%s: mux.%s(%q, ...) bypasses publicapi.Mount", pos, sel.Sel.Name, pattern))
+			}
 			if p == "/admin/mcp" || strings.HasPrefix(p, "/admin/mcp/") {
 				violations = append(violations, fmt.Sprintf("%s: mux.%s(%q, ...) bypasses mcpserver.Mount", pos, sel.Sel.Name, pattern))
 			}
@@ -287,6 +307,9 @@ func v1MountViolations(t *testing.T, path string) []string {
 	}
 	if publicMCPMounts != 1 {
 		violations = append(violations, fmt.Sprintf("%s: publicmcp.Mount is called %d times, want 1", path, publicMCPMounts))
+	}
+	if publicAPIMounts != 1 {
+		violations = append(violations, fmt.Sprintf("%s: publicapi.Mount is called %d times, want 1", path, publicAPIMounts))
 	}
 	return violations
 }
