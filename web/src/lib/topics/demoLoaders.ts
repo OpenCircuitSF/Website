@@ -49,4 +49,8 @@ export const TOPIC_DEMOS: Readonly<Record<string, () => Promise<DemoModule>>> = 
   'ohms-law-resistors': () => import('./OhmsLawDemo.svelte'),
   'led-basics': () => import('./LedBasicsDemo.svelte'),
   'led-resistor-calculator': () => import('./LedResistorDemo.svelte'),
+  // Raspberry Pi: setup, WiFi and Bookworm (#0719)
+  'pi-imager-setup': () => import('./PiImagerDemo.svelte'),
+  'pi-wifi-2-4ghz': () => import('./PiWifiBandDemo.svelte'),
+  'pi-bookworm-changes': () => import('./PiBookwormDemo.svelte'),
 };

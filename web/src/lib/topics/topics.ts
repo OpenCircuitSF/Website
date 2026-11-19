@@ -803,6 +803,65 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     ],
     takeaway: 'Subtract, divide, round up to the next standard value. For a red LED on an ESP32 pin, 150 to 330 Ω is about right.',
   },
+  // Raspberry Pi: setup, WiFi and Bookworm (#0719)
+  'pi-imager-setup': {
+    tryIt: 'Everything starts switched on. Turn settings off one at a time and see what the first boot looks like from your laptop.',
+    ideas: [
+      {
+        title: 'Do it before the first boot',
+        body: 'In Raspberry Pi Imager, choose the board, the OS and the SD card, then edit the OS customisation settings when it asks. They are written to the card and applied the first time the Pi starts. With no keyboard or screen, this is your only chance to tell the Pi anything.',
+      },
+      {
+        title: 'There is no default user',
+        body: 'Since April 2022, Raspberry Pi OS has no built-in pi user with the password raspberry. If you don’t set a username and password, the Pi waits for you to create one on a screen you don’t have.',
+      },
+      {
+        title: 'WiFi and SSH, or no way in',
+        body: 'Without WiFi details it never joins your network. Without SSH it joins but refuses connections. Give the first boot a few minutes, since it sets itself up and restarts once, then connect with ssh and the hostname you chose, plus .local. A public key means no password to type.',
+      },
+    ],
+    takeaway: 'Set the hostname, a user, WiFi and SSH in Imager before you flash. Then ssh in to yourname.local.',
+  },
+  'pi-wifi-2-4ghz': {
+    tryIt: 'Pick how your router is set up and which Pi you have, and see whether it joins. Then try the Zero 2 W on a 5 GHz-only network.',
+    ideas: [
+      {
+        title: 'Some Pis only hear 2.4 GHz',
+        body: 'The Pi Zero W, Zero 2 W and Pi 3 B only have 2.4 GHz WiFi. The Pi 3 B+, Pi 4 and Pi 5 do both 2.4 and 5 GHz. A 5 GHz-only network is invisible to a Zero 2 W, and headless there is no error message: the Pi just never shows up.',
+      },
+      {
+        title: 'One name for both bands usually works',
+        body: 'Most home routers broadcast the same name on both bands, and a 2.4 GHz Pi simply joins on 2.4. Band steering, where the router pushes devices between bands, can cause odd drops; if it does, give the 2.4 GHz band its own name. Set the right WiFi country too, or some channels are blocked.',
+      },
+      {
+        title: 'The fix, and how to check',
+        body: 'In Imager, enter a network the Pi can hear: turn on or split out the router’s 2.4 GHz band, or set a phone hotspot to 2.4 GHz just for first setup. Once connected, iwgetid -r shows the network name and iw dev wlan0 link shows the frequency: 24xx MHz is 2.4 GHz.',
+      },
+    ],
+    takeaway: 'A Zero 2 W needs 2.4 GHz. If the Pi never appears, check the band before the password.',
+  },
+  'pi-bookworm-changes': {
+    tryIt: 'Pick a step from an old tutorial. See what it does on Bookworm, and what to type instead.',
+    ideas: [
+      {
+        title: 'Boot files moved',
+        body: 'config.txt and cmdline.txt now live in /boot/firmware/. The old /boot/config.txt is only a note pointing there, so edits to it do nothing.',
+      },
+      {
+        title: 'NetworkManager runs the network',
+        body: 'WiFi and IP addresses are handled by NetworkManager. Editing wpa_supplicant.conf or dhcpcd.conf no longer does anything. Use nmcli, or sudo nmtui for a menu.',
+      },
+      {
+        title: 'pip needs a virtual environment',
+        body: 'pip install outside a virtual environment stops with externally-managed-environment. Make one with python3 -m venv, or install the Debian package, python3- followed by the library name, with apt.',
+      },
+      {
+        title: 'The desktop is Wayland',
+        body: 'On a Pi 4 and Pi 5 the desktop runs Wayland, so tools that talk to X11, like xset and xdotool, may do nothing. Look for the setting in raspi-config first.',
+      },
+    ],
+    takeaway: 'On Bookworm, look in /boot/firmware, use nmcli for the network, and a venv for pip.',
+  },
 };
 
 export const TOPICS: Topic[] = TOPIC_GUIDES.map((m) => {

@@ -53,6 +53,10 @@ import ResistorBandsDemo from './ResistorBandsDemo.svelte';
 import OhmsLawDemo from './OhmsLawDemo.svelte';
 import LedBasicsDemo from './LedBasicsDemo.svelte';
 import LedResistorDemo from './LedResistorDemo.svelte';
+// Raspberry Pi: setup, WiFi and Bookworm (#0719)
+import PiImagerDemo from './PiImagerDemo.svelte';
+import PiWifiBandDemo from './PiWifiBandDemo.svelte';
+import PiBookwormDemo from './PiBookwormDemo.svelte';
 
 afterEach(cleanup);
 
@@ -618,5 +622,35 @@ describe('guide demos', () => {
     await fireEvent.click(r.getByRole('radio', { name: 'Custom' }));
     await fireEvent.input(r.getByRole('spinbutton', { name: /Supply voltage/ }), { target: { value: '3' } });
     expect(r.getByRole('heading', { name: 'Can’t light it' })).toBeTruthy();
+  });
+
+  // Raspberry Pi: setup, WiFi and Bookworm (#0719)
+  it('pi imager: turning off WiFi never joins; turning off SSH refuses connections', async () => {
+    const r = render(PiImagerDemo);
+    expect(r.getByRole('heading', { name: 'Ready: log in over SSH' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('checkbox', { name: /Wireless LAN/ }));
+    expect(r.getByRole('heading', { name: 'Never joins the network' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('checkbox', { name: /Wireless LAN/ }));
+    await fireEvent.click(r.getByRole('checkbox', { name: /Enable SSH/ }));
+    expect(r.getByRole('heading', { name: 'On the network, but it refuses connections' })).toBeTruthy();
+    expect(r.container.textContent).toContain('Connection refused');
+  });
+
+  it('pi wifi: a Zero 2 W cannot see a 5 GHz-only network; a Pi 4 can', async () => {
+    const r = render(PiWifiBandDemo);
+    await fireEvent.click(r.getByRole('radio', { name: /5 GHz only/ }));
+    await fireEvent.click(r.getByRole('radio', { name: /Zero 2 W/ }));
+    expect(r.getByRole('heading', { name: 'Never appears' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: /Pi 4/ }));
+    expect(r.container.textContent).toContain('freq: 5180');
+  });
+
+  it('pi bookworm: pip shows the externally-managed error and the venv fix', async () => {
+    const r = render(PiBookwormDemo);
+    await fireEvent.click(r.getByRole('radio', { name: /pip install/ }));
+    expect(r.container.textContent).toContain('externally-managed-environment');
+    expect(r.container.textContent).toContain('python3 -m venv');
+    await fireEvent.click(r.getByRole('radio', { name: /config\.txt/ }));
+    expect(r.container.textContent).toContain('/boot/firmware/config.txt');
   });
 });
