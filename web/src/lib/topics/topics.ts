@@ -857,7 +857,7 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
       },
       {
         title: 'The desktop is Wayland',
-        body: 'On a Pi 4 and Pi 5 the desktop runs Wayland, so tools that talk to X11, like xset and xdotool, may do nothing. Look for the setting in raspi-config first.',
+        body: 'The desktop runs Wayland: first on the Pi 4 and Pi 5, and on every model since late 2024. Tools that talk to X11, like xset and xdotool, may do nothing. Look for the setting in raspi-config first.',
       },
     ],
     takeaway: 'On Bookworm, look in /boot/firmware, use nmcli for the network, and a venv for pip.',

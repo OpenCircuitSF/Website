@@ -74,7 +74,7 @@ const PROBLEM: Record<SettingId, string> = {
     'No hostname: it answers to raspberrypi.local. Fine for one Pi, but two on the same network clash.',
   user: 'No user: it boots to a set-up prompt on its HDMI screen asking for a new user, and nobody is looking at that screen.',
   wifi: 'No WiFi details: it never joins your network. A Pi 4 with an Ethernet cable plugged in would; a Zero 2 W has no Ethernet port.',
-  locale: 'No locale: the clock is set to UTC and the keyboard layout is British.',
+  locale: 'No locale: the time zone and keyboard layout stay at the image’s defaults, which are British, not yours.',
   ssh: 'No SSH: it joins the network, but nothing is listening for you to log in.',
 };
 
@@ -336,7 +336,7 @@ export const BOOKWORM_STEPS: OldStep[] = [
     id: 'desktop',
     label: 'Stop the screen blanking',
     oldCmd: ['xset s off'],
-    now: ['(no error, and the screen still blanks)', 'On a Pi 4 or Pi 5 the desktop runs Wayland, not X11.'],
+    now: ['(no error, and the screen still blanks)', 'Current Bookworm desktops run Wayland, not X11.'],
     fix: ['sudo raspi-config', '# Display Options → Screen Blanking', '# or switch back to X11 under Advanced Options'],
     why: 'Tools that talk to X11, like xset and xdotool, may do nothing under Wayland. Look for the setting in raspi-config first.',
     oldBox: 'X11',
