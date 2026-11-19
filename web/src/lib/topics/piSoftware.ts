@@ -240,6 +240,7 @@ export type ServiceId =
   | 'noInstall'
   | 'badPath'
   | 'netRetry'
+  | 'netGaveUp'
   | 'netDead'
   | 'crashOk'
   | 'crashFast'
@@ -271,15 +272,22 @@ const RUNNING_EVENTS = (): TimelineEvent[] => [
 
 function badPath(o: UnitOptions): ServiceOutcome {
   const events = [ev(0, 'Power on'), ev(35, 'plantlog starts'), ev(37, 'can’t find log.py', 'bad')];
-  if (o.restart) events.push(ev(60, 'tries again', 'bad'));
+  // Without RestartSec the retries come 100 ms apart, so systemd's start limit
+  // (5 starts in 10 s by default) stops them within a few seconds (#0725 review).
+  const retrying = o.restart && o.restartSec;
+  if (o.restart) events.push(ev(60, retrying ? 'tries again' : 'start limit: gives up', 'bad'));
   return {
     id: 'badPath',
     title: 'Starts, then can’t find its file',
     body:
       'With no WorkingDirectory the program starts in /, so python3 looks for /log.py. Use full paths: they work wherever it starts.' +
-      (o.restart ? ' Restart=on-failure just repeats the failure every few seconds.' : ' It fails once and stays dead.'),
+      (retrying
+        ? ' Restart=on-failure just repeats the failure every few seconds.'
+        : o.restart
+          ? ' Without RestartSec it retries at once, hits systemd’s start limit and gives up.'
+          : ' It fails once and stays dead.'),
     tone: 'bad',
-    status: o.restart ? 'Active: activating (auto-restart) (Result: exit-code)' : 'Active: failed (Result: exit-code)',
+    status: retrying ? 'Active: activating (auto-restart) (Result: exit-code)' : 'Active: failed (Result: exit-code)',
     log: [
       "python3: can't open file '/log.py': [Errno 2] No such file or directory",
       'plantlog.service: Main process exited, code=exited, status=2',
@@ -340,6 +348,29 @@ export function serviceOutcome(o: UnitOptions, s: Scenario): ServiceOutcome {
       events: [ev(0, 'Power on'), ev(30, 'WiFi up'), ev(100, 'plantlog never starts', 'bad')],
     };
   if (brokenPath) return badPath(o);
+  if (!o.network && o.restart && !o.restartSec)
+    // Retries 100 ms apart fail as fast as they start: five in a few seconds
+    // trips systemd's default start limit (5 in 10 s) long before the WiFi is
+    // up, so the restart never gets to save it (#0725 review).
+    return {
+      id: 'netGaveUp',
+      title: 'Fails at boot, retries at once, then gives up',
+      body: 'It started before the WiFi was up. Without RestartSec, systemd restarted it a tenth of a second later, again and again, until it hit the start limit and stopped trying, all before the WiFi came up. Wait for network-online.target, and give RestartSec a few seconds.',
+      tone: 'bad',
+      status: 'Active: failed (Result: start-limit-hit)',
+      log: [
+        'Temporary failure in name resolution',
+        'plantlog.service: Start request repeated too quickly.',
+        "plantlog.service: Failed with result 'start-limit-hit'.",
+      ],
+      events: [
+        ev(0, 'Power on'),
+        ev(10, 'plantlog starts'),
+        ev(14, 'fails, restarts, fails…', 'bad'),
+        ev(20, 'start limit: gives up', 'bad'),
+        ev(30, 'WiFi up'),
+      ],
+    };
   if (!o.network && o.restart)
     return {
       id: 'netRetry',

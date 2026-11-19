@@ -133,6 +133,15 @@ describe('systemd service', () => {
     expect(serviceOutcome(off('network', 'restart'), 'boot').id).toBe('netDead');
   });
 
+  it('no network wait and no RestartSec: retries hit the start limit before the WiFi is up', () => {
+    const r = serviceOutcome(off('network', 'restartSec'), 'boot');
+    expect(r.id).toBe('netGaveUp');
+    expect(r.status).toContain('start-limit-hit');
+    const b = serviceOutcome(off('fullPath', 'workdir', 'restartSec'), 'boot');
+    expect(b.id).toBe('badPath');
+    expect(b.status).toContain('failed');
+  });
+
   it('no Restart= stays dead after a crash', () => {
     expect(serviceOutcome(off('restart'), 'crash').id).toBe('crashDead');
   });
