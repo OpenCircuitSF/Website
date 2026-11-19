@@ -637,6 +637,42 @@
       ],
       "post": "Garbage pixels or flicker on an RGB LED panel driven by a Pi 4? Flip the five settings that fix it, one at a time, and watch the panel settle.",
       "set": "pi"
+    },
+    {
+      "slug": "pi-find-on-network",
+      "title": "Where’s my Pi? Finding a headless Raspberry Pi on the network",
+      "hook": "It booted, the light is blinking, and you have no idea what address it has. Try mypi.local, the router’s list or a scan, and see which work on your network.",
+      "minutes": 4,
+      "tags": [
+        "Raspberry Pi",
+        "networking"
+      ],
+      "post": "Your headless Raspberry Pi booted, but where is it? Pick your network and laptop and see whether hostname.local, the router’s device list or a scan will find it, and why guest WiFi never will.",
+      "set": "pi"
+    },
+    {
+      "slug": "pi-models-compared",
+      "title": "Zero 2W, Pi 4 or Pi 5: which Raspberry Pi for which job",
+      "hook": "A speaker, a sign, a desktop and a sensor on a battery all want different boards. Tick what your project needs and see which Pi fits, and why.",
+      "minutes": 4,
+      "tags": [
+        "Raspberry Pi",
+        "boards"
+      ],
+      "post": "Zero 2W, Pi 4 or Pi 5? Tick what your project needs, like a battery, Ethernet, 5 GHz WiFi or two screens, and see which Raspberry Pi fits and why the others don’t.",
+      "set": "pi"
+    },
+    {
+      "slug": "pi-gpio-pinout",
+      "title": "The Raspberry Pi GPIO header: pin numbers, 3.3 V and what each pin does",
+      "hook": "Pin 11 is GPIO 17, the pins run at 3.3 V, and 5 V on one can kill the Pi. Tap any pin on the 40-pin header to see what it does.",
+      "minutes": 4,
+      "tags": [
+        "Raspberry Pi",
+        "GPIO"
+      ],
+      "post": "Pin 11 or GPIO 17? Tap any pin on the Raspberry Pi’s 40-pin header to see what it does, flip between physical and GPIO numbers, and see why 5 V never goes on a GPIO pin.",
+      "set": "pi"
     }
   ]
 }
