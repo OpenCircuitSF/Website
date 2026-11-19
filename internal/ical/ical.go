@@ -51,6 +51,11 @@ func FoldLine(line string) string {
 		for i > 0 && !utf8.RuneStart(line[i]) {
 			i--
 		}
+		if i == 0 {
+			// No rune start in the window: the input is not valid UTF-8.
+			// Cut at the octet limit rather than loop forever.
+			i = limit
+		}
 		if !first {
 			b.WriteString("\r\n ")
 		}

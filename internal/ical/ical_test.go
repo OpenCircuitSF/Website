@@ -76,6 +76,28 @@ func TestFoldLine_MultiByteAtBoundary(t *testing.T) {
 	}
 }
 
+// TestFoldLine_InvalidUTF8Terminates pins that a window holding no rune
+// start (only continuation octets) is cut at the limit instead of making the
+// back-off reach zero and loop forever.
+func TestFoldLine_InvalidUTF8Terminates(t *testing.T) {
+	in := strings.Repeat(string([]byte{0x80}), 200)
+	done := make(chan string, 1)
+	go func() { done <- FoldLine(in) }()
+	select {
+	case out := <-done:
+		for i, p := range strings.Split(out, "\r\n") {
+			if len(p) > 75 {
+				t.Errorf("physical line %d is %d octets", i, len(p))
+			}
+		}
+		if unfold(out) != in {
+			t.Error("unfold round-trip mismatch")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("FoldLine did not return on invalid UTF-8")
+	}
+}
+
 func sample() Event {
 	end := time.Date(2026, 7, 10, 3, 0, 0, 0, time.UTC)
 	return Event{
