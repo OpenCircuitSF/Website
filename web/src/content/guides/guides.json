@@ -637,6 +637,43 @@
       ],
       "post": "Garbage pixels or flicker on an RGB LED panel driven by a Pi 4? Flip the five settings that fix it, one at a time, and watch the panel settle.",
       "set": "pi"
+    },
+    {
+      "slug": "pi-zero-audio-out",
+      "title": "Sound from a Pi Zero 2W: four ways out",
+      "hook": "A Zero 2W has no headphone jack. Sound comes out through a DAC HAT, a USB DAC, HDMI or Bluetooth. Pick one and see the wiring, the setup and the catch.",
+      "minutes": 4,
+      "tags": [
+        "Raspberry Pi",
+        "audio"
+      ],
+      "post": "No headphone jack on a Pi Zero 2W? Sound can still come out through a DAC HAT, a USB DAC, HDMI or Bluetooth. Pick one and see the wiring, the setup line and the trade-offs.",
+      "set": "pi"
+    },
+    {
+      "slug": "pi-rgb-matrix-basics",
+      "title": "RGB LED panels on a Pi 4: rows, chains and parallel",
+      "hook": "Chain HUB75 panels end to end or run them side by side in parallel. Set the panel size and the layout and see the resolution, the flags and the refresh rate it costs.",
+      "minutes": 4,
+      "tags": [
+        "Raspberry Pi",
+        "LEDs"
+      ],
+      "post": "Building a big RGB LED wall from a Pi 4? Set the panel size, chain length and parallel chains and see the total resolution, the command-line flags and why more pixels lower the refresh rate.",
+      "set": "pi"
+    },
+    {
+      "slug": "pi-rgb-matrix-power",
+      "title": "How much power an RGB LED panel needs",
+      "hook": "A 64×32 panel at full white can pull about 4 A at 5 V. Pick your panels, the brightness and what they show, and size the supply and the wires.",
+      "minutes": 4,
+      "tags": [
+        "Raspberry Pi",
+        "LEDs",
+        "power"
+      ],
+      "post": "One 64×32 RGB LED panel at full white can pull about 4 A at 5 V. Pick the panel count, brightness and content and see the current, the supply size and the wire gauge it needs.",
+      "set": "pi"
     }
   ]
 }

@@ -64,6 +64,10 @@ import SdWriteDemo from './SdWriteDemo.svelte';
 // Raspberry Pi: Volumio and RGB panels (#0721)
 import VolumioDemo from './VolumioDemo.svelte';
 import RgbMatrixDemo from './RgbMatrixDemo.svelte';
+// Raspberry Pi batch 2: Zero audio, RGB panel basics and power (#0726)
+import ZeroAudioDemo from './ZeroAudioDemo.svelte';
+import RgbLayoutDemo from './RgbLayoutDemo.svelte';
+import RgbPowerDemo from './RgbPowerDemo.svelte';
 
 afterEach(cleanup);
 
@@ -725,5 +729,56 @@ describe('guide demos', () => {
     expect(r.container.textContent).toContain('178 Hz');
     expect(r.container.querySelectorAll('animate, animateTransform, animateMotion').length).toBe(0);
     expect(r.container.querySelectorAll('.cell').length).toBe(512);
+  });
+
+  // Raspberry Pi batch 2: Zero audio, RGB panel basics and power (#0726)
+  it('zero audio: a DAC HAT is an overlay line; Bluetooth is poor for delay; a USB DAC links the ports guide', async () => {
+    const r = render(ZeroAudioDemo);
+    const h = () => r.getByRole('heading', { level: 3 }).textContent ?? '';
+    expect(h()).toBe('DAC HAT: the cleanest wired sound');
+    expect(r.container.textContent).toContain('dtoverlay=hifiberry-dac');
+    expect(r.container.textContent).toContain('Example only');
+    await fireEvent.click(r.getByRole('radio', { name: 'Bluetooth' }));
+    expect(h()).toBe('Bluetooth: no wires, some delay');
+    await fireEvent.click(r.getByRole('radio', { name: 'Low delay' }));
+    expect(r.container.textContent).toContain('A poor pick when low delay matters most; try a DAC HAT, a USB DAC or HDMI.');
+    await fireEvent.click(r.getByRole('radio', { name: 'USB DAC' }));
+    expect(r.getByRole('link', { name: /micro-USB port/ }).getAttribute('href')).toBe('/guides/pi-zero-usb-ports');
+    expect(r.getByRole('link', { name: /Volumio/ }).getAttribute('href')).toBe('/guides/pi-volumio-streaming');
+  });
+
+  it('rgb layout: a chain of six flickers; three parallel chains of two do not; a single-chain adapter refuses', async () => {
+    const r = render(RgbLayoutDemo);
+    const h = () => r.getByRole('heading', { level: 3 }).textContent ?? '';
+    expect(h()).toBe('Fine to the eye: 178 Hz');
+    expect(r.container.textContent).toContain('64×32 pixels');
+    const slider = r.getByRole('slider', { name: /Panels in each chain/ });
+    await fireEvent.input(slider, { target: { value: '6' } });
+    expect(h()).toBe('Flicker likely: 81 Hz');
+    expect(r.container.textContent).toContain('384×32');
+    expect(r.container.textContent).toContain('--led-chain=6');
+    await fireEvent.input(slider, { target: { value: '2' } });
+    await fireEvent.click(r.getByRole('radio', { name: 'Three-output adapter board' }));
+    await fireEvent.click(within(r.getByRole('radiogroup', { name: /Parallel chains/ })).getByRole('radio', { name: '3' }));
+    expect(h()).toBe('Fine to the eye: 144 Hz');
+    expect(r.container.textContent).toContain('128×96');
+    expect(r.container.querySelectorAll('.panel').length).toBe(6);
+    await fireEvent.click(r.getByRole('radio', { name: 'Single-chain HAT or bonnet' }));
+    expect(h()).toBe('One chain only on this adapter');
+    expect(r.container.querySelectorAll('animate, animateTransform, animateMotion').length).toBe(0);
+  });
+
+  it('rgb power: a picture fits 4 A, full white overloads it, a 20 A supply has room', async () => {
+    const r = render(RgbPowerDemo);
+    const h = () => r.getByRole('heading', { level: 3 }).textContent ?? '';
+    expect(h()).toBe('OK for this content; full white would overload the supply');
+    expect(r.container.textContent).toContain('2.8 A');
+    expect(r.container.textContent).toContain('8.0 A');
+    await fireEvent.click(r.getByRole('radio', { name: 'Full white' }));
+    expect(h()).toBe('Over the supply’s rating');
+    await fireEvent.click(r.getByRole('radio', { name: '20 A' }));
+    expect(h()).toBe('Plenty of supply');
+    expect(r.container.textContent).toContain('Never power panels from the Pi’s 5 V pin');
+    expect(r.getByRole('link', { name: /Power budgets for LED strips/ }).getAttribute('href')).toBe('/guides/led-power-budget');
   });
 });

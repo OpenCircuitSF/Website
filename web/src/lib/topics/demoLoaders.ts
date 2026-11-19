@@ -59,4 +59,8 @@ export const TOPIC_DEMOS: Readonly<Record<string, () => Promise<DemoModule>>> = 
   // Raspberry Pi: Volumio and RGB panels (#0721)
   'pi-volumio-streaming': () => import('./VolumioDemo.svelte'),
   'pi-rgb-matrix-flicker': () => import('./RgbMatrixDemo.svelte'),
+  // Raspberry Pi batch 2: Zero audio, RGB panel basics and power (#0726)
+  'pi-zero-audio-out': () => import('./ZeroAudioDemo.svelte'),
+  'pi-rgb-matrix-basics': () => import('./RgbLayoutDemo.svelte'),
+  'pi-rgb-matrix-power': () => import('./RgbPowerDemo.svelte'),
 };

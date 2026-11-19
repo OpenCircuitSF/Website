@@ -483,3 +483,27 @@ Use the shared STYLE block. A tiny bare circuit board sits on top of a large boo
 - **Output:** `internal/seo/cardassets/guides/pi-rgb-matrix-flicker.png`, 1200×630 PNG
 
 Use the shared STYLE block. A coarse grid of large square LEDs seen face-on, only about sixteen across and eight down: the left half is a scramble of random coloured pixels, and across the middle it settles into a few clean, broad vertical colour bars on the right. Five small toggle switches along the bottom edge, all flipped to on. Plain near-black ground, no tools or other props. Crisp and still, no motion blur.
+
+### pi-zero-audio-out
+
+- **Title:** Sound from a Pi Zero 2W: four ways out
+- **Hook:** A Zero 2W has no headphone jack. Sound comes out through a DAC HAT, a USB DAC, HDMI or Bluetooth. Pick one and see the wiring, the setup and the catch.
+- **Output:** `internal/seo/cardassets/guides/pi-zero-audio-out.png`, 1200×630 PNG
+
+Use the shared STYLE block. A tiny, bare, unbranded stick-shaped single-board computer lies in the middle band. A thin cable runs from it to a plain bookshelf speaker on the right, and two or three soft sound rings spread from the speaker cone. A small blank add-on board hovers just above the computer as if about to press onto its pin header. Plain near-black ground, no other props, no logos or text.
+
+### pi-rgb-matrix-basics
+
+- **Title:** RGB LED panels on a Pi 4: rows, chains and parallel
+- **Hook:** Chain HUB75 panels end to end or run them side by side in parallel. Set the panel size and the layout and see the resolution, the flags and the refresh rate it costs.
+- **Output:** `internal/seo/cardassets/guides/pi-rgb-matrix-basics.png`, 1200×630 PNG
+
+Use the shared STYLE block. Three plain dark rectangular panels side by side across the middle band, each glowing one broad, soft, even colour (green, cyan, amber), joined by short flat ribbon cables, with a small bare board at the far left feeding the first ribbon. No pixel grid, no text, large calm dark areas.
+
+### pi-rgb-matrix-power
+
+- **Title:** How much power an RGB LED panel needs
+- **Hook:** A 64×32 panel at full white can pull about 4 A at 5 V. Pick your panels, the brightness and what they show, and size the supply and the wires.
+- **Output:** `internal/seo/cardassets/guides/pi-rgb-matrix-power.png`, 1200×630 PNG
+
+Use the shared STYLE block. One plain dark rectangular panel in the middle band glowing an even, bright white, fed by two thick wires, one red and one black, from a plain metal-box power supply on the left. A tiny bare board sits below it, joined only by a thin black ground wire. Simple and uncluttered, large dark areas, no numbers or text.
