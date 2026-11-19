@@ -8,6 +8,7 @@ import IronTempDemo from './IronTempDemo.svelte';
 import SolderWireDemo from './SolderWireDemo.svelte';
 import MosfetSwitchDemo from './MosfetSwitchDemo.svelte';
 import SwitchPickerDemo from './SwitchPickerDemo.svelte';
+import PiHeatDemo from './PiHeatDemo.svelte';
 
 const demoSources = import.meta.glob('./*.svelte', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
 
@@ -31,7 +32,7 @@ describe('topic guides', () => {
   });
 
   it('temps flag matches content', async () => {
-    const tempDemos = new Set<unknown>([IronTempDemo, SolderWireDemo, MosfetSwitchDemo, SwitchPickerDemo]);
+    const tempDemos = new Set<unknown>([IronTempDemo, SolderWireDemo, MosfetSwitchDemo, SwitchPickerDemo, PiHeatDemo]);
     for (const [slug, b] of Object.entries(TOPIC_BODIES)) {
       const prose = [b.tryIt, b.takeaway, ...b.ideas.flatMap((i) => [i.title, i.body])].some((x) => x.includes('{temp:'));
       expect(b.temps === true, slug).toBe(prose || tempDemos.has((await TOPIC_DEMOS[slug]()).default));
@@ -40,7 +41,7 @@ describe('topic guides', () => {
       .filter(([, src]) => src.includes('tempUnit.svelte'))
       .map(([k]) => k)
       .sort();
-    expect(importers).toEqual(['./IronTempDemo.svelte', './MosfetSwitchDemo.svelte', './SolderWireDemo.svelte', './SwitchPickerDemo.svelte']);
+    expect(importers).toEqual(['./IronTempDemo.svelte', './MosfetSwitchDemo.svelte', './PiHeatDemo.svelte', './SolderWireDemo.svelte', './SwitchPickerDemo.svelte']);
   });
 
   it('every topic has a post short enough for Bluesky with a link', () => {

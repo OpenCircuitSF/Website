@@ -507,3 +507,27 @@ Use the shared STYLE block. Three bare, unbranded single-board computers side by
 - **Output:** `internal/seo/cardassets/guides/pi-gpio-pinout.png`, 1200×630 PNG
 
 Use the shared STYLE block. Macro photograph of a double row of header pins running diagonally across a dark circuit board, shallow depth of field so most pins fall softly out of focus. One pin near the centre glows bright green, with a single jumper wire rising from it. No silkscreen, labels or numbers.
+
+### pi-zero-usb-ports
+
+- **Title:** Pi Zero 2W: which micro-USB port is which
+- **Hook:** Two micro-USB ports that look the same. One only takes power; the other is the only data port. Plug a keyboard into the wrong one and nothing happens.
+- **Output:** `internal/seo/cardassets/guides/pi-zero-usb-ports.png`, 1200×630 PNG
+
+Use the shared STYLE block. A tiny, bare, unbranded stick-shaped single-board computer lies flat in the middle band, its three small ports along the near edge. Two cables come in from below: a plain power plug reaching the corner port, and a small adapter with a keyboard cable reaching the port beside it. No keyboard shown, no text or markings. Lots of dark space.
+
+### pi4-micro-hdmi
+
+- **Title:** No picture from a Pi 4: the micro-HDMI ports
+- **Hook:** A Pi 4 has two tiny HDMI ports, and the screen stays black more often than it should. Pick the port, the cable and when the screen comes on, and see why.
+- **Output:** `internal/seo/cardassets/guides/pi4-micro-hdmi.png`, 1200×630 PNG
+
+Use the shared STYLE block. A small, bare, unbranded single-board computer on the left with a thin video cable running to a plain monitor on the right whose screen is black with a faint glow at its edge. Simple line art, no logos, no lettering on the screen.
+
+### pi4-heat-throttling
+
+- **Title:** Why a Pi 4 slows down when it gets hot
+- **Hook:** Once its chip gets too hot, a Pi 4 turns its own speed down to cool off. A bare board in a closed box can get there in a couple of minutes.
+- **Output:** `internal/seo/cardassets/guides/pi4-heat-throttling.png`, 1200×630 PNG
+
+Use the shared STYLE block. A small, bare, unbranded single-board computer in the centre with soft orange heat shimmer rising from its chip, and beside it a simple thermometer outline whose level sits near the top. A small stick-on heatsink floats just above the chip as if about to land. Dark, uncluttered, no numbers or text.

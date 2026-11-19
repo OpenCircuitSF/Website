@@ -63,4 +63,8 @@ export const TOPIC_DEMOS: Readonly<Record<string, () => Promise<DemoModule>>> = 
   'pi-find-on-network': () => import('./PiFindDemo.svelte'),
   'pi-models-compared': () => import('./PiModelPicker.svelte'),
   'pi-gpio-pinout': () => import('./PiGpioHeader.svelte'),
+  // Raspberry Pi batch 2: Zero USB ports, Pi 4 HDMI, heat (#0724)
+  'pi-zero-usb-ports': () => import('./PiZeroPortsDemo.svelte'),
+  'pi4-micro-hdmi': () => import('./Pi4HdmiDemo.svelte'),
+  'pi4-heat-throttling': () => import('./PiHeatDemo.svelte'),
 };
