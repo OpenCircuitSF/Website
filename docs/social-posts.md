@@ -40,10 +40,11 @@ Pick one or two tags from what the guide is about:
 | Tag | When |
 |---|---|
 | `#esp32` | The guide is about the ESP32: it is in the `esp32` set, or its tags include `ESP32` (for example `soldering-header-pins`). A guide that only mentions an ESP32 in passing does not get it. |
+| `#raspberrypi` | The guide is about the Raspberry Pi: it is in the `pi` set, or its tags include `Raspberry Pi`. |
 | `#electronics` | Every guide. |
 
-So an ESP32 guide carries `#esp32 #electronics`, and every other guide carries
-`#electronics`.
+So an ESP32 guide carries `#esp32 #electronics`, a Raspberry Pi guide carries
+`#raspberrypi #electronics`, and every other guide carries `#electronics`.
 
 **Don't use narrow tool or technique tags** such as `#soldering` or
 `#multimeter`. Few people follow them, and `#electronics` already covers those
