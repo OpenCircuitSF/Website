@@ -424,3 +424,27 @@ Use the shared STYLE block. A relay coil on the left releases a sharp, jagged li
 - **Output:** `internal/seo/cardassets/guides/bjt-vs-mosfet.png`, 1200×630 PNG
 
 Use the shared STYLE block. Top-down view of a single circuit trace that forks in two. The left branch runs to a small transistor and a little buzzer; the right branch runs to a chunky MOSFET and a big motor. A crossroads composition, flat and graphic.
+
+### pi-imager-setup
+
+- **Title:** Setting up a Raspberry Pi with no keyboard or screen
+- **Hook:** Raspberry Pi Imager can set the WiFi, your user and SSH before the Pi ever boots. Switch each one off and see how the Pi fails without it.
+- **Output:** `internal/seo/cardassets/guides/pi-imager-setup.png`, 1200×630 PNG
+
+Use the shared STYLE block. A microSD card on the left, with a short checklist of five ticked boxes floating above it, slides toward a small bare Raspberry Pi board on the right. No keyboard or monitor anywhere; a faint WiFi arc rises from the Pi. Calm, orderly composition.
+
+### pi-wifi-2-4ghz
+
+- **Title:** Why your Pi never joins the WiFi: 2.4 GHz vs 5 GHz
+- **Hook:** You flashed the card, typed the WiFi password, and the Pi never appears. If your network is 5 GHz only, a Zero 2W can’t even see it.
+- **Output:** `internal/seo/cardassets/guides/pi-wifi-2-4ghz.png`, 1200×630 PNG
+
+Use the shared STYLE block. A home router on the left sends out two sets of rings, one wide and one tight. A tiny Raspberry Pi Zero board on the right sits inside the reach of only the wide rings, while the tight rings stop short of it. No text or numbers.
+
+### pi-bookworm-changes
+
+- **Title:** Old Raspberry Pi tutorials on Bookworm: what moved
+- **Hook:** config.txt moved, wpa_supplicant.conf is ignored and pip install refuses. Pick a step from an old tutorial and see what it does now, and what to type instead.
+- **Output:** `internal/seo/cardassets/guides/pi-bookworm-changes.png`, 1200×630 PNG
+
+Use the shared STYLE block. An open, dog-eared paper tutorial on the left, one of its steps struck through; an arrow leads to a clean terminal window on the right. A small bookworm peeks out of the old paper. Light, friendly mood.

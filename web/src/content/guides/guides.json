@@ -24,6 +24,11 @@
       "id": "components",
       "title": "Components",
       "blurb": "Resistors, capacitors, LEDs, transistors and MOSFETs: what each part does and how to pick the right one."
+    },
+    {
+      "id": "pi",
+      "title": "Raspberry Pi",
+      "blurb": "Setting up a Raspberry Pi without a screen, keeping it powered and its SD card healthy, and the projects we run on them: a streaming speaker and RGB LED panels."
     }
   ],
   "workshopGuides": [
@@ -547,6 +552,42 @@
       ],
       "post": "Transistor or MOSFET? Set your load current and supply voltage and see which one to use with an ESP32, and how much heat each would make.",
       "set": "components"
+    },
+    {
+      "slug": "pi-imager-setup",
+      "title": "Setting up a Raspberry Pi with no keyboard or screen",
+      "hook": "Raspberry Pi Imager can set the WiFi, your user and SSH before the Pi ever boots. Switch each one off and see how the Pi fails without it.",
+      "minutes": 4,
+      "tags": [
+        "Raspberry Pi",
+        "setup"
+      ],
+      "post": "No keyboard, no monitor? Raspberry Pi Imager sets the WiFi, a user and SSH before the first boot. Switch each setting off and see how a headless Pi fails without it.",
+      "set": "pi"
+    },
+    {
+      "slug": "pi-wifi-2-4ghz",
+      "title": "Why your Pi never joins the WiFi: 2.4 GHz vs 5 GHz",
+      "hook": "You flashed the card, typed the WiFi password, and the Pi never appears. If your network is 5 GHz only, a Zero 2W can’t even see it.",
+      "minutes": 3,
+      "tags": [
+        "Raspberry Pi",
+        "WiFi"
+      ],
+      "post": "You flashed the card, typed the WiFi password, and the Pi never appears. If your network is 5 GHz only, a Zero 2W can’t even see it. Pick a router and a board and see.",
+      "set": "pi"
+    },
+    {
+      "slug": "pi-bookworm-changes",
+      "title": "Old Raspberry Pi tutorials on Bookworm: what moved",
+      "hook": "config.txt moved, wpa_supplicant.conf is ignored and pip install refuses. Pick a step from an old tutorial and see what it does now, and what to type instead.",
+      "minutes": 4,
+      "tags": [
+        "Raspberry Pi",
+        "Bookworm"
+      ],
+      "post": "Following an older Raspberry Pi tutorial? On Bookworm, config.txt moved, wpa_supplicant.conf is ignored and pip install refuses. See each old step next to the one that works now.",
+      "set": "pi"
     }
   ]
 }

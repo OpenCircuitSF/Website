@@ -24,6 +24,7 @@ describe('GuidesIndex sets', () => {
       'Multimeter',
       'Soldering',
       'Components',
+      'Raspberry Pi',
       'Workshop guides',
     ]);
     const nav = screen.getByRole('navigation', { name: 'Filter guides' });
@@ -35,6 +36,7 @@ describe('GuidesIndex sets', () => {
       '/guides?set=multimeter',
       '/guides?set=soldering',
       '/guides?set=components',
+      '/guides?set=pi',
     ]);
     expect(links[0].getAttribute('aria-current')).toBe('page');
   });
