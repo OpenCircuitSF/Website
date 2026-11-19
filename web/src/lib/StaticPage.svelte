@@ -20,15 +20,18 @@
   import StatusList from './StatusList.svelte';
   import Panel from './Panel.svelte';
   import TraceDivider from './TraceDivider.svelte';
+  import type { Snippet } from 'svelte';
   import { externalLinkAttrs, type StaticPageBlock, type StaticPageContent } from './staticPage';
 
   interface Props {
     content: StaticPageContent;
     terminalTitle: string;
     promptText: string;
+    /** #0735: optional nav rendered first inside <main> (the docs nav). */
+    nav?: Snippet;
   }
 
-  let { content, terminalTitle, promptText }: Props = $props();
+  let { content, terminalTitle, promptText, nav }: Props = $props();
 </script>
 
 {#snippet blockView(block: StaticPageBlock)}
@@ -49,10 +52,14 @@
         >
       {/each}
     </p>
+  {:else if block.type === 'code'}
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <pre class="code-block" tabindex="0" role="region" aria-label={block.label}><code>{block.text}</code></pre>
   {/if}
 {/snippet}
 
 <main id="main-content" class="app-shell static-shell">
+  {#if nav}{@render nav()}{/if}
   <TerminalPanel title={terminalTitle}>
     <Prompt text={promptText} />
     <h1 class="headline" tabindex="-1">{content.h1}</h1>
@@ -99,5 +106,22 @@
   }
   .static-shell p:last-child {
     margin-bottom: 0;
+  }
+
+  .code-block {
+    overflow-x: auto;
+    max-width: 100%;
+    margin: 0 0 var(--space-3);
+    padding: var(--space-3);
+    border: var(--border-w) solid var(--border);
+    background: var(--bg-panel);
+    font-size: var(--fs-sm);
+  }
+  .code-block:last-child {
+    margin-bottom: 0;
+  }
+  .code-block:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 </style>

@@ -109,7 +109,7 @@ func TestPageMeta_MatchesRenderedHead(t *testing.T) {
 	}
 	site := newSite([]byte(testTemplate), testBaseURL, ws, ar, art)
 
-	paths := []string{"/", "/about", "/privacy", "/events", "/subscribe", "/archive", "/guides",
+	paths := []string{"/", "/about", "/privacy", "/events", "/subscribe", "/archive", "/guides", "/docs", "/docs/newsletter",
 		"/events/solder-101", "/events/gone", "/events/nope", "/archive/09-2026",
 		"/login", "/confirm", "/no-such-page", "/guides/"}
 	for _, g := range all {

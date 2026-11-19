@@ -217,6 +217,7 @@ var fallbackNav = []navLink{
 	{"/about", "About"},
 	{"/subscribe", "Subscribe"},
 	{"/archive", "Archive"},
+	{"/docs", "Docs"},
 	{"/privacy", "Privacy policy"},
 }
 
@@ -348,7 +349,7 @@ var pageTemplate = template.Must(template.New("nav").Parse(pageTemplateSource))
 
 const pageTemplateSource = `
 {{define "nav"}}<header class="app-shell"><nav aria-label="Site"><ul>{{range .Nav}}<li><a href="{{.Href}}">{{.Label}}</a></li>{{end}}</ul></nav></header>{{end}}
-{{define "contentBlock"}}{{if eq .Type "p"}}<p{{if .Muted}} class="text-muted"{{end}}>{{if .Strong}}<strong>{{.Strong}}</strong> {{end}}{{.Text}}{{if .Link.Href}}<a href="{{.Link.Href}}">{{.Link.Label}}</a>{{end}}{{.Tail}}</p>{{else if eq .Type "list"}}<ul>{{range .Items}}<li>{{.}}</li>{{end}}</ul>{{else if eq .Type "links"}}<p>{{range $i, $l := .Links}}{{if $i}} · {{end}}<a href="{{$l.Href}}" target="_blank" rel="noopener noreferrer">{{$l.Label}}</a>{{end}}</p>{{end}}{{end}}
+{{define "contentBlock"}}{{if eq .Type "p"}}<p{{if .Muted}} class="text-muted"{{end}}>{{if .Strong}}<strong>{{.Strong}}</strong> {{end}}{{.Text}}{{if .Link.Href}}<a href="{{.Link.Href}}">{{.Link.Label}}</a>{{end}}{{.Tail}}</p>{{else if eq .Type "list"}}<ul>{{range .Items}}<li>{{.}}</li>{{end}}</ul>{{else if eq .Type "links"}}<p>{{range $i, $l := .Links}}{{if $i}} · {{end}}<a href="{{$l.Href}}"{{if $l.External}} target="_blank" rel="noopener noreferrer"{{end}}>{{$l.Label}}</a>{{end}}</p>{{else if eq .Type "code"}}<pre tabindex="0" role="region" aria-label="{{.Label}}"><code>{{.Text}}</code></pre>{{end}}{{end}}
 {{define "body"}}{{template "nav" .}}<main id="main-content" class="app-shell">
 <h1>{{.H1}}</h1>
 {{if eq .Kind "static"}}{{range .Blocks}}{{if .Heading}}<h2>{{.Text}}</h2>{{else}}<p>{{.Text}}</p>{{end}}{{end}}

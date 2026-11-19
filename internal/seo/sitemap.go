@@ -156,6 +156,12 @@ func (s *Sitemap) Build() ([]byte, error) {
 		})
 	}
 
+	// #0735: every docs page, compiled into the binary like the copy pages,
+	// so no lastmod either.
+	for _, p := range docsPaths() {
+		set.URLs = append(set.URLs, sitemapURL{Loc: s.baseURL + p})
+	}
+
 	// #0656: every guide in the embedded catalog. Static content compiled
 	// into the binary, so no lastmod, like the copy pages above.
 	for _, g := range guides.All() {

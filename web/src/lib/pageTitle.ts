@@ -51,6 +51,7 @@ import aboutPage from '../content/about.json';
 import privacyPage from '../content/privacy.json';
 import type { Route, RouteName } from './router';
 import { topicGuideBySlug } from './guides';
+import { docsPageByPath } from './docsPages';
 
 const SUFFIX = ` — ${APP_NAME}`;
 
@@ -100,6 +101,8 @@ const STATIC_HEADING: Record<RouteName, string> = {
   about: aboutPage.h1,
   // guarded — web/src/views/PrivacyPolicy.svelte, same single-source shape.
   privacy: privacyPage.h1,
+  // fallback — web/src/views/Docs.svelte renders each page's h1 from web/src/content/docs/*.json; titleForRoute reads docsPages.ts
+  docs: 'Docs',
   // guarded — web/src/views/Subscribe.svelte
   subscribe: 'Subscribe',
   // guarded — web/src/views/SubscribeThanks.svelte
@@ -137,6 +140,10 @@ export function titleForRoute(route: Route): string {
   if (route.name === 'topic-guide') {
     const topic = topicGuideBySlug(route.params.slug ?? '');
     if (topic) return formatTitle(topic.title);
+  }
+  if (route.name === 'docs') {
+    const p = docsPageByPath(route.path);
+    if (p) return formatTitle(p.h1);
   }
   return formatTitle(STATIC_HEADING[route.name]);
 }

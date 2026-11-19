@@ -386,6 +386,23 @@ func defaultStaticRouteMeta(baseURL string, art map[string]guideArt) map[string]
 			page:          pageContent{kind: pageGuide, guide: g.Slug},
 		}
 	}
+	// #0735: every docs page, its title and description read from its own
+	// content JSON, so adding a docs page needs no entry here.
+	for _, p := range docsPaths() {
+		sp := staticPages[p]
+		m[p] = RouteMeta{
+			Title:         sp.Title,
+			Description:   sp.Description,
+			OGTitle:       sp.H1,
+			OGDescription: sp.Description,
+			OGImage:       image,
+			OGURL:         baseURL + p,
+			Canonical:     baseURL + p,
+			OGType:        "website",
+			TwitterCard:   "summary_large_image",
+			page:          pageContent{kind: pageStatic, path: p},
+		}
+	}
 	return m
 }
 

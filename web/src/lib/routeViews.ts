@@ -42,6 +42,7 @@ export const LAZY_ROUTE_LOADERS: Readonly<Partial<Record<RouteName, Loader>>> = 
   confirm: () => import('../views/ConfirmSubscription.svelte'),
   preferences: () => import('../views/PreferenceCenter.svelte'),
   unsubscribe: () => import('../views/Unsubscribe.svelte'),
+  docs: () => import('../views/Docs.svelte'),
 };
 
 const DEMO_PREFIX = 'demo:';

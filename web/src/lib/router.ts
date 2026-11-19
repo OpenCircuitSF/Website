@@ -34,6 +34,7 @@ export type RouteName =
   | 'topic-guide'
   | 'about'
   | 'privacy'
+  | 'docs'
   | 'subscribe'
   | 'subscribe-thanks'
   | 'confirm'
@@ -77,6 +78,10 @@ export const STATIC_ROUTES: Readonly<Record<string, RouteName>> = {
   '/guides': 'guides',
   '/about': 'about',
   '/privacy': 'privacy',
+  '/docs': 'docs',
+  '/docs/using-the-site': 'docs',
+  '/docs/newsletter': 'docs',
+  '/docs/feeds': 'docs',
   '/subscribe': 'subscribe',
   '/subscribe/thanks': 'subscribe-thanks',
   '/confirm': 'confirm',

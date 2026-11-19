@@ -42,6 +42,11 @@ var knownStaticRoutes = map[string]bool{
 	"/account":          true,
 	"/admin":            true,
 	"/guides":           true,
+	// #0735: the website Docs section.
+	"/docs":                true,
+	"/docs/using-the-site": true,
+	"/docs/newsletter":     true,
+	"/docs/feeds":          true,
 }
 
 // workshopDetailPattern is one of the two dynamic paths the router supports

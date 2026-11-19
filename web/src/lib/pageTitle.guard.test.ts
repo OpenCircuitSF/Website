@@ -213,7 +213,7 @@ function firstH1Text(file: string): string {
  * fallbacks, so removing a route from here without removing it from
  * STATIC_HEADING -- or vice versa -- is a compile error, not a silent gap. */
 const GUARDED_VIEW: Record<
-  Exclude<RouteName, 'workshop-detail' | 'archive-detail' | 'confirm' | 'unsubscribe' | 'topic-guide'>,
+  Exclude<RouteName, 'workshop-detail' | 'archive-detail' | 'confirm' | 'unsubscribe' | 'topic-guide' | 'docs'>,
   string
 > = {
   home: 'Home.svelte',
@@ -271,8 +271,9 @@ describe('pageTitle guard (#0238): titleForRoute is built from the SAME text as 
       'workshop-guide',
       'guides',
       'topic-guide',
+      'docs',
     ];
-    const fallbacks = new Set(['workshop-detail', 'archive-detail', 'confirm', 'unsubscribe', 'topic-guide']);
+    const fallbacks = new Set(['workshop-detail', 'archive-detail', 'confirm', 'unsubscribe', 'topic-guide', 'docs']);
     const guarded = new Set(Object.keys(GUARDED_VIEW));
     for (const name of ALL_ROUTE_NAMES) {
       expect(guarded.has(name) || fallbacks.has(name)).toBe(true);
@@ -305,6 +306,10 @@ describe('titleForRoute', () => {
 
   it('resolves workshop-detail to its documented fallback', () => {
     expect(titleForRoute(parsePath('/events/solder-101'))).toBe('Event — Open Circuit SF');
+  });
+
+  it('resolves a docs page to its own h1 (#0735)', () => {
+    expect(titleForRoute(parsePath('/docs/newsletter'))).toBe('The newsletter — Open Circuit SF');
   });
 });
 

@@ -31,7 +31,9 @@ export type StaticPageBlock =
       tail?: string;
     }
   | { type: 'list'; items: string[] }
-  | { type: 'links'; items: StaticPageLinkRef[] };
+  | { type: 'links'; items: StaticPageLinkRef[] }
+  /** #0735: a keyboard-scrollable code block; `label` is its accessible name. */
+  | { type: 'code'; label: string; text: string };
 
 export interface StaticPageSection {
   heading: string;
@@ -40,6 +42,10 @@ export interface StaticPageSection {
 
 export interface StaticPageContent {
   h1: string;
+  /** #0735: page title and meta description; required on docs pages (the
+   * Go loader enforces it), optional on About and Privacy. */
+  title?: string;
+  description?: string;
   intro: StaticPageBlock[];
   sections: StaticPageSection[];
   /** Every link destination, keyed by the `key` a block references. Keeps
@@ -85,6 +91,12 @@ function parseBlock(v: unknown, where: string): StaticPageBlock {
       }
       return { type: 'links', items: v.items.map((l, i) => parseLinkRef(l, `${where}.items[${i}]`)) };
     }
+    case 'code': {
+      if (typeof v.text !== 'string' || v.text === '' || typeof v.label !== 'string' || v.label === '') {
+        throw new Error(`staticPage: ${where} is a "code" block without text or label`);
+      }
+      return { type: 'code', label: v.label, text: v.text };
+    }
     default:
       throw new Error(`staticPage: ${where} has unknown block type ${String(v.type)}`);
   }
@@ -120,15 +132,20 @@ export function parseStaticPage(raw: unknown): StaticPageContent {
       blocks: s.blocks.map((b, j) => parseBlock(b, `sections[${i}].blocks[${j}]`)),
     };
   });
-  return { h1: raw.h1, intro, sections, links: raw.links as Record<string, string> };
+  const page: StaticPageContent = { h1: raw.h1, intro, sections, links: raw.links as Record<string, string> };
+  if (typeof raw.title === 'string') page.title = raw.title;
+  if (typeof raw.description === 'string') page.description = raw.description;
+  return page;
 }
 
 /** Whether a link destination should open in a new tab with the SPA's
  * standard external rel attributes. mailto: contacts open in the mail
  * client (no target/rel), matching what About.svelte has always rendered
- * for its contact line; everything else in these pages is an external
- * https URL rendered target="_blank" rel="noopener noreferrer". */
+ * for its contact line; an internal /path link (#0735, the docs pages)
+ * stays a plain same-tab anchor so the router intercepts it; everything
+ * else is an external https URL rendered target="_blank"
+ * rel="noopener noreferrer". */
 export function externalLinkAttrs(href: string): { target?: string; rel?: string } {
-  if (href.startsWith('mailto:')) return {};
+  if (href.startsWith('mailto:') || href.startsWith('/')) return {};
   return { target: '_blank', rel: 'noopener noreferrer' };
 }

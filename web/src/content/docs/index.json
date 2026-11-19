@@ -1,0 +1,51 @@
+{
+  "title": "Docs — Open Circuit SF",
+  "description": "How to use the Open Circuit SF website: events, guides, the newsletter, and feeds.",
+  "h1": "Docs",
+  "intro": [
+    {
+      "type": "p",
+      "text": "How to use this website: finding events, reading the guides, getting the newsletter, and following along with feeds."
+    }
+  ],
+  "sections": [
+    {
+      "heading": "Using the site",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Events, registering, guides, the newsletter archive, and how to reach us. ",
+          "link": { "key": "using", "label": "Read Using the site" },
+          "tail": "."
+        }
+      ]
+    },
+    {
+      "heading": "Newsletter",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Subscribing, choosing topics, unsubscribing, and privacy. ",
+          "link": { "key": "newsletter", "label": "Read The newsletter" },
+          "tail": "."
+        }
+      ]
+    },
+    {
+      "heading": "Feeds",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "The newsletter archive feed and the events calendar feed. ",
+          "link": { "key": "feeds", "label": "Read Feeds" },
+          "tail": "."
+        }
+      ]
+    }
+  ],
+  "links": {
+    "using": "/docs/using-the-site",
+    "newsletter": "/docs/newsletter",
+    "feeds": "/docs/feeds"
+  }
+}

@@ -20,6 +20,23 @@ describe('parseStaticPage', () => {
     expect(page.sections[0].blocks[0]).toEqual({ type: 'list', items: ['a'] });
   });
 
+  // #0735: the code block type.
+  it('parses a code block', () => {
+    const page = parseStaticPage({
+      h1: 'H',
+      intro: [{ type: 'code', label: 'Feed URL', text: 'https://x.test/feed.xml' }],
+      sections: [{ heading: 's', blocks: [{ type: 'p', text: 'y' }] }],
+      links: {},
+    });
+    expect(page.intro[0]).toEqual({ type: 'code', label: 'Feed URL', text: 'https://x.test/feed.xml' });
+  });
+
+  it('rejects a code block without a label', () => {
+    expect(() =>
+      parseStaticPage({ h1: 'H', intro: [{ type: 'code', text: 'x' }], sections: [{ heading: 's', blocks: [{ type: 'p', text: 'y' }] }], links: {} }),
+    ).toThrow(/code/);
+  });
+
   it('rejects a missing h1', () => {
     expect(() => parseStaticPage({ intro: [{ type: 'p', text: 'x' }], sections: [{ heading: 's', blocks: [{ type: 'p', text: 'y' }] }], links: {} })).toThrow();
   });
@@ -69,5 +86,9 @@ describe('externalLinkAttrs', () => {
 
   it('leaves mailto destinations alone', () => {
     expect(externalLinkAttrs('mailto:contact@opencircuitsf.com')).toEqual({});
+  });
+
+  it('leaves internal /path links as same-tab anchors (#0735)', () => {
+    expect(externalLinkAttrs('/docs')).toEqual({});
   });
 });

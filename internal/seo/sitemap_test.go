@@ -110,6 +110,7 @@ func TestSitemap_DataDerivedLastmodForIndexPages(t *testing.T) {
 		testBaseURL + "/about":           "",
 		testBaseURL + "/privacy":         "",
 		testBaseURL + "/subscribe":       "",
+		testBaseURL + "/docs":            "",
 	}
 	for loc, wantLastMod := range want {
 		if got := lastmods[loc]; got != wantLastMod {

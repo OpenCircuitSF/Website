@@ -1,0 +1,42 @@
+{
+  "title": "Feeds — Open Circuit SF",
+  "description": "Follow Open Circuit SF with the newsletter archive's Atom feed and the events calendar feed.",
+  "h1": "Feeds",
+  "intro": [
+    {
+      "type": "p",
+      "text": "Two feeds let you follow along without visiting the site."
+    }
+  ],
+  "sections": [
+    {
+      "heading": "Newsletter archive feed",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "An Atom feed of the published newsletter archive. Add it to a feed reader."
+        },
+        {
+          "type": "code",
+          "label": "Feed URL",
+          "text": "https://www.opencircuitsf.com/archive/feed.xml"
+        }
+      ]
+    },
+    {
+      "heading": "Events calendar",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Upcoming events as an iCalendar feed, including canceled events that are still listed. Subscribe to it from a calendar app."
+        },
+        {
+          "type": "code",
+          "label": "Feed URL",
+          "text": "https://www.opencircuitsf.com/events.ics"
+        }
+      ]
+    }
+  ],
+  "links": {}
+}

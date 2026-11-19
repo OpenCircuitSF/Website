@@ -207,6 +207,8 @@
     <About />
   {:else if $currentRoute.name === 'privacy'}
     <PrivacyPolicy />
+  {:else if $currentRoute.name === 'docs'}
+    <LazyView key="docs" />
   {:else if $currentRoute.name === 'subscribe'}
     <Subscribe />
   {:else if $currentRoute.name === 'subscribe-thanks'}

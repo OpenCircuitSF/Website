@@ -1,0 +1,89 @@
+{
+  "title": "Using the site — Open Circuit SF",
+  "description": "Find Open Circuit SF events and workshops, register for them, read the guides, and browse the newsletter archive.",
+  "h1": "Using the site",
+  "intro": [
+    {
+      "type": "p",
+      "text": "Open Circuit SF runs hands-on electronics workshops in San Francisco. This site lists the events, holds the guides, and keeps an archive of past newsletters."
+    }
+  ],
+  "sections": [
+    {
+      "heading": "Events",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "The Events page lists upcoming workshops and other events, followed by past events. You can filter the list by event type.",
+          "link": { "key": "events", "label": "See the events" },
+          "tail": "."
+        }
+      ]
+    },
+    {
+      "heading": "Registering",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Registration does not happen on this site. When an event has a sign-up page, its event page shows a \"Register for this event\" link that opens that page. Upcoming sessions are also listed on the Luma calendar, linked as \"Calendar\" in the footer of every page."
+        },
+        {
+          "type": "links",
+          "items": [{ "key": "luma", "label": "View the calendar" }]
+        }
+      ]
+    },
+    {
+      "heading": "Guides",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Short, hands-on electronics explainers: one idea each, with something to press, drag or break. ",
+          "link": { "key": "guides", "label": "Browse the guides" },
+          "tail": "."
+        }
+      ]
+    },
+    {
+      "heading": "Newsletter archive",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Past newsletter emails are published in the archive. ",
+          "link": { "key": "archive", "label": "Read the archive" },
+          "tail": "."
+        },
+        {
+          "type": "p",
+          "text": "To get them by email, see ",
+          "link": { "key": "newsletter", "label": "The newsletter" },
+          "tail": "."
+        }
+      ]
+    },
+    {
+      "heading": "Contact",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Email us at ",
+          "link": { "key": "email", "label": "contact@opencircuitsf.com" },
+          "tail": ", or find the group on Discord."
+        },
+        {
+          "type": "links",
+          "items": [{ "key": "discord", "label": "Join the Discord" }]
+        }
+      ]
+    }
+  ],
+  "links": {
+    "events": "/events",
+    "guides": "/guides",
+    "archive": "/archive",
+    "newsletter": "/docs/newsletter",
+    "luma": "https://luma.com/opencircuitsf",
+    "discord": "https://discord.gg/Fq9ug6QXV3",
+    "email": "mailto:contact@opencircuitsf.com"
+  }
+}

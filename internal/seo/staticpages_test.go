@@ -5,10 +5,13 @@
 package seo
 
 import (
+	"encoding/xml"
 	"html"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 )
 
 // singleSourcePages pairs each single-source route with the shared JSON
@@ -24,6 +27,11 @@ var singleSourcePages = []struct {
 }{
 	{"/about", "web/src/content/about.json", "web/src/views/About.svelte"},
 	{"/privacy", "web/src/content/privacy.json", "web/src/views/PrivacyPolicy.svelte"},
+	// #0735: the docs pages, one shared JSON file each, all rendered by Docs.svelte.
+	{"/docs", "web/src/content/docs/index.json", "web/src/views/Docs.svelte"},
+	{"/docs/using-the-site", "web/src/content/docs/using-the-site.json", "web/src/views/Docs.svelte"},
+	{"/docs/newsletter", "web/src/content/docs/newsletter.json", "web/src/views/Docs.svelte"},
+	{"/docs/feeds", "web/src/content/docs/feeds.json", "web/src/views/Docs.svelte"},
 }
 
 // staticBlockTexts returns each piece of plain text one block contributes
@@ -51,6 +59,8 @@ func staticBlockTexts(b staticBlock) []string {
 			out = append(out, l.Label)
 		}
 		return out
+	case "code":
+		return []string{b.Text, b.Label}
 	}
 	return nil
 }
@@ -159,6 +169,7 @@ func TestStaticSourceIsTheOneSource(t *testing.T) {
 		{"web/src/views/About.svelte", "../content/about.json"},
 		{"web/src/views/PrivacyPolicy.svelte", "../content/privacy.json"},
 		{"web/src/lib/links.ts", "../content/about.json"},
+		{"web/src/views/Docs.svelte", "../content/docs/"},
 	}
 	for _, c := range cases {
 		src, err := os.ReadFile(repoPath(c.svelte))
@@ -184,11 +195,86 @@ func TestLoadStaticPageRejectsBadContent(t *testing.T) {
 		{"no intro", `{"h1":"H","intro":[],"sections":[{"heading":"s","blocks":[{"type":"p","text":"y"}]}],"links":{}}`},
 		{"unknown type", `{"h1":"H","intro":[{"type":"quote","text":"x"}],"sections":[{"heading":"s","blocks":[{"type":"p","text":"y"}]}],"links":{}}`},
 		{"unknown link key", `{"h1":"H","intro":[{"type":"p","text":"x","link":{"key":"nope","label":"L"}}],"sections":[{"heading":"s","blocks":[{"type":"p","text":"y"}]}],"links":{}}`},
+		{"code without label", `{"h1":"H","intro":[{"type":"code","text":"x"}],"sections":[{"heading":"s","blocks":[{"type":"p","text":"y"}]}],"links":{}}`},
+		{"code without text", `{"h1":"H","intro":[{"type":"code","label":"L"}],"sections":[{"heading":"s","blocks":[{"type":"p","text":"y"}]}],"links":{}}`},
 		{"links block missing key", `{"h1":"H","intro":[{"type":"links","items":[{"key":"gone","label":"L"}]}],"sections":[{"heading":"s","blocks":[{"type":"p","text":"y"}]}],"links":{}}`},
 	}
 	for _, c := range cases {
 		if _, err := loadStaticPage([]byte(c.raw)); err == nil {
 			t.Errorf("%s: loadStaticPage accepted invalid content", c.name)
+		}
+	}
+}
+
+// TestDocsPagesAreRoutedEverywhere (#0735): every docs content file is a
+// known SPA route, has its own route meta read from its JSON, and is in the
+// sitemap with no lastmod. A docs page missing from any one place fails here.
+func TestDocsPagesAreRoutedEverywhere(t *testing.T) {
+	paths := docsPaths()
+	if len(paths) < 4 {
+		t.Fatalf("docsPaths() = %v, want at least the four pass-A pages", paths)
+	}
+	r := newTestRenderer(nil)
+	body, err := NewSitemap(testBaseURL, nil, nil).Build()
+	if err != nil {
+		t.Fatalf("sitemap Build: %v", err)
+	}
+	var parsed urlset
+	if err := xml.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("invalid sitemap XML: %v", err)
+	}
+	lastmod := map[string]string{}
+	have := map[string]bool{}
+	for _, u := range parsed.URLs {
+		have[u.Loc] = true
+		lastmod[u.Loc] = u.LastMod
+	}
+	for _, p := range paths {
+		if !handlers.IsKnownRoute(p) {
+			t.Errorf("%s: not in handlers' knownStaticRoutes", p)
+		}
+		meta, ok := r.static[p]
+		if !ok {
+			t.Errorf("%s: no route meta", p)
+		} else {
+			if meta.Title != staticPages[p].Title {
+				t.Errorf("%s: Title = %q, want %q", p, meta.Title, staticPages[p].Title)
+			}
+			if meta.Canonical != testBaseURL+p {
+				t.Errorf("%s: Canonical = %q, want %q", p, meta.Canonical, testBaseURL+p)
+			}
+		}
+		loc := testBaseURL + p
+		if !have[loc] {
+			t.Errorf("%s: missing from the sitemap", p)
+		} else if lastmod[loc] != "" {
+			t.Errorf("%s: sitemap lastmod = %q, want none", p, lastmod[loc])
+		}
+	}
+}
+
+// TestRender_DocsCodeAndInternalLinks (#0735): code blocks render as a
+// keyboard-scrollable labelled region, internal links stay same-tab, and
+// every docs page has exactly one <h1>.
+func TestRender_DocsCodeAndInternalLinks(t *testing.T) {
+	r := newTestRenderer(nil)
+	feeds := string(r.Render("/docs/feeds"))
+	want := `<pre tabindex="0" role="region" aria-label="Feed URL"><code>https://www.opencircuitsf.com/archive/feed.xml</code></pre>`
+	if !strings.Contains(feeds, want) {
+		t.Errorf("/docs/feeds: missing %s", want)
+	}
+	index := string(r.Render("/docs"))
+	i := strings.Index(index, `<a href="/docs/newsletter"`)
+	if i < 0 {
+		t.Fatalf("/docs: no anchor to /docs/newsletter: %s", index)
+	}
+	anchor := index[i : i+strings.Index(index[i:], ">")+1]
+	if anchor != `<a href="/docs/newsletter">` {
+		t.Errorf("/docs: internal anchor = %s, want no target or rel", anchor)
+	}
+	for _, p := range docsPaths() {
+		if got := strings.Count(string(r.Render(p)), "<h1"); got != 1 {
+			t.Errorf("%s: <h1> count = %d, want 1", p, got)
 		}
 	}
 }

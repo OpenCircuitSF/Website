@@ -1,0 +1,69 @@
+{
+  "title": "The newsletter — Open Circuit SF",
+  "description": "Subscribe to the Open Circuit SF newsletter, choose your topics in the preference center, and unsubscribe in one click.",
+  "h1": "The newsletter",
+  "intro": [
+    {
+      "type": "p",
+      "text": "The newsletter tells you about new events. You pick the topics you care about, and you can change them or leave at any time."
+    }
+  ],
+  "sections": [
+    {
+      "heading": "Subscribing",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Enter your email address and pick your topics on the ",
+          "link": { "key": "subscribe", "label": "Subscribe page" },
+          "tail": "."
+        },
+        {
+          "type": "p",
+          "text": "Signup uses double opt-in. After you submit the form, you see \"Check your email\" and we send a confirmation link. Nothing else is sent to you until you click that link."
+        }
+      ]
+    },
+    {
+      "heading": "Choosing topics",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Every email has a \"Manage your interests\" link. It opens the preference center, where you can change your interests or leave the list."
+        }
+      ]
+    },
+    {
+      "heading": "Unsubscribing",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "There are three ways to leave:"
+        },
+        {
+          "type": "list",
+          "items": [
+            "your mail app’s own Unsubscribe button, which works straight away with one click",
+            "the \"Unsubscribe from everything\" link in the footer of every email",
+            "\"Leave the list\" in the preference center"
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "Privacy",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "To ask us to erase or export your data, email contact@opencircuitsf.com. What we collect and why is in the ",
+          "link": { "key": "privacy", "label": "privacy policy" },
+          "tail": "."
+        }
+      ]
+    }
+  ],
+  "links": {
+    "subscribe": "/subscribe",
+    "privacy": "/privacy"
+  }
+}

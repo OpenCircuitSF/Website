@@ -29,6 +29,8 @@
       <span class="sep" aria-hidden="true">·</span>
       <a href="/archive">Archive</a>
       <span class="sep" aria-hidden="true">·</span>
+      <a href="/docs">Docs</a>
+      <span class="sep" aria-hidden="true">·</span>
       <a href="mailto:{CONTACT_EMAIL}">{CONTACT_EMAIL}</a>
       <span class="sep" aria-hidden="true">·</span>
       <a href="/privacy">Privacy policy</a>
