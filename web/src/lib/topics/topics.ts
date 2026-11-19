@@ -936,6 +936,61 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     ],
     takeaway: 'Sound off, the right mapping, a slowdown of 2 or more, a reserved core, and its own 5 V supply. Then trade PWM bits for refresh.',
   },
+  // Raspberry Pi batch 2: finding, models and GPIO (#0723)
+  'pi-find-on-network': {
+    tryIt: 'Pick the network the Pi is on and your laptop’s system. See which ways of finding it work, and why some networks hide it completely.',
+    ideas: [
+      {
+        title: 'Try the name first',
+        body: 'Raspberry Pi OS answers to its hostname plus .local, using multicast DNS (the Avahi service). If you set the hostname mypi in Imager, run ping mypi.local and the reply shows its address. macOS, current Windows and most desktop Linux understand .local names. Give a new Pi a few minutes on its first boot before you look.',
+      },
+      {
+        title: 'Then the router, or a scan',
+        body: 'Your router’s web page lists the devices it has given addresses to; look for the hostname. A scan works too: nmap from the laptop, or a scanner app such as Fing on a phone on the same WiFi, which lists the maker as Raspberry Pi. arp -a only lists devices the laptop has talked to recently, so ping first.',
+      },
+      {
+        title: 'Some networks hide it',
+        body: 'Guest networks usually keep devices apart (client isolation), so the laptop can’t reach the Pi even with its address. Café WiFi with a sign-in page never lets the Pi online, because it can’t click Accept. Many office and campus networks block the multicast that .local names need. Put the laptop and the Pi on a phone hotspot instead, set to 2.4 GHz for a Zero 2W.',
+      },
+    ],
+    takeaway: 'Try yourname.local first, then the router’s list. On guest, café or office WiFi, use a phone hotspot.',
+  },
+  'pi-models-compared': {
+    tryIt: 'Tick what your project needs. See which board fits, what you give up, and which boards it rules out.',
+    ideas: [
+      {
+        title: 'Zero 2W: small, frugal, 2.4 GHz',
+        body: 'A quad-core 1 GHz board with 512 MB of memory, 65 by 30 mm, drawing well under a watt at idle. It has 2.4 GHz WiFi only, one mini-HDMI port, one micro-USB data port, and no Ethernet or headphone jack. Ideal for one job that runs all day, like the Volumio speaker at our space.',
+      },
+      {
+        title: 'Pi 4: the all-rounder',
+        body: 'Quad-core 1.8 GHz with 1 to 8 GB, both WiFi bands, Gigabit Ethernet, four full-size USB ports, two micro-HDMI ports and a headphone jack, on a 5.1 V 3 A USB-C supply. It is the usual board for RGB LED panels, which is why our two displays run on Pi 4s.',
+      },
+      {
+        title: 'Pi 5: when you need speed',
+        body: 'Quad-core 2.4 GHz and up to 16 GB, two to three times faster than a Pi 4, with the same ports except the headphone jack, plus a PCIe connector, a power button and a real-time clock. It wants a 5 A USB-C supply, and some older libraries and HATs don’t support it yet.',
+      },
+    ],
+    takeaway: 'One small job on WiFi: Zero 2W. Ethernet, two screens or LED panels: Pi 4. Heavy computing: Pi 5.',
+  },
+  'pi-gpio-pinout': {
+    tryIt: 'Tap a pin to see what it does. Switch between physical pin numbers and GPIO numbers, and use the filters to find I2C, SPI, UART and PWM.',
+    ideas: [
+      {
+        title: 'Two ways to number a pin',
+        body: 'Physical numbers count the header itself: pin 1 in one corner, odd pins down one row and even pins down the other. GPIO numbers, also called BCM numbers, are the chip’s names for the pins, and they are what code uses: in gpiozero, LED(17) means GPIO 17, which is physical pin 11. The layout is the same on the Zero 2W, Pi 4 and Pi 5.',
+      },
+      {
+        title: '3.3 V only, and not much current',
+        body: 'GPIO pins work at 3.3 V and are not 5 V tolerant: 5 V on a GPIO pin can permanently damage the Pi. A pin can give up to 16 mA, and all of them together 50 mA, so light an LED through a resistor and switch anything bigger with a transistor. Two pins are 5 V, two are 3.3 V, and the eight ground pins are all connected.',
+      },
+      {
+        title: 'Pins with a second job',
+        body: 'GPIO 2 and 3 are I2C, with built-in pull-up resistors. GPIO 7 to 11 are SPI, 14 and 15 are the serial port (UART), and 12, 13, 18 and 19 can do hardware PWM. GPIO 0 and 1 are kept for HAT ID chips. Turn on I2C, SPI or the serial port in sudo raspi-config, under Interface Options.',
+      },
+    ],
+    takeaway: 'Code uses GPIO numbers, not pin numbers. Everything is 3.3 V: never put 5 V on a GPIO pin.',
+  },
 };
 
 export const TOPICS: Topic[] = TOPIC_GUIDES.map((m) => {

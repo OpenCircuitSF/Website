@@ -483,3 +483,27 @@ Use the shared STYLE block. A tiny bare circuit board sits on top of a large boo
 - **Output:** `internal/seo/cardassets/guides/pi-rgb-matrix-flicker.png`, 1200×630 PNG
 
 Use the shared STYLE block. A coarse grid of large square LEDs seen face-on, only about sixteen across and eight down: the left half is a scramble of random coloured pixels, and across the middle it settles into a few clean, broad vertical colour bars on the right. Five small toggle switches along the bottom edge, all flipped to on. Plain near-black ground, no tools or other props. Crisp and still, no motion blur.
+
+### pi-find-on-network
+
+- **Title:** Where’s my Pi? Finding a headless Raspberry Pi on the network
+- **Hook:** It booted, the light is blinking, and you have no idea what address it has. Try mypi.local, the router’s list or a scan, and see which work on your network.
+- **Output:** `internal/seo/cardassets/guides/pi-find-on-network.png`, 1200×630 PNG
+
+Use the shared STYLE block. A small bare, unbranded single-board computer sits alone just right of centre in dark space. On the left an open laptop, its screen glowing with abstract shapes, sends out a few thin concentric search rings toward it, and a simple magnifying-glass outline hovers between them. Lots of negative space, calm and uncluttered.
+
+### pi-models-compared
+
+- **Title:** Zero 2W, Pi 4 or Pi 5: which Raspberry Pi for which job
+- **Hook:** A speaker, a sign, a desktop and a sensor on a battery all want different boards. Tick what your project needs and see which Pi fits, and why.
+- **Output:** `internal/seo/cardassets/guides/pi-models-compared.png`, 1200×630 PNG
+
+Use the shared STYLE block. Three bare, unbranded single-board computers side by side on a near-black ground, small to large: a slim stick-shaped board on the left and two credit-card-sized boards to its right, the last with a small cooling fan. Each lit by green rim light, evenly spaced across the middle band. No logos and no printed markings.
+
+### pi-gpio-pinout
+
+- **Title:** The Raspberry Pi GPIO header: pin numbers, 3.3 V and what each pin does
+- **Hook:** Pin 11 is GPIO 17, the pins run at 3.3 V, and 5 V on one can kill the Pi. Tap any pin on the 40-pin header to see what it does.
+- **Output:** `internal/seo/cardassets/guides/pi-gpio-pinout.png`, 1200×630 PNG
+
+Use the shared STYLE block. Macro photograph of a double row of header pins running diagonally across a dark circuit board, shallow depth of field so most pins fall softly out of focus. One pin near the centre glows bright green, with a single jumper wire rising from it. No silkscreen, labels or numbers.

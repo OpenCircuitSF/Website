@@ -64,6 +64,10 @@ import SdWriteDemo from './SdWriteDemo.svelte';
 // Raspberry Pi: Volumio and RGB panels (#0721)
 import VolumioDemo from './VolumioDemo.svelte';
 import RgbMatrixDemo from './RgbMatrixDemo.svelte';
+// Raspberry Pi batch 2: finding, models and GPIO (#0723)
+import PiFindDemo from './PiFindDemo.svelte';
+import PiModelPicker from './PiModelPicker.svelte';
+import PiGpioHeader from './PiGpioHeader.svelte';
 
 afterEach(cleanup);
 
@@ -725,5 +729,41 @@ describe('guide demos', () => {
     expect(r.container.textContent).toContain('178 Hz');
     expect(r.container.querySelectorAll('animate, animateTransform, animateMotion').length).toBe(0);
     expect(r.container.querySelectorAll('.cell').length).toBe(512);
+  });
+
+  // Raspberry Pi batch 2: finding, models and GPIO (#0723)
+  it('pi find: home WiFi finds mypi.local; a guest network blocks everything', async () => {
+    const r = render(PiFindDemo);
+    expect(r.getByRole('heading', { name: 'Try mypi.local first' })).toBeTruthy();
+    expect(r.container.textContent).toContain('ping -c 3 mypi.local');
+    await fireEvent.click(r.getByRole('radio', { name: /Guest network/ }));
+    expect(r.getByRole('heading', { name: 'You won’t find it on this network' })).toBeTruthy();
+    expect(r.container.textContent).toContain('phone hotspot');
+    await fireEvent.click(r.getByRole('radio', { name: /Windows/ }));
+    expect(r.container.textContent).toContain('ping mypi.local');
+    expect(r.container.textContent).not.toContain('ping -c');
+  });
+
+  it('pi models: 5 GHz WiFi rules out the Zero 2W; heavy computing picks the Pi 5', async () => {
+    const r = render(PiModelPicker);
+    expect(r.getByRole('heading', { level: 3, name: 'Pi Zero 2W' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('checkbox', { name: /5 GHz WiFi/ }));
+    expect(r.getByRole('heading', { level: 3, name: 'Pi 4' })).toBeTruthy();
+    expect(r.container.textContent).toContain('2.4 GHz WiFi only');
+    await fireEvent.click(r.getByRole('checkbox', { name: /Heavy computing/ }));
+    expect(r.getByRole('heading', { level: 3, name: 'Pi 5' })).toBeTruthy();
+  });
+
+  it('pi gpio: pin 11 is GPIO 17; 5 V pins warn; the GPIO scheme relabels the header', async () => {
+    const r = render(PiGpioHeader);
+    expect(r.getByRole('heading', { name: 'Pin 11: GPIO 17' })).toBeTruthy();
+    expect(r.container.textContent).toContain('LED(17)');
+    await fireEvent.click(r.getByRole('button', { name: 'Pin 2: 5 V power' }));
+    expect(r.getByRole('note').textContent).toContain('Never connect');
+    await fireEvent.click(r.getByRole('button', { name: 'GPIO (BCM)' }));
+    expect(r.container.querySelector('svg')!.textContent).toContain('GPIO17');
+    const i2c = r.getByRole('button', { name: 'I2C' });
+    await fireEvent.click(i2c);
+    expect(i2c.getAttribute('aria-pressed')).toBe('true');
   });
 });
