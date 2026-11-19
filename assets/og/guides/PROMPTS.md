@@ -18,7 +18,10 @@ its Bluesky post thumbnail. Filed as `#0709`.
    in the middle band (the safe area below).
 3. Keep the file **under 1,000,000 bytes**, which is Bluesky's thumbnail limit.
    A detailed 1200×630 PNG can go over it; `pngquant --quality 65-90` brings it
-   down without visible loss.
+   down without visible loss. Each image's 640×336 thumbnail must also stay
+   under **40,000 B** (`#0710`, `TestGuideThumb_EmbeddedSetWeight`): a dense,
+   multicoloured, finely detailed image can pass the 1,000,000 B limit and
+   still fail it, so prefer broad shapes and large dark areas.
 4. Save it at the **Output** path named in the prompt:
    `internal/seo/cardassets/guides/<slug>.png`. The file name is the guide's
    slug. The server embeds that directory: a guide with a file there unfurls
@@ -498,7 +501,7 @@ Use the shared STYLE block. A small bare, unbranded single-board computer sits a
 - **Hook:** A speaker, a sign, a desktop and a sensor on a battery all want different boards. Tick what your project needs and see which Pi fits, and why.
 - **Output:** `internal/seo/cardassets/guides/pi-models-compared.png`, 1200×630 PNG
 
-Use the shared STYLE block. Three bare, unbranded single-board computers side by side on a near-black ground, small to large: a slim stick-shaped board on the left and two credit-card-sized boards to its right, the last with a small cooling fan. Each lit by green rim light, evenly spaced across the middle band. No logos and no printed markings.
+Use the shared STYLE block. Three bare, unbranded single-board computers side by side on a near-black ground, small to large: a slim stick-shaped board on the left and two credit-card-sized boards to its right, the last with a small cooling fan. Each lit by green rim light, evenly spaced across the middle band, with a clear dark margin between the outer boards and the frame edges. No logos and no printed markings.
 
 ### pi-gpio-pinout
 
@@ -522,7 +525,7 @@ Use the shared STYLE block. A tiny, bare, unbranded stick-shaped single-board co
 - **Hook:** A Pi 4 has two tiny HDMI ports, and the screen stays black more often than it should. Pick the port, the cable and when the screen comes on, and see why.
 - **Output:** `internal/seo/cardassets/guides/pi4-micro-hdmi.png`, 1200×630 PNG
 
-Use the shared STYLE block. A small, bare, unbranded single-board computer on the left with a thin video cable running to a plain monitor on the right whose screen is black with a faint glow at its edge. Simple line art, no logos, no lettering on the screen.
+Use the shared STYLE block. A small, bare, unbranded single-board computer on the left with a thin video cable running to a plain monitor on the right whose screen is black with a faint glow at its edge. Both sit well inside the frame. Plain near-black ground with no tools, components, solder or other props. Simple line art, no logos on the board or the monitor bezel, no lettering on the screen.
 
 ### pi4-heat-throttling
 
@@ -538,7 +541,7 @@ Use the shared STYLE block. A small, bare, unbranded single-board computer in th
 - **Hook:** It joins the network, then an hour later SSH hangs and ping times out. Usually it’s WiFi power saving, a changed address, a weak signal or the power supply.
 - **Output:** `internal/seo/cardassets/guides/pi-wifi-dropouts.png`, 1200×630 PNG
 
-Use the shared STYLE block. A home router on the left and a small unbranded single-board computer on the right, joined by a row of plain WiFi arcs (not a WiFi logo) that fade and break in the middle and then pick up again. A small crescent moon floats just above the board. Lots of dark space; simple flat line art.
+Use the shared STYLE block. A plain, unbranded home router on the left and a small unbranded single-board computer on the right, joined by a row of plain radio arcs (not a WiFi logo) that fade and break in the middle and then pick up again. A small crescent moon floats just above the board. Draw the board's parts as plain rectangles, squares and circles, with no letter-like shapes or silkscreen outlines. Lots of dark space; simple flat line art.
 
 ### pi-run-on-boot
 
@@ -554,7 +557,7 @@ Use the shared STYLE block. A small unbranded single-board computer in the centr
 - **Hook:** One dd command copies the whole card to a file. Pick the wrong disk, or swap if and of, and it erases a disk instead. Build the command and see the difference.
 - **Output:** `internal/seo/cardassets/guides/pi-backup-sd-card.png`, 1200×630 PNG
 
-Use the shared STYLE block. Two microSD cards side by side in macro photography: the left one solid, the right one a translucent glowing green copy of it, with a single arrow from left to right between them. Shallow depth of field, plain near-black ground, no printed markings.
+Use the shared STYLE block. Two microSD cards side by side in macro photography: the left one solid, the right one a translucent glowing green copy of it, with a single arrow from left to right between them. Shallow depth of field, plain near-black ground, no printed markings: no SD logo, capacity or speed-class symbols on either card.
 
 ### pi-zero-audio-out
 
@@ -570,7 +573,7 @@ Use the shared STYLE block. A tiny, bare, unbranded stick-shaped single-board co
 - **Hook:** Chain HUB75 panels end to end or run them side by side in parallel. Set the panel size and the layout and see the resolution, the flags and the refresh rate it costs.
 - **Output:** `internal/seo/cardassets/guides/pi-rgb-matrix-basics.png`, 1200×630 PNG
 
-Use the shared STYLE block. Three plain dark rectangular panels side by side across the middle band, each glowing one broad, soft, even colour (green, cyan, amber), joined by short flat ribbon cables, with a small bare board at the far left feeding the first ribbon. No pixel grid, no text, large calm dark areas.
+Use the shared STYLE block. Three plain dark rectangular panels side by side across the middle band, each glowing one broad, soft, even colour (green, cyan, amber), joined by short flat ribbon cables, with a small bare board just left of the first panel, still well inside the frame, feeding the first ribbon. No pixel grid, no text, large calm dark areas.
 
 ### pi-rgb-matrix-power
 
@@ -578,4 +581,4 @@ Use the shared STYLE block. Three plain dark rectangular panels side by side acr
 - **Hook:** A 64×32 panel at full white can pull about 4 A at 5 V. Pick your panels, the brightness and what they show, and size the supply and the wires.
 - **Output:** `internal/seo/cardassets/guides/pi-rgb-matrix-power.png`, 1200×630 PNG
 
-Use the shared STYLE block. One plain dark rectangular panel in the middle band glowing an even, bright white, fed by two thick wires, one red and one black, from a plain metal-box power supply on the left. A tiny bare board sits below it, joined only by a thin black ground wire. Simple and uncluttered, large dark areas, no numbers or text.
+Use the shared STYLE block. One plain dark rectangular panel in the middle band glowing an even, bright white, fed by two thick wires, one red and one black, from a plain metal-box power supply left of centre, shown whole with clear dark space between it and the left edge (no labels, stickers or warning symbols on it). A tiny bare board sits below it, joined only by a thin black ground wire. Simple and uncluttered, large dark areas, no numbers or text.
