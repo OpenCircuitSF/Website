@@ -424,3 +424,21 @@ Use the shared STYLE block. A relay coil on the left releases a sharp, jagged li
 - **Output:** `internal/seo/cardassets/guides/bjt-vs-mosfet.png`, 1200×630 PNG
 
 Use the shared STYLE block. Top-down view of a single circuit trace that forks in two. The left branch runs to a small transistor and a little buzzer; the right branch runs to a chunky MOSFET and a big motor. A crossroads composition, flat and graphic.
+
+## Set: Raspberry Pi
+
+### pi-volumio-streaming
+
+- **Title:** A streaming speaker with Volumio
+- **Hook:** Plug a Pi into any speaker and anyone on the WiFi can play to it: from Spotify, an iPhone over AirPlay, or internet radio. No app accounts to share.
+- **Output:** `internal/seo/cardassets/guides/pi-volumio-streaming.png`, 1200×630 PNG
+
+Use the shared STYLE block. A tiny bare circuit board sits on top of a large bookshelf speaker. Several phones and a laptop around it each send a thin glowing arc of sound waves to the little board, and broad rings of sound spread out from the speaker cone. Warm, social, no logos or brand names.
+
+### pi-rgb-matrix-flicker
+
+- **Title:** RGB LED panels on a Pi 4: fixing flicker and garbage
+- **Hook:** Garbage pixels, shimmer or flicker on a HUB75 panel usually comes down to five settings. Flip them one at a time and watch the panel settle.
+- **Output:** `internal/seo/cardassets/guides/pi-rgb-matrix-flicker.png`, 1200×630 PNG
+
+Use the shared STYLE block. A grid of square LEDs seen face-on: the left half is a scramble of random coloured pixels, and across the middle it settles into clean vertical colour bars on the right. Five small toggle switches along the bottom edge, all flipped to on. Crisp and still, no motion blur.

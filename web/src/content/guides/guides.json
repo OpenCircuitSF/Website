@@ -24,6 +24,11 @@
       "id": "components",
       "title": "Components",
       "blurb": "Resistors, capacitors, LEDs, transistors and MOSFETs: what each part does and how to pick the right one."
+    },
+    {
+      "id": "pi",
+      "title": "Raspberry Pi",
+      "blurb": "Setting up a Raspberry Pi without a screen, keeping it powered and its SD card healthy, and the projects we run on them: a streaming speaker and RGB LED panels."
     }
   ],
   "workshopGuides": [
@@ -547,6 +552,31 @@
       ],
       "post": "Transistor or MOSFET? Set your load current and supply voltage and see which one to use with an ESP32, and how much heat each would make.",
       "set": "components"
+    },
+    {
+      "slug": "pi-volumio-streaming",
+      "title": "A streaming speaker with Volumio",
+      "hook": "Plug a Pi into any speaker and anyone on the WiFi can play to it: from Spotify, an iPhone over AirPlay, or internet radio. No app accounts to share.",
+      "minutes": 4,
+      "tags": [
+        "Raspberry Pi",
+        "audio"
+      ],
+      "post": "Plug a Pi into any speaker and anyone on the WiFi can play to it: Spotify, AirPlay or internet radio. See which Volumio features are free and how to wire it up.",
+      "set": "pi"
+    },
+    {
+      "slug": "pi-rgb-matrix-flicker",
+      "title": "RGB LED panels on a Pi 4: fixing flicker and garbage",
+      "hook": "Garbage pixels, shimmer or flicker on a HUB75 panel usually comes down to five settings. Flip them one at a time and watch the panel settle.",
+      "minutes": 4,
+      "tags": [
+        "Raspberry Pi",
+        "LEDs",
+        "debugging"
+      ],
+      "post": "Garbage pixels or flicker on an RGB LED panel driven by a Pi 4? Flip the five settings that fix it, one at a time, and watch the panel settle.",
+      "set": "pi"
     }
   ]
 }

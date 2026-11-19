@@ -49,4 +49,7 @@ export const TOPIC_DEMOS: Readonly<Record<string, () => Promise<DemoModule>>> = 
   'ohms-law-resistors': () => import('./OhmsLawDemo.svelte'),
   'led-basics': () => import('./LedBasicsDemo.svelte'),
   'led-resistor-calculator': () => import('./LedResistorDemo.svelte'),
+  // Raspberry Pi: Volumio and RGB panels (#0721)
+  'pi-volumio-streaming': () => import('./VolumioDemo.svelte'),
+  'pi-rgb-matrix-flicker': () => import('./RgbMatrixDemo.svelte'),
 };
