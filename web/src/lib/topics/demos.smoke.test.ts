@@ -64,6 +64,10 @@ import SdWriteDemo from './SdWriteDemo.svelte';
 // Raspberry Pi: Volumio and RGB panels (#0721)
 import VolumioDemo from './VolumioDemo.svelte';
 import RgbMatrixDemo from './RgbMatrixDemo.svelte';
+// Raspberry Pi batch 2: Zero USB ports, Pi 4 HDMI, heat (#0724)
+import PiZeroPortsDemo from './PiZeroPortsDemo.svelte';
+import Pi4HdmiDemo from './Pi4HdmiDemo.svelte';
+import PiHeatDemo from './PiHeatDemo.svelte';
 
 afterEach(cleanup);
 
@@ -725,5 +729,50 @@ describe('guide demos', () => {
     expect(r.container.textContent).toContain('178 Hz');
     expect(r.container.querySelectorAll('animate, animateTransform, animateMotion').length).toBe(0);
     expect(r.container.querySelectorAll('.cell').length).toBe(512);
+  });
+
+  // Raspberry Pi batch 2: Zero USB ports, Pi 4 HDMI, heat (#0724)
+  it('pi zero ports: a keyboard in PWR IN does nothing; USB works; a micro-HDMI cable does not fit', async () => {
+    const r = render(PiZeroPortsDemo);
+    expect(r.getByRole('heading', { name: 'Nothing happens: PWR IN has no data' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: 'USB' }));
+    expect(r.getByRole('heading', { name: 'Works: the data port' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('checkbox', { name: /OTG adapter/ }));
+    expect(r.getByRole('heading', { name: 'Doesn’t fit: you need an OTG adapter' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: /micro-HDMI cable/ }));
+    await fireEvent.click(r.getByRole('radio', { name: 'Mini-HDMI' }));
+    expect(r.getByRole('heading', { name: 'Doesn’t fit: that’s micro-HDMI' })).toBeTruthy();
+    expect(r.getByRole('link', { name: /sound from a Zero/ }).getAttribute('href')).toBe('/guides/pi-zero-audio-out');
+  });
+
+  it('pi 4 hdmi: HDMI0 works; screen on late on HDMI1 shows the HDMI-A-2 fix; a mini cable does not fit', async () => {
+    const r = render(Pi4HdmiDemo);
+    expect(r.getByRole('heading', { name: 'Picture' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: 'HDMI1' }));
+    expect(r.getByRole('heading', { name: 'Picture, but use HDMI0 for one screen' })).toBeTruthy();
+    await fireEvent.click(r.getByRole('radio', { name: 'After the Pi boots' }));
+    expect(r.getByRole('heading', { name: 'Usually fine, sometimes blank' })).toBeTruthy();
+    expect(r.container.textContent).toContain('video=HDMI-A-2:1280x720@60D');
+    await fireEvent.click(r.getByRole('radio', { name: /Mini-HDMI cable/ }));
+    expect(r.getByRole('heading', { name: 'Doesn’t fit: that’s mini-HDMI' })).toBeTruthy();
+  });
+
+  it('pi heat: an RGB panel in a closed box throttles, a fan fixes it, and °C follows the switch', async () => {
+    resetTempUnitForTest();
+    const r = render(PiHeatDemo);
+    expect(r.getByRole('heading', { name: 'Throttling: the Pi slows itself down' })).toBeTruthy();
+    expect(r.container.textContent).toContain('176 °F');
+    expect(r.container.textContent).toContain('throttled=0x60006');
+    await fireEvent.click(r.getByRole('radio', { name: 'Heatsink and fan' }));
+    expect(r.getByRole('heading', { name: 'Full speed, plenty of room' })).toBeTruthy();
+    expect(r.container.textContent).toContain('throttled=0x0');
+    await fireEvent.click(r.getByRole('radio', { name: /Compiling code/ }));
+    await fireEvent.click(r.getByRole('radio', { name: 'Bare board in a closed box' }));
+    expect(r.getByRole('heading', { name: 'Hot: Arm and GPU both throttled' })).toBeTruthy();
+    setTempUnit('C');
+    await tick();
+    expect(r.container.textContent).toContain('87 °C');
+    expect(r.container.querySelectorAll('animate, animateTransform, animateMotion').length).toBe(0);
+    resetTempUnitForTest();
   });
 });

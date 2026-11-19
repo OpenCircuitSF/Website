@@ -59,4 +59,8 @@ export const TOPIC_DEMOS: Readonly<Record<string, () => Promise<DemoModule>>> = 
   // Raspberry Pi: Volumio and RGB panels (#0721)
   'pi-volumio-streaming': () => import('./VolumioDemo.svelte'),
   'pi-rgb-matrix-flicker': () => import('./RgbMatrixDemo.svelte'),
+  // Raspberry Pi batch 2: Zero USB ports, Pi 4 HDMI, heat (#0724)
+  'pi-zero-usb-ports': () => import('./PiZeroPortsDemo.svelte'),
+  'pi4-micro-hdmi': () => import('./Pi4HdmiDemo.svelte'),
+  'pi4-heat-throttling': () => import('./PiHeatDemo.svelte'),
 };

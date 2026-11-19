@@ -936,6 +936,62 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     ],
     takeaway: 'Sound off, the right mapping, a slowdown of 2 or more, a reserved core, and its own 5 V supply. Then trade PWM bits for refresh.',
   },
+  // Raspberry Pi batch 2: Zero USB ports, Pi 4 HDMI, heat (#0724)
+  'pi-zero-usb-ports': {
+    tryIt: 'Pick a device and a port and see what happens. Start with the classic mistake: a keyboard in the power port.',
+    ideas: [
+      {
+        title: 'Two ports, one job each',
+        body: 'The Zero 2W has two micro-USB ports side by side. The one at the corner, marked PWR IN, takes power and nothing else. The one marked USB is the only data port. A keyboard, a drive or a USB sound card in PWR IN gets power but no data, so nothing happens: the keyboard stays dead, the drive never appears.',
+      },
+      {
+        title: 'You need an adapter, or a hub',
+        body: 'Keyboards and drives have full-size USB plugs. A micro-USB OTG adapter (a micro-USB plug with a USB-A socket) puts one device on the USB port; a hub on that port gives you several. A hard drive draws more than the port can supply, so give it a powered hub.',
+      },
+      {
+        title: 'The video port is mini-HDMI',
+        body: 'The third port is mini-HDMI, not micro-HDMI like the Pi 4. A Pi 4 cable won’t fit: you need a mini-HDMI to HDMI cable or adapter.',
+      },
+    ],
+    takeaway: 'Power in PWR IN, everything else in USB through an OTG adapter or a hub.',
+  },
+  'pi4-micro-hdmi': {
+    tryIt: 'Pick the port, when the screen is switched on and the cable, and see whether you get a picture and why.',
+    ideas: [
+      {
+        title: 'Two ports, and HDMI0 comes first',
+        body: 'A Pi 4 has two micro-HDMI ports. HDMI0, the one next to the USB-C power socket, is the first output: with one screen, use it. If one port gives nothing, try the other.',
+      },
+      {
+        title: 'Switch the screen on first',
+        body: 'At boot the Pi asks the screen what it can show. Most screens answer even when they come on later, but a few say nothing while they are off, and the Pi starts with no picture. Turn the screen on before the Pi, especially when both share a power strip. Very cheap cables can leave out the wire that tells the Pi a screen is there.',
+      },
+      {
+        title: 'Forcing a picture on Bookworm',
+        body: 'Bookworm’s KMS graphics driver ignores the old hdmi_force_hotplug line in config.txt. To force an output, add video=HDMI-A-1:1280x720@60D to the end of the single line in /boot/firmware/cmdline.txt (HDMI-A-2 for the second port), then reboot. And mini-HDMI is the Zero’s connector: a Zero cable won’t fit a Pi 4.',
+      },
+    ],
+    takeaway: 'HDMI0 next to the power socket, the screen on before the Pi, a decent micro-HDMI cable.',
+  },
+  'pi4-heat-throttling': {
+    temps: true,
+    tryIt: 'Pick what the Pi is doing and how it is cooled, and watch ten minutes of temperature and clock speed. The numbers are an illustrative model.',
+    ideas: [
+      {
+        title: 'The Pi protects itself',
+        body: 'Between {temp:80} and {temp:85} a Pi 4 slows its Arm cores step by step; at {temp:85} it slows the GPU too. Nothing breaks, but everything gets slower: a compile takes longer, an LED panel flickers, music stutters.',
+      },
+      {
+        title: 'Check it',
+        body: 'vcgencmd measure_temp prints the chip temperature (always in Celsius). vcgencmd get_throttled shows whether it has been capped or throttled; the under-voltage guide decodes it. If it is throttling but under-voltage isn’t set, it is heat.',
+      },
+      {
+        title: 'Give the heat somewhere to go',
+        body: 'A long busy job, like a compile or driving an RGB panel, heats the chip for minutes. A bare board in a closed box is the worst case: the air inside just gets hotter. Stick-on heatsinks help, a case with vents helps, and a small fan fixes it.',
+      },
+    ],
+    takeaway: 'Under a long load, give a Pi 4 a heatsink and moving air; never a bare board in a sealed box.',
+  },
 };
 
 export const TOPICS: Topic[] = TOPIC_GUIDES.map((m) => {

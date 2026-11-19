@@ -637,6 +637,42 @@
       ],
       "post": "Garbage pixels or flicker on an RGB LED panel driven by a Pi 4? Flip the five settings that fix it, one at a time, and watch the panel settle.",
       "set": "pi"
+    },
+    {
+      "slug": "pi-zero-usb-ports",
+      "title": "Pi Zero 2W: which micro-USB port is which",
+      "hook": "Two micro-USB ports that look the same. One only takes power; the other is the only data port. Plug a keyboard into the wrong one and nothing happens.",
+      "minutes": 3,
+      "tags": [
+        "Raspberry Pi",
+        "USB"
+      ],
+      "post": "Keyboard dead on your Pi Zero 2W? Its two micro-USB ports look the same, but only one carries data. Plug a charger, keyboard, drive or DAC into each port and see what happens.",
+      "set": "pi"
+    },
+    {
+      "slug": "pi4-micro-hdmi",
+      "title": "No picture from a Pi 4: the micro-HDMI ports",
+      "hook": "A Pi 4 has two tiny HDMI ports, and the screen stays black more often than it should. Pick the port, the cable and when the screen comes on, and see why.",
+      "minutes": 3,
+      "tags": [
+        "Raspberry Pi",
+        "debugging"
+      ],
+      "post": "Black screen on a Raspberry Pi 4? Two micro-HDMI ports, a monitor switched on too late, or a cable missing a wire. Pick the port, the cable and the timing and see whether you get a picture.",
+      "set": "pi"
+    },
+    {
+      "slug": "pi4-heat-throttling",
+      "title": "Why a Pi 4 slows down when it gets hot",
+      "hook": "Once its chip gets too hot, a Pi 4 turns its own speed down to cool off. A bare board in a closed box can get there in a couple of minutes.",
+      "minutes": 4,
+      "tags": [
+        "Raspberry Pi",
+        "heat"
+      ],
+      "post": "Raspberry Pi 4 slowing down under load? Once it gets too hot it throttles itself. Pick a load and the cooling and watch ten minutes of temperature climb and the clock speed drop.",
+      "set": "pi"
     }
   ]
 }
