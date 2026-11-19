@@ -803,6 +803,43 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     ],
     takeaway: 'Subtract, divide, round up to the next standard value. For a red LED on an ESP32 pin, 150 to 330 Ω is about right.',
   },
+  // Raspberry Pi: power and SD cards (#0720)
+  'pi-undervoltage': {
+    tryIt: 'Pick a board, a supply, a cable and what the Pi is doing, and watch the voltage at the Pi. Then decode a get_throttled value.',
+    ideas: [
+      {
+        title: 'Symptoms that don’t look like power',
+        body: 'Random reboots, SD card errors, WiFi dropping out, USB drives disconnecting, everything slow. On the desktop a lightning bolt or a low-voltage warning appears. Headless you see nothing, but the kernel log says "Undervoltage detected!".',
+      },
+      {
+        title: '4.63 V is the line, and the cable eats into it',
+        body: 'Official supplies give 5.1 V (Pi 4: 3 A over USB-C; Zero 2W: 2.5 A over micro-USB), so there is room to lose some. Below about 4.63 V at the board the firmware flags under-voltage and slows the processor. Both wires of a cable have resistance: a thin 2 m cable is close to 1 Ω there and back, so at 1 A it loses almost a volt. Phone chargers and laptop ports sag further as the Pi works harder. The numbers in the demo are a simplified model with typical values.',
+      },
+      {
+        title: 'Ask the Pi',
+        body: 'Run vcgencmd get_throttled. 0x0 is all clear. The low four bits are what is happening now: under-voltage, CPU speed capped, throttled, soft temperature limit. Bits 16 to 19 are the same four "since boot". 0x50005 is the classic bad supply. sudo dmesg | grep -i voltage shows when it happened.',
+      },
+    ],
+    takeaway: 'Use the official supply, or a 5.1 V supply with a short, thick cable. If get_throttled says anything but 0x0, fix the power first.',
+  },
+  'pi-sd-card-corruption': {
+    tryIt: 'Slide to the moment the plug comes out during a file save and see what the card is left with. Then turn on the overlay file system and try again.',
+    ideas: [
+      {
+        title: 'Linux is always writing',
+        body: 'Logs, settings and caches get written even when the Pi is idle. A save happens in steps, and the filesystem’s journal covers a cut between steps. But the card’s own controller rewrites data in big flash blocks, and a cut in the middle of that can damage files nobody was saving. Under-voltage (see the under-voltage guide) does the same damage. The demo is a simplified model.',
+      },
+      {
+        title: 'Shut down, then unplug',
+        body: 'Run sudo poweroff, wait for the green LED to stop flashing, then pull the plug. Buy name-brand A1 or A2 cards from a real shop: fakes fail more, and some claim more space than they have. Once it works, keep a backup image of the card.',
+      },
+      {
+        title: 'For a box that gets unplugged, make the card read-only',
+        body: 'A speaker or a display gets switched off at the wall. In sudo raspi-config, Performance Options, turn on Overlay File System: writes go to memory and vanish at reboot, so nothing is written to the card. To change settings, turn it off, reboot, make the change, then turn it back on.',
+      },
+    ],
+    takeaway: 'Shut down before you unplug. If it will be unplugged anyway, turn on the overlay file system.',
+  },
 };
 
 export const TOPICS: Topic[] = TOPIC_GUIDES.map((m) => {

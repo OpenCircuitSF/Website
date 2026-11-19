@@ -424,3 +424,19 @@ Use the shared STYLE block. A relay coil on the left releases a sharp, jagged li
 - **Output:** `internal/seo/cardassets/guides/bjt-vs-mosfet.png`, 1200×630 PNG
 
 Use the shared STYLE block. Top-down view of a single circuit trace that forks in two. The left branch runs to a small transistor and a little buzzer; the right branch runs to a chunky MOSFET and a big motor. A crossroads composition, flat and graphic.
+
+### pi-undervoltage
+
+- **Title:** Why a Raspberry Pi slows down: under-voltage
+- **Hook:** Random reboots, SD card errors, WiFi dropping out. Often it isn’t the Pi: the supply or the cable can’t hold 5 V when it gets busy.
+- **Output:** `internal/seo/cardassets/guides/pi-undervoltage.png`, 1200×630 PNG
+
+Use the shared STYLE block. A small single-board computer at the end of a long, very thin power cable that sags like a tired rope. A dim yellow lightning bolt hovers above the board. Lots of dark space; the thinness of the cable is the whole idea.
+
+### pi-sd-card-corruption
+
+- **Title:** Why pulling the plug corrupts a Pi’s SD card
+- **Hook:** Linux is always writing something. Cut the power at the wrong moment and the card can come back damaged. Shut down first, or make the card read-only.
+- **Output:** `internal/seo/cardassets/guides/pi-sd-card-corruption.png`, 1200×630 PNG
+
+Use the shared STYLE block. A microSD card in green line art with a hairline crack running across it, and beside it a power plug pulled halfway out of its socket, frozen mid-motion. Minimal, centered, dramatic rim light. No printed markings.

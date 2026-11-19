@@ -49,4 +49,7 @@ export const TOPIC_DEMOS: Readonly<Record<string, () => Promise<DemoModule>>> = 
   'ohms-law-resistors': () => import('./OhmsLawDemo.svelte'),
   'led-basics': () => import('./LedBasicsDemo.svelte'),
   'led-resistor-calculator': () => import('./LedResistorDemo.svelte'),
+  // Raspberry Pi: power and SD cards (#0720)
+  'pi-undervoltage': () => import('./PiUndervoltageDemo.svelte'),
+  'pi-sd-card-corruption': () => import('./SdWriteDemo.svelte'),
 };
