@@ -1102,6 +1102,61 @@ export const TOPIC_BODIES: Record<string, TopicBody> = {
     ],
     takeaway: 'Image the card before you change anything. Check the disk number twice, and restore with Imager’s Use custom.',
   },
+  // Raspberry Pi batch 2: Zero audio, RGB panel basics and power (#0726)
+  'pi-zero-audio-out': {
+    tryIt: 'Pick how the sound gets out and what matters most to you, and see the wiring, the setup step and where each way falls short.',
+    ideas: [
+      {
+        title: 'No jack, four ways out',
+        body: 'A Pi Zero 2W has no headphone jack and no analog audio at all. The sound has to leave as digital and become analog somewhere else: on a DAC board on the GPIO header, in a USB DAC, in the TV or receiver at the end of an HDMI cable, or in a Bluetooth speaker.',
+      },
+      {
+        title: 'A DAC HAT is the cleanest',
+        body: 'An I2S DAC HAT or pHAT sits on the 40-pin header and has its own converter chip. Enable it with one dtoverlay line at the end of /boot/firmware/config.txt; the board’s maker tells you which line, then reboot and check with aplay -l. A USB DAC needs no setup at all, but plugs into the Zero’s only data port through an OTG adapter.',
+      },
+      {
+        title: 'HDMI and Bluetooth',
+        body: 'HDMI carries sound to a TV or AV receiver over the mini-HDMI port, and an HDMI audio extractor splits it out for an amplifier. Bluetooth needs no wires to the speaker, but pairing takes a few commands, the sound is compressed and it arrives late: fine for music, bad for video. For a Volumio speaker, a DAC HAT or a USB DAC is the usual choice.',
+      },
+    ],
+    takeaway: 'For music, a DAC HAT or a USB DAC. HDMI if a TV or receiver is already there. Bluetooth when wires are the bigger problem than delay.',
+  },
+  'pi-rgb-matrix-basics': {
+    tryIt: 'Pick a panel size, then add panels to the chain and parallel chains, and watch the resolution, the command line and the refresh rate change.',
+    ideas: [
+      {
+        title: 'Rows, columns and scan',
+        body: 'A HUB75 panel is named by its pixels: 64×32 is 64 columns and 32 rows, set with --led-cols=64 --led-rows=32. It never lights every row at once. A 64×32 panel lights two rows at a time and steps through all 16 pairs, fast enough that you see a full picture: that is its 1:16 scan.',
+      },
+      {
+        title: 'Chains and parallel chains',
+        body: 'Panels chain from OUT to IN with a ribbon cable, and --led-chain says how many: three 64×32 panels in a chain make one 192×32 display. Parallel chains run side by side from separate outputs, set with --led-parallel. The library drives up to three on a 40-pin Pi, but only if the adapter board has the outputs; many single-chain HATs and bonnets have one.',
+      },
+      {
+        title: 'More pixels, lower refresh',
+        body: 'Every refresh clocks every pixel of the chain out over GPIO, so a longer chain refreshes more slowly; below about 100 Hz you can see it flicker. Parallel chains are clocked out together, so six panels as three chains of two refresh much faster than one chain of six. --led-show-refresh prints the real number.',
+      },
+    ],
+    takeaway: 'Size sets the rows and columns, the chain makes it wider, parallel chains make it taller without slowing it down.',
+  },
+  'pi-rgb-matrix-power': {
+    tryIt: 'Set the panels, the brightness and what they show, and pick a supply. See the current, what to buy and how thick the wires should be.',
+    ideas: [
+      {
+        title: 'Amps, not milliamps',
+        body: 'A 64×32 panel at full white and full brightness can draw around 4 A at 5 V, a 32-wide one about half that. The math is the same as for an LED strip: the full-white current times how much of each colour is lit times the brightness. Check your panel’s label or datasheet for its own figure.',
+      },
+      {
+        title: 'Most frames draw far less',
+        body: 'A typical picture lights a fraction of the LEDs, and text on black even less, so a sign may average a few hundred milliamps per panel. But one white frame, a flash or a test pattern draws the full amount, so size the supply for full white at the brightness you run, plus about 20% spare. --led-brightness turns the whole panel down and the current with it.',
+      },
+      {
+        title: 'Wire it like a power tool, not a gadget',
+        body: 'Give the panels their own 5 V supply. Run a pair of thick wires from the supply to each panel rather than through one panel to the next, and join the supply’s ground to a ground pin on the Pi. Never feed panels from the Pi’s 5 V pin: it can only pass what the Pi’s own supply can spare.',
+      },
+    ],
+    takeaway: 'Budget about 4 A per 64×32 panel at full white, give them their own 5 V supply with thick wires to every panel, and share ground with the Pi.',
+  },
 };
 
 export const TOPICS: Topic[] = TOPIC_GUIDES.map((m) => {

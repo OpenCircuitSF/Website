@@ -1,7 +1,7 @@
 # Guide unfurl images: generator prompts
 
 One image prompt per guide in the catalog (`web/src/content/guides/guides.json`),
-50 today, for an image generator such as Codex. Each finished image becomes that
+62 today, for an image generator such as Codex. Each finished image becomes that
 guide's link preview on Bluesky, Mastodon, Slack and iMessage (`og:image`), and
 its Bluesky post thumbnail. Filed as `#0709`.
 
@@ -555,3 +555,27 @@ Use the shared STYLE block. A small unbranded single-board computer in the centr
 - **Output:** `internal/seo/cardassets/guides/pi-backup-sd-card.png`, 1200×630 PNG
 
 Use the shared STYLE block. Two microSD cards side by side in macro photography: the left one solid, the right one a translucent glowing green copy of it, with a single arrow from left to right between them. Shallow depth of field, plain near-black ground, no printed markings.
+
+### pi-zero-audio-out
+
+- **Title:** Sound from a Pi Zero 2W: four ways out
+- **Hook:** A Zero 2W has no headphone jack. Sound comes out through a DAC HAT, a USB DAC, HDMI or Bluetooth. Pick one and see the wiring, the setup and the catch.
+- **Output:** `internal/seo/cardassets/guides/pi-zero-audio-out.png`, 1200×630 PNG
+
+Use the shared STYLE block. A tiny, bare, unbranded stick-shaped single-board computer lies in the middle band. A thin cable runs from it to a plain bookshelf speaker on the right, and two or three soft sound rings spread from the speaker cone. A small blank add-on board hovers just above the computer as if about to press onto its pin header. Plain near-black ground, no other props, no logos or text.
+
+### pi-rgb-matrix-basics
+
+- **Title:** RGB LED panels on a Pi 4: rows, chains and parallel
+- **Hook:** Chain HUB75 panels end to end or run them side by side in parallel. Set the panel size and the layout and see the resolution, the flags and the refresh rate it costs.
+- **Output:** `internal/seo/cardassets/guides/pi-rgb-matrix-basics.png`, 1200×630 PNG
+
+Use the shared STYLE block. Three plain dark rectangular panels side by side across the middle band, each glowing one broad, soft, even colour (green, cyan, amber), joined by short flat ribbon cables, with a small bare board at the far left feeding the first ribbon. No pixel grid, no text, large calm dark areas.
+
+### pi-rgb-matrix-power
+
+- **Title:** How much power an RGB LED panel needs
+- **Hook:** A 64×32 panel at full white can pull about 4 A at 5 V. Pick your panels, the brightness and what they show, and size the supply and the wires.
+- **Output:** `internal/seo/cardassets/guides/pi-rgb-matrix-power.png`, 1200×630 PNG
+
+Use the shared STYLE block. One plain dark rectangular panel in the middle band glowing an even, bright white, fed by two thick wires, one red and one black, from a plain metal-box power supply on the left. A tiny bare board sits below it, joined only by a thin black ground wire. Simple and uncluttered, large dark areas, no numbers or text.

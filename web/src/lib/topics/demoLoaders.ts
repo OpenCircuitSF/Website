@@ -71,4 +71,8 @@ export const TOPIC_DEMOS: Readonly<Record<string, () => Promise<DemoModule>>> = 
   'pi-wifi-dropouts': () => import('./PiWifiDoctor.svelte'),
   'pi-run-on-boot': () => import('./PiServiceDemo.svelte'),
   'pi-backup-sd-card': () => import('./PiBackupDemo.svelte'),
+  // Raspberry Pi batch 2: Zero audio, RGB panel basics and power (#0726)
+  'pi-zero-audio-out': () => import('./ZeroAudioDemo.svelte'),
+  'pi-rgb-matrix-basics': () => import('./RgbLayoutDemo.svelte'),
+  'pi-rgb-matrix-power': () => import('./RgbPowerDemo.svelte'),
 };
