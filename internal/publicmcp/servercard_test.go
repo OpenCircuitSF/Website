@@ -156,7 +156,8 @@ func TestDiscoveryHTTP(t *testing.T) {
 		rec := do(http.MethodGet, path, nil)
 		h := rec.Header()
 		if rec.Code != 200 || h.Get("Content-Type") != ct || h.Get("Access-Control-Allow-Origin") != "*" ||
-			h.Get("Cache-Control") != "public, max-age=3600" || h.Get("ETag") == "" {
+			h.Get("Cache-Control") != "public, max-age=3600" || h.Get("ETag") == "" ||
+			h.Get("Access-Control-Expose-Headers") != "ETag" {
 			t.Errorf("GET %s = %d %v", path, rec.Code, h)
 		}
 		bodies[path], _ = io.ReadAll(rec.Body)
@@ -195,13 +196,17 @@ func TestBrowserGetRedirectsToDocs(t *testing.T) {
 	if rec := get("text/html,application/xhtml+xml"); rec.Code != http.StatusFound || rec.Header().Get("Location") != DocsPath {
 		t.Errorf("browser GET = %d Location %q", rec.Code, rec.Header().Get("Location"))
 	}
-	for _, a := range []string{"text/event-stream", "application/json, text/event-stream", ""} {
+	// "text/html, text/event-stream" is what pins wantsHTML's event-stream
+	// exclusion: without it every case here lacks text/html (#0731 review).
+	for _, a := range []string{"text/event-stream", "application/json, text/event-stream", "", "text/html, text/event-stream"} {
 		if rec := get(a); rec.Code == http.StatusFound || rec.Code/100 == 3 {
 			t.Errorf("GET Accept %q redirected (%d)", a, rec.Code)
 		}
 	}
 	req := httptest.NewRequest(http.MethodPost, Path, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
-	req.Header.Set("Accept", "text/html, application/json, text/event-stream")
+	// Accept is text/html alone, so a POST wrapped in browserToDocs would
+	// redirect; unwrapped, the SDK rejects it without a 3xx.
+	req.Header.Set("Accept", "text/html")
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)

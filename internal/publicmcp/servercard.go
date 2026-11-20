@@ -105,13 +105,15 @@ func buildCatalog(baseURL string) ([]byte, error) {
 }
 
 // staticJSON serves body with the spec's CORS and caching headers and an
-// ETag that honours If-None-Match.
+// ETag that honours If-None-Match. The ETag is exposed to CORS readers, as
+// the discovery doc's CORS block requires, so a browser client can revalidate.
 func staticJSON(body []byte, mediaType string) http.Handler {
 	sum := sha256.Sum256(body)
 	etag := `"` + hex.EncodeToString(sum[:])[:16] + `"`
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Access-Control-Allow-Origin", "*")
+		h.Set("Access-Control-Expose-Headers", "ETag")
 		if r.Method == http.MethodOptions {
 			h.Set("Access-Control-Allow-Methods", "GET")
 			h.Set("Access-Control-Allow-Headers", "Content-Type, If-None-Match")
