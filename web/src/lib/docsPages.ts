@@ -14,6 +14,7 @@ export const DOCS_PAGES: readonly DocsPage[] = [
   { path: '/docs', label: 'Overview', h1: 'Docs' },
   { path: '/docs/using-the-site', label: 'Using the site', h1: 'Using the site' },
   { path: '/docs/newsletter', label: 'Newsletter', h1: 'The newsletter' },
+  { path: '/docs/api', label: 'Public API', h1: 'Public API' },
   { path: '/docs/mcp', label: 'MCP', h1: 'Use Open Circuit SF with AI agents' },
   { path: '/docs/feeds', label: 'Feeds', h1: 'Feeds' },
 ];

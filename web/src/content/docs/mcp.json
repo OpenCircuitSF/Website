@@ -64,6 +64,10 @@
         {
           "type": "p",
           "text": "Times are RFC 3339 with an offset in America/Los_Angeles. Every event and newsletter result carries its public url."
+        },
+        {
+          "type": "p",
+          "text": "Limits: 60 requests a minute per IP, one budget shared between /mcp and /api/public/v1/. Past that you get HTTP 429 with a Retry-After header in seconds. List results may be cached on the server for up to 60 seconds."
         }
       ]
     },

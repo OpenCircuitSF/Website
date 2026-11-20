@@ -1,0 +1,176 @@
+{
+  "title": "Public API — Open Circuit SF",
+  "description": "Read-only JSON API for Open Circuit SF events and newsletter issues. No key needed; CORS enabled.",
+  "h1": "Public API",
+  "intro": [
+    {
+      "type": "p",
+      "text": "A read-only JSON API for our events and newsletter issues. It needs no account or key, answers GET only, and sends Access-Control-Allow-Origin: * so a browser app on any site can read it. Successful responses are cacheable for 60 seconds. It serves the same operations as our ",
+      "link": {
+        "key": "mcp",
+        "label": "MCP server"
+      },
+      "tail": ", and a route and its tool return the same JSON."
+    }
+  ],
+  "sections": [
+    {
+      "heading": "Base URL",
+      "blocks": [
+        {
+          "type": "code",
+          "label": "Base URL",
+          "text": "https://www.opencircuitsf.com/api/public/v1/"
+        }
+      ]
+    },
+    {
+      "heading": "Limits",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "limit defaults to 10 and is capped at 50.",
+            "query is cut to 200 characters.",
+            "Dates are RFC 3339 with an offset, or YYYY-MM-DD in America/Los_Angeles.",
+            "60 requests a minute per IP, one budget shared between /mcp and /api/public/v1/. Past that you get HTTP 429 with a Retry-After header in seconds.",
+            "List results may be cached on the server for up to 60 seconds.",
+            "Errors are JSON: {\"error\":{\"code\",\"message\",\"fields\"}}. Unknown, draft and unpublished items all return the same 404."
+          ]
+        }
+      ]
+    },
+    {
+      "heading": "OpenAPI",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "The OpenAPI document describes every endpoint: ",
+          "link": {
+            "key": "openapi",
+            "label": "https://www.opencircuitsf.com/api/public/v1/openapi.json"
+          },
+          "tail": "."
+        }
+      ]
+    },
+    {
+      "heading": "GET /api/public/v1/events",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "List upcoming Open Circuit SF events, soonest first. Parameters: limit (default 10, max 50); after and before, each an RFC 3339 time or a YYYY-MM-DD date in America/Los_Angeles."
+        },
+        {
+          "type": "code",
+          "label": "Example request",
+          "text": "curl -s 'https://www.opencircuitsf.com/api/public/v1/events?limit=1'"
+        },
+        {
+          "type": "code",
+          "label": "Example response",
+          "text": "{\n  \"events\": [\n    {\n      \"id\": \"esp32-intro\",\n      \"slug\": \"esp32-intro\",\n      \"title\": \"Intro to ESP32\",\n      \"summary\": \"Build and program your first ESP32 board.\",\n      \"starts_at\": \"2026-12-05T13:00:00-08:00\",\n      \"ends_at\": \"2026-12-05T16:00:00-08:00\",\n      \"location_name\": \"Noisebridge\",\n      \"address\": \"272 Capp St, San Francisco, CA\",\n      \"status\": \"scheduled\",\n      \"registration_url\": \"https://lu.ma/example\",\n      \"url\": \"https://www.opencircuitsf.com/events/esp32-intro\",\n      \"event_type\": \"workshop\",\n      \"tags\": [\n        \"microcontrollers\"\n      ]\n    }\n  ]\n}"
+        }
+      ]
+    },
+    {
+      "heading": "GET /api/public/v1/events/search",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Search Open Circuit SF events by words in the title, description and tags. Parameters: query (every word must match; cut to 200 characters; empty matches all); from and to (RFC 3339 or YYYY-MM-DD); include_past (default false); limit (default 10, max 50)."
+        },
+        {
+          "type": "code",
+          "label": "Example request",
+          "text": "curl -s 'https://www.opencircuitsf.com/api/public/v1/events/search?query=esp32&limit=1'"
+        },
+        {
+          "type": "code",
+          "label": "Example response",
+          "text": "{\n  \"events\": [\n    {\n      \"id\": \"esp32-intro\",\n      \"slug\": \"esp32-intro\",\n      \"title\": \"Intro to ESP32\",\n      \"summary\": \"Build and program your first ESP32 board.\",\n      \"starts_at\": \"2026-12-05T13:00:00-08:00\",\n      \"ends_at\": \"2026-12-05T16:00:00-08:00\",\n      \"location_name\": \"Noisebridge\",\n      \"address\": \"272 Capp St, San Francisco, CA\",\n      \"status\": \"scheduled\",\n      \"registration_url\": \"https://lu.ma/example\",\n      \"url\": \"https://www.opencircuitsf.com/events/esp32-intro\",\n      \"event_type\": \"workshop\",\n      \"tags\": [\n        \"microcontrollers\"\n      ]\n    }\n  ]\n}"
+        }
+      ]
+    },
+    {
+      "heading": "GET /api/public/v1/events/{slug}",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Get one Open Circuit SF event by its id (its slug), from list_upcoming_events or search_events. Adds location_note and description to the list fields. An event whose slug is search cannot be read here, because events/search takes that path; use the MCP get_event tool for it."
+        },
+        {
+          "type": "code",
+          "label": "Example request",
+          "text": "curl -s 'https://www.opencircuitsf.com/api/public/v1/events/esp32-intro'"
+        },
+        {
+          "type": "code",
+          "label": "Example response",
+          "text": "{\n  \"id\": \"esp32-intro\",\n  \"slug\": \"esp32-intro\",\n  \"title\": \"Intro to ESP32\",\n  \"summary\": \"Build and program your first ESP32 board.\",\n  \"starts_at\": \"2026-12-05T13:00:00-08:00\",\n  \"ends_at\": \"2026-12-05T16:00:00-08:00\",\n  \"location_name\": \"Noisebridge\",\n  \"address\": \"272 Capp St, San Francisco, CA\",\n  \"status\": \"scheduled\",\n  \"registration_url\": \"https://lu.ma/example\",\n  \"url\": \"https://www.opencircuitsf.com/events/esp32-intro\",\n  \"event_type\": \"workshop\",\n  \"tags\": [\n    \"microcontrollers\"\n  ],\n  \"location_note\": \"Ring the buzzer.\",\n  \"description\": \"Bring a laptop. We supply the boards…\"\n}"
+        }
+      ]
+    },
+    {
+      "heading": "GET /api/public/v1/newsletter",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "List Open Circuit SF newsletter issues, newest first. Parameter: limit (default 10, max 50)."
+        },
+        {
+          "type": "code",
+          "label": "Example request",
+          "text": "curl -s 'https://www.opencircuitsf.com/api/public/v1/newsletter?limit=1'"
+        },
+        {
+          "type": "code",
+          "label": "Example response",
+          "text": "{\n  \"issues\": [\n    {\n      \"id\": \"november-2026\",\n      \"slug\": \"november-2026\",\n      \"title\": \"November at Open Circuit SF\",\n      \"summary\": \"Two workshops and a meetup.\",\n      \"published_at\": \"2026-11-01T09:00:00-07:00\",\n      \"url\": \"https://www.opencircuitsf.com/archive/november-2026\"\n    }\n  ]\n}"
+        }
+      ]
+    },
+    {
+      "heading": "GET /api/public/v1/newsletter/{slug}",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Get one Open Circuit SF newsletter issue by its id (its slug), from list_newsletter_issues. Adds the body as plain text."
+        },
+        {
+          "type": "code",
+          "label": "Example request",
+          "text": "curl -s 'https://www.opencircuitsf.com/api/public/v1/newsletter/november-2026'"
+        },
+        {
+          "type": "code",
+          "label": "Example response",
+          "text": "{\n  \"id\": \"november-2026\",\n  \"slug\": \"november-2026\",\n  \"title\": \"November at Open Circuit SF\",\n  \"summary\": \"Two workshops and a meetup.\",\n  \"published_at\": \"2026-11-01T09:00:00-07:00\",\n  \"url\": \"https://www.opencircuitsf.com/archive/november-2026\",\n  \"body\": \"This month we…\"\n}"
+        }
+      ]
+    },
+    {
+      "heading": "GET /api/public/v1/about",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "What Open Circuit SF is, and how to join, subscribe or get in touch. No parameters."
+        },
+        {
+          "type": "code",
+          "label": "Example request",
+          "text": "curl -s 'https://www.opencircuitsf.com/api/public/v1/about'"
+        },
+        {
+          "type": "code",
+          "label": "Example response",
+          "text": "{\n  \"name\": \"Open Circuit SF\",\n  \"description\": \"Open Circuit SF is a community…\",\n  \"sections\": [\n    {\n      \"heading\": \"What we do\",\n      \"text\": \"Hands-on electronics workshops…\"\n    }\n  ],\n  \"website_url\": \"https://www.opencircuitsf.com/\",\n  \"events_url\": \"https://www.opencircuitsf.com/events\",\n  \"newsletter_archive_url\": \"https://www.opencircuitsf.com/archive\",\n  \"subscribe_url\": \"https://www.opencircuitsf.com/subscribe\",\n  \"contact_email\": \"contact@opencircuitsf.com\",\n  \"discord_url\": \"https://discord.gg/example\",\n  \"calendar_url\": \"https://lu.ma/example\"\n}"
+        }
+      ]
+    }
+  ],
+  "links": {
+    "mcp": "/docs/mcp",
+    "openapi": "https://www.opencircuitsf.com/api/public/v1/openapi.json"
+  }
+}

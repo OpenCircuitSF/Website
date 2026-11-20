@@ -81,6 +81,7 @@ export const STATIC_ROUTES: Readonly<Record<string, RouteName>> = {
   '/docs': 'docs',
   '/docs/using-the-site': 'docs',
   '/docs/newsletter': 'docs',
+  '/docs/api': 'docs',
   '/docs/mcp': 'docs',
   '/docs/feeds': 'docs',
   '/subscribe': 'subscribe',

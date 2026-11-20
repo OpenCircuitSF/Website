@@ -15,7 +15,10 @@
         {
           "type": "p",
           "text": "Events, registering, guides, the newsletter archive, and how to reach us. ",
-          "link": { "key": "using", "label": "Read Using the site" },
+          "link": {
+            "key": "using",
+            "label": "Read Using the site"
+          },
           "tail": "."
         }
       ]
@@ -26,7 +29,24 @@
         {
           "type": "p",
           "text": "Subscribing, choosing topics, unsubscribing, and privacy. ",
-          "link": { "key": "newsletter", "label": "Read The newsletter" },
+          "link": {
+            "key": "newsletter",
+            "label": "Read The newsletter"
+          },
+          "tail": "."
+        }
+      ]
+    },
+    {
+      "heading": "Public API",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Read our events and newsletter issues as JSON, with no key. ",
+          "link": {
+            "key": "api",
+            "label": "Read Public API"
+          },
           "tail": "."
         }
       ]
@@ -37,7 +57,10 @@
         {
           "type": "p",
           "text": "Connect an AI agent to our read-only public MCP server. ",
-          "link": { "key": "mcp", "label": "Read Use Open Circuit SF with AI agents" },
+          "link": {
+            "key": "mcp",
+            "label": "Read Use Open Circuit SF with AI agents"
+          },
           "tail": "."
         }
       ]
@@ -48,7 +71,10 @@
         {
           "type": "p",
           "text": "The newsletter archive feed and the events calendar feed. ",
-          "link": { "key": "feeds", "label": "Read Feeds" },
+          "link": {
+            "key": "feeds",
+            "label": "Read Feeds"
+          },
           "tail": "."
         }
       ]
@@ -57,6 +83,7 @@
   "links": {
     "using": "/docs/using-the-site",
     "newsletter": "/docs/newsletter",
+    "api": "/docs/api",
     "mcp": "/docs/mcp",
     "feeds": "/docs/feeds"
   }
