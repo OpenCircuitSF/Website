@@ -32,6 +32,17 @@
       ]
     },
     {
+      "heading": "MCP",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Connect an AI agent to our read-only public MCP server. ",
+          "link": { "key": "mcp", "label": "Read Use Open Circuit SF with AI agents" },
+          "tail": "."
+        }
+      ]
+    },
+    {
       "heading": "Feeds",
       "blocks": [
         {
@@ -46,6 +57,7 @@
   "links": {
     "using": "/docs/using-the-site",
     "newsletter": "/docs/newsletter",
+    "mcp": "/docs/mcp",
     "feeds": "/docs/feeds"
   }
 }

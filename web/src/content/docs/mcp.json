@@ -1,0 +1,81 @@
+{
+  "title": "Use Open Circuit SF with AI agents",
+  "description": "Connect Claude, ChatGPT, Cursor or any MCP client to Open Circuit SF's read-only public MCP server. No account or key.",
+  "h1": "Use Open Circuit SF with AI agents",
+  "intro": [
+    {
+      "type": "p",
+      "text": "Open Circuit SF runs a public MCP server that AI agents can use to look up our events and newsletter issues. It is read-only, returns only what the public website already shows, and needs no account or key."
+    }
+  ],
+  "sections": [
+    {
+      "heading": "Endpoint",
+      "blocks": [
+        {
+          "type": "code",
+          "label": "Endpoint",
+          "text": "https://www.opencircuitsf.com/mcp"
+        },
+        {
+          "type": "p",
+          "text": "Always use the www address. It speaks MCP's Streamable HTTP transport."
+        }
+      ]
+    },
+    {
+      "heading": "Claude Code",
+      "blocks": [
+        {
+          "type": "code",
+          "label": "Command",
+          "text": "claude mcp add --transport http opencircuitsf https://www.opencircuitsf.com/mcp"
+        }
+      ]
+    },
+    {
+      "heading": "Other clients",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Most MCP clients accept an mcpServers entry like this one."
+        },
+        {
+          "type": "code",
+          "label": "mcpServers JSON",
+          "text": "{\n  \"mcpServers\": {\n    \"opencircuitsf\": {\n      \"type\": \"http\",\n      \"url\": \"https://www.opencircuitsf.com/mcp\"\n    }\n  }\n}"
+        }
+      ]
+    },
+    {
+      "heading": "Tools",
+      "blocks": [
+        {
+          "type": "list",
+          "items": [
+            "list_upcoming_events — List upcoming Open Circuit SF events, soonest first.",
+            "search_events — Search Open Circuit SF events by words in the title, description and tags.",
+            "get_event — Get one Open Circuit SF event by its id (its slug), from list_upcoming_events or search_events.",
+            "list_newsletter_issues — List Open Circuit SF newsletter issues, newest first.",
+            "get_newsletter_issue — Get one Open Circuit SF newsletter issue by its id (its slug), from list_newsletter_issues.",
+            "get_about — What Open Circuit SF is, and how to join, subscribe or get in touch."
+          ]
+        },
+        {
+          "type": "p",
+          "text": "Times are RFC 3339 with an offset in America/Los_Angeles. Every event and newsletter result carries its public url."
+        }
+      ]
+    },
+    {
+      "heading": "What it never returns",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "Drafts, unpublished events, unsent or withheld newsletter issues, attendees, RSVPs and subscribers. It returns only what the public website already shows."
+        }
+      ]
+    }
+  ],
+  "links": {}
+}

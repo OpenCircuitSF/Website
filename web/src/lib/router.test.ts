@@ -41,6 +41,7 @@ const staticRouteCases: [string, string][] = [
   ['/docs', 'docs'],
   ['/docs/using-the-site', 'docs'],
   ['/docs/newsletter', 'docs'],
+  ['/docs/mcp', 'docs'],
   ['/docs/feeds', 'docs'],
   ['/subscribe', 'subscribe'],
   ['/subscribe/thanks', 'subscribe-thanks'],
@@ -243,6 +244,14 @@ describe('needsSessionGate (#0521)', () => {
     expect(needsSessionGate('workshop-detail')).toBe(false);
     expect(needsSessionGate('not-found')).toBe(false);
     expect(needsSessionGate('home')).toBe(false);
+  });
+});
+
+describe('legacyRedirectTarget /agents (#0735)', () => {
+  it('sends /agents to /docs/mcp, keeping the query', () => {
+    expect(legacyRedirectTarget('/agents')).toBe('/docs/mcp');
+    expect(legacyRedirectTarget('/agents/')).toBe('/docs/mcp');
+    expect(legacyRedirectTarget('/agents', '?x=1')).toBe('/docs/mcp?x=1');
   });
 });
 

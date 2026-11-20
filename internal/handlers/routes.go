@@ -46,6 +46,7 @@ var knownStaticRoutes = map[string]bool{
 	"/docs":                true,
 	"/docs/using-the-site": true,
 	"/docs/newsletter":     true,
+	"/docs/mcp":            true,
 	"/docs/feeds":          true,
 }
 

@@ -81,6 +81,7 @@ export const STATIC_ROUTES: Readonly<Record<string, RouteName>> = {
   '/docs': 'docs',
   '/docs/using-the-site': 'docs',
   '/docs/newsletter': 'docs',
+  '/docs/mcp': 'docs',
   '/docs/feeds': 'docs',
   '/subscribe': 'subscribe',
   '/subscribe/thanks': 'subscribe-thanks',
@@ -125,11 +126,13 @@ export const WORKSHOP_GUIDE_SLUGS: ReadonlySet<string> = new Set(WORKSHOP_GUIDES
  * every other path. Mirrors internal/handlers/legacy_workshop_redirects.go:
  * the server answers a hard load with a 301, and this covers client-side
  * navigation and static dev servers. The index's own type comes first, so a
- * stray `type=` in an old link cannot override it.
+ * stray `type=` in an old link cannot override it. #0735: /agents goes to
+ * /docs/mcp, mirroring internal/handlers/docs_redirects.go.
  */
 export function legacyRedirectTarget(pathname: string, search = ''): string | null {
   const path = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
   const query = search.startsWith('?') ? search.slice(1) : search;
+  if (path === '/agents') return query ? `/docs/mcp?${query}` : '/docs/mcp';
   if (path === '/workshops') {
     return query ? `/events?type=workshop&${query}` : '/events?type=workshop';
   }
