@@ -2026,6 +2026,7 @@ func mountAndServe(
 		publicmcp.Mount(mux, publicmcp.NewHandler(publicReg, slog.Default().With("component", "public-mcp"), publicLimiter))
 		// #0734: the same registry as REST, GET-only, CORS *, no auth.
 		publicapi.Mount(mux, publicapi.NewHTTPRouter(publicReg, cfg.BaseURL, publicLimiter))
+		publicmcp.MountDiscovery(mux, publicReg, cfg.BaseURL) // #0731: server card + AI catalog
 	}
 
 	// Preference center (#0031) and confirmation (#0030) — public,

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -15,6 +16,16 @@ import (
 
 // Path is where the public MCP endpoint is mounted.
 const Path = "/mcp"
+
+// DocsPath is the human docs page a browser GET of Path redirects to (#0731).
+const DocsPath = "/docs/mcp"
+
+// ServerName and ServerTitle are the server's Implementation name and
+// title, shared with the server card (#0731) so the two cannot disagree.
+const (
+	ServerName  = "opencircuitsf"
+	ServerTitle = "Open Circuit SF"
+)
 
 // instructions is sent to every client on initialize.
 const instructions = `Read-only public information about Open Circuit SF, a San Francisco hands-on electronics workshop group: its events and its newsletter issues. ` +
@@ -36,7 +47,7 @@ func NewHandler(reg *publicapi.Registry, logger *slog.Logger, limiter *publicapi
 	// warnings.
 	logger = slog.New(warnAndAbove{logger.Handler()})
 	reg.Freeze()
-	s := mcp.NewServer(&mcp.Implementation{Name: "opencircuitsf", Title: "Open Circuit SF", Version: reg.Version()},
+	s := mcp.NewServer(&mcp.Implementation{Name: ServerName, Title: ServerTitle, Version: reg.Version()},
 		&mcp.ServerOptions{Instructions: instructions, Logger: logger})
 	for _, op := range reg.Ops() {
 		s.AddTool(toolFor(op), handlerFor(reg, op))
@@ -59,10 +70,30 @@ func NewHandler(reg *publicapi.Registry, logger *slog.Logger, limiter *publicapi
 // Mount registers h for Path on mux, one pattern per method the Streamable
 // HTTP transport uses. A pattern with no method cannot be used: it
 // conflicts with the SPA's "GET /" catch-all in Go's ServeMux. Call it once.
+// GET goes through browserToDocs (#0731), so a browser lands on DocsPath.
 func Mount(mux *http.ServeMux, h http.Handler) {
-	for _, m := range []string{http.MethodPost, http.MethodGet, http.MethodDelete} {
-		mux.Handle(m+" "+Path, h)
-	}
+	mux.Handle(http.MethodPost+" "+Path, h)
+	mux.Handle(http.MethodGet+" "+Path, browserToDocs(h))
+	mux.Handle(http.MethodDelete+" "+Path, h)
+}
+
+// browserToDocs redirects a browser's GET to DocsPath with a 302 (the
+// redirect is content-negotiated, so not permanent) and passes every other
+// GET, which is what MCP clients send, to h.
+func browserToDocs(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if wantsHTML(r) {
+			http.Redirect(w, r, DocsPath, http.StatusFound)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// wantsHTML reports whether Accept asks for HTML and not an event stream.
+func wantsHTML(r *http.Request) bool {
+	a := strings.ToLower(r.Header.Get("Accept"))
+	return strings.Contains(a, "text/html") && !strings.Contains(a, "text/event-stream")
 }
 
 // toolFor is op as a read-only, idempotent, closed-world tool.

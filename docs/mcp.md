@@ -436,7 +436,18 @@ and every event and issue carries its public `url`):
 **Auth.** None. The server ignores any `Authorization` header, never answers
 401, and serves no OAuth metadata. It is a separate server from `/admin/mcp`
 with its own registry (`internal/publicapi`); no admin operation can be added
-to it. `GET /mcp` answers 405 (the server is stateless).
+to it. `GET /mcp` answers 405 (the server is stateless), except that a
+browser's GET (`Accept` has `text/html` and not `text/event-stream`) is a 302
+to `/docs/mcp` (`#0731`).
+
+**Discovery** (`#0731`). A v1 MCP Server Card (SEP-2127, wire format from
+`modelcontextprotocol/experimental-ext-server-card` at `28db12c9`) is at
+`https://www.opencircuitsf.com/mcp/server-card`, and the domain's AI Catalog
+at `https://www.opencircuitsf.com/.well-known/ai-catalog.json` points at it.
+`/.well-known/mcp.json` serves the same card bytes as a non-standard alias.
+The card holds connection details only (name, version, endpoint, protocol
+versions); by design it does not list tools. All three are built in
+`internal/publicmcp/servercard.go` from the server's own name and version.
 
 The same operations are a REST API with no key at `/api/public/v1/`; see
 [`api.md`'s public API section](api.md#public-api-apipublicv1-no-key).

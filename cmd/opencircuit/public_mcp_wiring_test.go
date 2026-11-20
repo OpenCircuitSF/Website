@@ -176,6 +176,7 @@ func TestMountAndServe_PublicMCPMounted(t *testing.T) {
 	}
 
 	checkPublicAPIMounted(t, baseURL)
+	checkServerCardMounted(t, baseURL)
 
 	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
 		t.Fatalf("send SIGTERM: %v", err)
@@ -237,5 +238,38 @@ func checkPublicAPIMounted(t *testing.T, baseURL string) {
 		if resp.StatusCode != c.code || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") || strings.Contains(body, "<html") {
 			t.Errorf("%s %s = %d %q %.120s, want %d JSON", c.method, c.path, resp.StatusCode, resp.Header.Get("Content-Type"), body, c.code)
 		}
+	}
+}
+
+// checkServerCardMounted is #0731's wiring check: the real mountAndServe
+// serves the server card and AI catalog, and leaves every other
+// /.well-known/ path (atproto-did, served by Apache from disk) unclaimed.
+func checkServerCardMounted(t *testing.T, baseURL string) {
+	t.Helper()
+	client := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}, Timeout: wiringHTTPTimeout}
+	get := func(path string) (int, string, []byte) {
+		resp, err := client.Get(baseURL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, resp.Header.Get("Content-Type"), b
+	}
+	code, ct, body := get(publicmcp.CardPath)
+	var card struct {
+		Remotes []struct {
+			URL string `json:"url"`
+		} `json:"remotes"`
+	}
+	if err := json.Unmarshal(body, &card); code != http.StatusOK || ct != publicmcp.CardMediaType || err != nil ||
+		len(card.Remotes) != 1 || card.Remotes[0].URL != baseURL+publicmcp.Path {
+		t.Errorf("GET %s = %d %q %.300s", publicmcp.CardPath, code, ct, body)
+	}
+	if code, ct, _ := get(publicmcp.CatalogPath); code != http.StatusOK || ct != publicmcp.CatalogMediaType {
+		t.Errorf("GET %s = %d %q", publicmcp.CatalogPath, code, ct)
+	}
+	if code, _, _ := get("/.well-known/atproto-did"); code == http.StatusOK {
+		t.Error("GET /.well-known/atproto-did = 200 from Go; Apache serves it from disk")
 	}
 }
