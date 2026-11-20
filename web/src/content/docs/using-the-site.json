@@ -14,7 +14,7 @@
       "blocks": [
         {
           "type": "p",
-          "text": "The Events page lists upcoming workshops and other events, followed by past events. You can filter the list by event type.",
+          "text": "The Events page lists upcoming workshops and other events, followed by past events. You can filter the list by event type. ",
           "link": { "key": "events", "label": "See the events" },
           "tail": "."
         }
