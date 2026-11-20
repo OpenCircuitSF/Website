@@ -27,10 +27,21 @@ var la = func() *time.Location {
 var textEscaper = strings.NewReplacer(`\`, `\\`, `;`, `\;`, `,`, `\,`, "\n", `\n`)
 
 // EscapeText applies RFC 5545 section 3.3.11 TEXT escaping. CRLF and lone CR
-// are normalised to LF before escaping.
+// are normalised to LF before escaping. Other ASCII control characters
+// (everything below 0x20 except HTAB, plus DEL) are removed, since TSAFE-CHAR
+// excludes them (#0737).
 func EscapeText(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	s = strings.ReplaceAll(s, "\r", "\n")
+	s = strings.Map(func(r rune) rune {
+		if r == '\t' || r == '\n' {
+			return r
+		}
+		if r < 0x20 || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
 	return textEscaper.Replace(s)
 }
 

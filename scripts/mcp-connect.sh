@@ -10,7 +10,8 @@
 # it when asked (input is hidden). Re-run any time to replace the key.
 #
 # Environment:
-#   OCSF_MCP_URL          server URL (default https://www.opencircuitsf.com/admin/mcp)
+#   OCSF_MCP_URL          server URL (default https://www.opencircuitsf.com/admin/mcp);
+#                         must end in /admin/mcp
 #   OCSF_API_KEY          the key itself; skips the hidden prompt
 #   OCSF_SKIP_KEY_CHECK=1 skip the live whoami check before saving the key
 #
@@ -55,6 +56,13 @@ case "$SCOPE" in
     echo "refusing --scope project: it writes the API key into .mcp.json, which may be committed. Use user or local." >&2
     exit 2 ;;
   *) echo "unknown scope: $SCOPE (use user or local)" >&2; exit 2 ;;
+esac
+
+URL="${URL%/}"
+case "$URL" in
+  */admin/mcp) ;;
+  *) echo "OCSF_MCP_URL=$URL does not end in /admin/mcp. The admin MCP server moved to /admin/mcp; /mcp is now the public, read-only server, which takes no key. Use https://www.opencircuitsf.com/admin/mcp (or unset OCSF_MCP_URL)." >&2
+     exit 2 ;;
 esac
 
 command -v claude >/dev/null || { echo "claude CLI not found on PATH" >&2; exit 1; }

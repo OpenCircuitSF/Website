@@ -13,6 +13,7 @@ import (
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/publicapi"
 	"github.com/brennanMKE/OpenCircuitSF/internal/publicmcp"
+	"github.com/google/jsonschema-go/jsonschema"
 )
 
 // publicDocsPage is the slice of web/src/content/docs/mcp.json and api.json
@@ -161,19 +162,84 @@ func TestDocsToolDriftBites(t *testing.T) {
 
 const publicDocsAPIFile = "../../web/src/content/docs/api.json"
 
-// jsonKeys adds every object key in v, at any depth, to into.
-func jsonKeys(v any, into map[string]bool) {
+// jsonPaths adds the path of every object key in v to into: an object key
+// k under prefix records prefix+"."+k, and an array's elements sit under
+// prefix+"[]" (#0737).
+func jsonPaths(v any, prefix string, into map[string]bool) {
 	switch x := v.(type) {
 	case map[string]any:
 		for k, e := range x {
-			into[k] = true
-			jsonKeys(e, into)
+			into[prefix+"."+k] = true
+			jsonPaths(e, prefix+"."+k, into)
 		}
 	case []any:
 		for _, e := range x {
-			jsonKeys(e, into)
+			jsonPaths(e, prefix+"[]", into)
 		}
 	}
+}
+
+// schemaPaths is jsonPaths over a schema: Properties as object keys and
+// Items as array elements. A $ref or $defs is recorded as an unmatchable
+// path, so it shows up as drift rather than being followed (#0737).
+func schemaPaths(s *jsonschema.Schema, prefix string, into map[string]bool) {
+	if s == nil {
+		return
+	}
+	if s.Ref != "" || len(s.Defs) > 0 || len(s.Definitions) > 0 {
+		into[prefix+" ($ref/$defs not followed)"] = true
+	}
+	for k, p := range s.Properties {
+		into[prefix+"."+k] = true
+		schemaPaths(p, prefix+"."+k, into)
+	}
+	schemaPaths(s.Items, prefix+"[]", into)
+}
+
+// docsParamNames returns the parameter names an op section's prose lists
+// after "Parameters: " (or "Parameter: "), nil when it lists none. Clauses
+// split on ";" at parenthesis depth 0; each clause's names run up to its
+// first "(" or ",", and "a and b" names two (#0737).
+func docsParamNames(text string) []string {
+	i := strings.Index(text, "Parameters: ")
+	n := len("Parameters: ")
+	if i < 0 {
+		i = strings.Index(text, "Parameter: ")
+		n = len("Parameter: ")
+	}
+	if i < 0 {
+		return nil
+	}
+	rest := text[i+n:]
+	var clauses []string
+	depth, start := 0, 0
+	for k, r := range rest {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ';':
+			if depth == 0 {
+				clauses = append(clauses, rest[start:k])
+				start = k + 1
+			}
+		}
+	}
+	clauses = append(clauses, rest[start:])
+	var out []string
+	for _, c := range clauses {
+		if k := strings.IndexAny(c, "(,"); k >= 0 {
+			c = c[:k]
+		}
+		c = strings.TrimSuffix(strings.TrimSpace(c), ".")
+		for _, name := range strings.Split(c, " and ") {
+			if name = strings.TrimSpace(name); name != "" {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
 }
 
 func sortedKeys(m map[string]bool) []string {
@@ -187,9 +253,10 @@ func sortedKeys(m map[string]bool) []string {
 
 // docsAPIDrift checks /docs/api's per-endpoint sections against ops: one
 // "GET <path>" section per op and no other, an Example request curl whose
-// URL matches the op's path, and an Example response whose top-level keys
-// equal the output schema's properties and whose keys at every depth equal
-// the schema's at every depth. It returns one line per difference.
+// URL matches the op's path, prose whose "Parameters:" list names exactly
+// the op's query parameters, and an Example response whose top-level keys
+// equal the output schema's properties and whose key paths (#0737) equal
+// the schema's. It returns one line per difference.
 func docsAPIDrift(raw []byte, ops []publicapi.Op) []string {
 	var page publicDocsPage
 	if err := json.Unmarshal(raw, &page); err != nil {
@@ -211,6 +278,27 @@ func docsAPIDrift(raw []byte, ops []publicapi.Op) []string {
 		if !ok {
 			drift = append(drift, "no section "+h)
 			continue
+		}
+		var wantParams []string
+		for _, u := range op.URLParams() {
+			if !u.InPath {
+				wantParams = append(wantParams, u.Name)
+			}
+		}
+		var gotParams []string
+		hasProse := false
+		for _, b := range page.Sections[i].Blocks {
+			if b.Type == "p" {
+				gotParams, hasProse = docsParamNames(b.Text), true
+				break
+			}
+		}
+		slices.Sort(wantParams)
+		slices.Sort(gotParams)
+		if !hasProse && len(wantParams) > 0 {
+			drift = append(drift, fmt.Sprintf("%s: no prose block, input schema %v", h, wantParams))
+		} else if !slices.Equal(gotParams, wantParams) {
+			drift = append(drift, fmt.Sprintf("%s: parameters %v, input schema %v", h, gotParams, wantParams))
 		}
 		var codes []string
 		var labels []string
@@ -246,10 +334,10 @@ func docsAPIDrift(raw []byte, ops []publicapi.Op) []string {
 			drift = append(drift, fmt.Sprintf("%s: response keys %v, schema %v", h, g, w))
 		}
 		all, wantAll := map[string]bool{}, map[string]bool{}
-		jsonKeys(resp, all)
-		schemaProps(schema, wantAll)
+		jsonPaths(resp, "", all)
+		schemaPaths(schema, "", wantAll)
 		if g, w := sortedKeys(all), sortedKeys(wantAll); !slices.Equal(g, w) {
-			drift = append(drift, fmt.Sprintf("%s: response keys at every depth %v, schema %v", h, g, w))
+			drift = append(drift, fmt.Sprintf("%s: response key paths %v, schema %v", h, g, w))
 		}
 	}
 	for h := range byHeading {
@@ -311,6 +399,15 @@ func TestDocsAPIDriftBites(t *testing.T) {
 		},
 		"wrong path":     func(s string) string { return strings.Replace(s, "/api/public/v1/about'", "/api/public/v1/abouts'", 1) },
 		"dropped header": func(s string) string { return strings.Replace(s, `"GET /api/public/v1/newsletter"`, `"Newsletter"`, 1) },
+		"extra param": func(s string) string {
+			return strings.Replace(s, "Parameter: limit (default 10, max 50).", "Parameter: limit (default 10, max 50); offset (default 0).", 1)
+		},
+		"missing param": func(s string) string { return strings.Replace(s, "; after and before, each", "; after, each", 1) },
+		// #0737: id already exists at events[].id, so only the per-path
+		// check sees the new .events[].tags[].id.
+		"nested key path": func(s string) string {
+			return strings.Replace(s, `\"microcontrollers\"`, `{\"id\": \"microcontrollers\"}`, 1)
+		},
 	} {
 		mutated := mutate(string(raw))
 		if mutated == string(raw) {
@@ -319,6 +416,35 @@ func TestDocsAPIDriftBites(t *testing.T) {
 		}
 		if len(docsAPIDrift([]byte(mutated), ops)) == 0 {
 			t.Errorf("%s: docsAPIDrift reported nothing", name)
+		}
+	}
+}
+
+// TestPublicDocsNameDiscoveryURLs: /docs/feeds and /docs/mcp each show the
+// server card and AI catalog URLs as code blocks (#0737).
+func TestPublicDocsNameDiscoveryURLs(t *testing.T) {
+	const site = "https://www.opencircuitsf.com"
+	for _, f := range []string{"feeds.json", "mcp.json"} {
+		raw, err := os.ReadFile("../../web/src/content/docs/" + f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var page publicDocsPage
+		if err := json.Unmarshal(raw, &page); err != nil {
+			t.Fatalf("%s: %v", f, err)
+		}
+		codes := map[string]bool{}
+		for _, s := range page.Sections {
+			for _, b := range s.Blocks {
+				if b.Type == "code" {
+					codes[b.Text] = true
+				}
+			}
+		}
+		for _, u := range []string{site + publicmcp.CardPath, site + publicmcp.CatalogPath} {
+			if !codes[u] {
+				t.Errorf("%s: no code block showing %s", f, u)
+			}
 		}
 	}
 }

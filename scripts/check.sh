@@ -32,6 +32,7 @@
 # `guards` runs scripts/check_guard_test.sh, scripts/deploy_guard_test.sh
 # (#0424), scripts/deploy_health_guard_test.sh (#0712),
 # scripts/ship_sigpipe_guard_test.sh (#0714),
+# scripts/mcp_connect_guard_test.sh (#0737),
 # scripts/testdb_gc_guard_test.sh, scripts/dev_guard_test.sh,
 # scripts/db_reset_guard_test.sh, and scripts/go_file_visit_floor_guard_test.sh
 # (#0300). The last of those ALSO runs on the ordinary path now (#0489 — see
@@ -979,6 +980,8 @@ case "$MODE" in
        step "scripts/deploy_health_guard_test.sh (#0712)"; run scripts/deploy_health_guard_test.sh
        # #0714: ship.sh --yes must not exit 141 from yes's SIGPIPE. Sub-second.
        step "scripts/ship_sigpipe_guard_test.sh (#0714)"; run scripts/ship_sigpipe_guard_test.sh
+       # #0737: mcp-connect.sh refuses a URL not ending /admin/mcp. Stubs only — no network, sub-second.
+       step "scripts/mcp_connect_guard_test.sh (#0737)"; run scripts/mcp_connect_guard_test.sh
        step "scripts/testdb_gc_guard_test.sh (#0150)"; run scripts/testdb_gc_guard_test.sh
        step "scripts/dev_guard_test.sh (#0117)";        run scripts/dev_guard_test.sh
        step "scripts/db_reset_guard_test.sh (#0207)";   run scripts/db_reset_guard_test.sh

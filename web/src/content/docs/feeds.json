@@ -36,7 +36,33 @@
           "text": "https://www.opencircuitsf.com/events.ics"
         }
       ]
+    },
+    {
+      "heading": "MCP server card",
+      "blocks": [
+        {
+          "type": "p",
+          "text": "AI agents and MCP clients can discover the site's public MCP server from these two files. ",
+          "link": {
+            "key": "mcp",
+            "label": "Use with AI agents"
+          },
+          "tail": "."
+        },
+        {
+          "type": "code",
+          "label": "AI catalog",
+          "text": "https://www.opencircuitsf.com/.well-known/ai-catalog.json"
+        },
+        {
+          "type": "code",
+          "label": "Server card",
+          "text": "https://www.opencircuitsf.com/mcp/server-card"
+        }
+      ]
     }
   ],
-  "links": {}
+  "links": {
+    "mcp": "/docs/mcp"
+  }
 }

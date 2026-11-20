@@ -9,30 +9,122 @@ import (
 	"encoding/xml"
 	"html"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/handlers"
 )
 
-// singleSourcePages pairs each single-source route with the shared JSON
+// singleSourcePage pairs a single-source route with the shared JSON
 // file that is BOTH the SPA's and this package's source for it, and the
 // .svelte view expected to import that file (the SPA half of the
 // single-source contract -- a view that hard-typed its text back in would
 // drift from the server HTML by construction, and this is the check that
 // catches it).
-var singleSourcePages = []struct {
+type singleSourcePage struct {
 	route  string
 	source string
 	svelte string
-}{
+}
+
+// singleSourceFixed holds the hand-listed rows. The docs rows are derived
+// from docsPaths() by singleSourcePageRows (#0737), so a new docs page is
+// covered without editing this file.
+var singleSourceFixed = []singleSourcePage{
 	{"/about", "web/src/content/about.json", "web/src/views/About.svelte"},
 	{"/privacy", "web/src/content/privacy.json", "web/src/views/PrivacyPolicy.svelte"},
-	// #0735: the docs pages, one shared JSON file each, all rendered by Docs.svelte.
-	{"/docs", "web/src/content/docs/index.json", "web/src/views/Docs.svelte"},
-	{"/docs/using-the-site", "web/src/content/docs/using-the-site.json", "web/src/views/Docs.svelte"},
-	{"/docs/newsletter", "web/src/content/docs/newsletter.json", "web/src/views/Docs.svelte"},
-	{"/docs/feeds", "web/src/content/docs/feeds.json", "web/src/views/Docs.svelte"},
+}
+
+// singleSourcePageRows returns the fixed rows, then one row per docs page.
+func singleSourcePageRows() []singleSourcePage {
+	out := append([]singleSourcePage(nil), singleSourceFixed...)
+	for _, p := range docsPaths() {
+		src := "web/src/content/docs/index.json"
+		if p != "/docs" {
+			src = "web/src/content/docs/" + strings.TrimPrefix(p, "/docs/") + ".json"
+		}
+		out = append(out, singleSourcePage{p, src, "web/src/views/Docs.svelte"})
+	}
+	return out
+}
+
+// TestDocsPathsMatchContentDir checks docsPaths() against an independent
+// read of the docs content directory (#0737).
+func TestDocsPathsMatchContentDir(t *testing.T) {
+	entries, err := os.ReadDir(repoPath("web/src/content/docs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		stem := strings.TrimSuffix(e.Name(), ".json")
+		if stem == "index" {
+			want = append(want, "/docs")
+		} else {
+			want = append(want, "/docs/"+stem)
+		}
+	}
+	sort.Strings(want)
+	got := docsPaths()
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("docsPaths() = %v, content dir gives %v", got, want)
+	}
+	if len(got) < 6 {
+		t.Errorf("docsPaths() has %d entries, want at least 6", len(got))
+	}
+	for _, row := range singleSourcePageRows() {
+		if _, err := os.Stat(repoPath(row.source)); err != nil {
+			t.Errorf("%s: source %s: %v", row.route, row.source, err)
+		}
+	}
+}
+
+// TestIsExternalHref pins the internal/external rule; web/src/lib/staticPage.ts's
+// externalLinkAttrs uses the same one (#0737).
+func TestIsExternalHref(t *testing.T) {
+	for href, want := range map[string]bool{
+		"/docs":                            false,
+		"/":                                false,
+		"/docs/newsletter":                 false,
+		"mailto:contact@opencircuitsf.com": false,
+		"https://luma.com/opencircuitsf":   true,
+		"http://example.com":               true,
+	} {
+		if got := isExternalHref(href); got != want {
+			t.Errorf("isExternalHref(%q) = %v, want %v", href, got, want)
+		}
+	}
+}
+
+// TestRender_LinksBlockInternalVsExternal checks that a links block opens
+// only external links in a new tab (#0737).
+func TestRender_LinksBlockInternalVsExternal(t *testing.T) {
+	sp, err := loadStaticPage([]byte(`{"h1":"H","intro":[{"type":"p","text":"x"}],"sections":[{"heading":"S","blocks":[{"type":"links","items":[{"key":"in","label":"Inside"},{"key":"out","label":"Outside"}]}]}],"links":{"in":"/events","out":"https://luma.com/opencircuitsf"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf strings.Builder
+	if err := pageTemplate.ExecuteTemplate(&buf, "contentBlock", sp.Sections[0].Blocks[0]); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, `<a href="/events">Inside</a>`) {
+		t.Errorf("internal link not plain: %s", out)
+	}
+	if i := strings.Index(out, `<a href="/events"`); i >= 0 {
+		tag := out[i:]
+		tag = tag[:strings.Index(tag, ">")]
+		if strings.Contains(tag, "target") || strings.Contains(tag, "rel") {
+			t.Errorf("internal link carries target/rel: %s", tag)
+		}
+	}
+	if !strings.Contains(out, `<a href="https://luma.com/opencircuitsf" target="_blank" rel="noopener noreferrer">Outside</a>`) {
+		t.Errorf("external link missing new-tab attrs: %s", out)
+	}
 }
 
 // staticBlockTexts returns each piece of plain text one block contributes
@@ -88,7 +180,7 @@ func everyStaticText(sp staticPageData) []string {
 // for its route.
 func TestRender_SingleSourcePagesServeFullText(t *testing.T) {
 	r := newTestRenderer(nil)
-	for _, p := range singleSourcePages {
+	for _, p := range singleSourcePageRows() {
 		sp, ok := staticPages[p.route]
 		if !ok {
 			t.Fatalf("staticPages has no entry for %s -- the shared source file is not embedded or not keyed to this route", p.route)

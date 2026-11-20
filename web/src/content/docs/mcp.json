@@ -24,6 +24,25 @@
       ]
     },
     {
+      "heading": "Discovery",
+      "blocks": [
+        {
+          "type": "code",
+          "label": "AI catalog",
+          "text": "https://www.opencircuitsf.com/.well-known/ai-catalog.json"
+        },
+        {
+          "type": "code",
+          "label": "Server card",
+          "text": "https://www.opencircuitsf.com/mcp/server-card"
+        },
+        {
+          "type": "p",
+          "text": "The server card has the connection details: name, version, endpoint and transport. It does not list the tools; an MCP client gets those from the server itself."
+        }
+      ]
+    },
+    {
       "heading": "Claude Code",
       "blocks": [
         {

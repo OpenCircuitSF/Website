@@ -180,3 +180,19 @@ func TestCalendar_EscapesTextFieldsNotURL(t *testing.T) {
 		t.Errorf("URL not verbatim:\n%s", out)
 	}
 }
+
+// TestEscapeText_StripsControlCharacters: TSAFE-CHAR excludes CONTROL, so
+// EscapeText drops it, keeping HTAB and the newline escape (#0737).
+func TestEscapeText_StripsControlCharacters(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{"a\x00b\x07c\x1bd\x7fe", "abcde"},
+		{"a\vb\fc", "abc"},
+		{"tab\there", "tab\there"},
+		{"x\r\ny", `x\ny`},
+		{"semi;\x01colon", `semi\;colon`},
+	} {
+		if got := EscapeText(c.in); got != c.want {
+			t.Errorf("EscapeText(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
