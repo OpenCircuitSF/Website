@@ -69,7 +69,7 @@
         {
           "type": "code",
           "label": "Example response",
-          "text": "{\n  \"events\": [\n    {\n      \"id\": \"esp32-intro\",\n      \"slug\": \"esp32-intro\",\n      \"title\": \"Intro to ESP32\",\n      \"summary\": \"Build and program your first ESP32 board.\",\n      \"starts_at\": \"2026-12-05T13:00:00-08:00\",\n      \"ends_at\": \"2026-12-05T16:00:00-08:00\",\n      \"location_name\": \"Noisebridge\",\n      \"address\": \"272 Capp St, San Francisco, CA\",\n      \"status\": \"scheduled\",\n      \"registration_url\": \"https://lu.ma/example\",\n      \"url\": \"https://www.opencircuitsf.com/events/esp32-intro\",\n      \"event_type\": \"workshop\",\n      \"tags\": [\n        \"microcontrollers\"\n      ]\n    }\n  ]\n}"
+          "text": "{\n  \"events\": [\n    {\n      \"id\": \"esp32-intro\",\n      \"slug\": \"esp32-intro\",\n      \"title\": \"Intro to ESP32\",\n      \"summary\": \"Build and program your first ESP32 board.\",\n      \"starts_at\": \"2026-12-05T13:00:00-08:00\",\n      \"ends_at\": \"2026-12-05T16:00:00-08:00\",\n      \"location_name\": \"Noisebridge\",\n      \"address\": \"272 Capp St, San Francisco, CA\",\n      \"status\": \"scheduled\",\n      \"registration_url\": \"https://lu.ma/example\",\n      \"url\": \"https://www.opencircuitsf.com/events/esp32-intro\",\n      \"event_type\": \"Workshop\",\n      \"tags\": [\n        \"microcontrollers\"\n      ]\n    }\n  ]\n}"
         }
       ]
     },
@@ -88,7 +88,7 @@
         {
           "type": "code",
           "label": "Example response",
-          "text": "{\n  \"events\": [\n    {\n      \"id\": \"esp32-intro\",\n      \"slug\": \"esp32-intro\",\n      \"title\": \"Intro to ESP32\",\n      \"summary\": \"Build and program your first ESP32 board.\",\n      \"starts_at\": \"2026-12-05T13:00:00-08:00\",\n      \"ends_at\": \"2026-12-05T16:00:00-08:00\",\n      \"location_name\": \"Noisebridge\",\n      \"address\": \"272 Capp St, San Francisco, CA\",\n      \"status\": \"scheduled\",\n      \"registration_url\": \"https://lu.ma/example\",\n      \"url\": \"https://www.opencircuitsf.com/events/esp32-intro\",\n      \"event_type\": \"workshop\",\n      \"tags\": [\n        \"microcontrollers\"\n      ]\n    }\n  ]\n}"
+          "text": "{\n  \"events\": [\n    {\n      \"id\": \"esp32-intro\",\n      \"slug\": \"esp32-intro\",\n      \"title\": \"Intro to ESP32\",\n      \"summary\": \"Build and program your first ESP32 board.\",\n      \"starts_at\": \"2026-12-05T13:00:00-08:00\",\n      \"ends_at\": \"2026-12-05T16:00:00-08:00\",\n      \"location_name\": \"Noisebridge\",\n      \"address\": \"272 Capp St, San Francisco, CA\",\n      \"status\": \"scheduled\",\n      \"registration_url\": \"https://lu.ma/example\",\n      \"url\": \"https://www.opencircuitsf.com/events/esp32-intro\",\n      \"event_type\": \"Workshop\",\n      \"tags\": [\n        \"microcontrollers\"\n      ]\n    }\n  ]\n}"
         }
       ]
     },
@@ -107,7 +107,7 @@
         {
           "type": "code",
           "label": "Example response",
-          "text": "{\n  \"id\": \"esp32-intro\",\n  \"slug\": \"esp32-intro\",\n  \"title\": \"Intro to ESP32\",\n  \"summary\": \"Build and program your first ESP32 board.\",\n  \"starts_at\": \"2026-12-05T13:00:00-08:00\",\n  \"ends_at\": \"2026-12-05T16:00:00-08:00\",\n  \"location_name\": \"Noisebridge\",\n  \"address\": \"272 Capp St, San Francisco, CA\",\n  \"status\": \"scheduled\",\n  \"registration_url\": \"https://lu.ma/example\",\n  \"url\": \"https://www.opencircuitsf.com/events/esp32-intro\",\n  \"event_type\": \"workshop\",\n  \"tags\": [\n    \"microcontrollers\"\n  ],\n  \"location_note\": \"Ring the buzzer.\",\n  \"description\": \"Bring a laptop. We supply the boards…\"\n}"
+          "text": "{\n  \"id\": \"esp32-intro\",\n  \"slug\": \"esp32-intro\",\n  \"title\": \"Intro to ESP32\",\n  \"summary\": \"Build and program your first ESP32 board.\",\n  \"starts_at\": \"2026-12-05T13:00:00-08:00\",\n  \"ends_at\": \"2026-12-05T16:00:00-08:00\",\n  \"location_name\": \"Noisebridge\",\n  \"address\": \"272 Capp St, San Francisco, CA\",\n  \"status\": \"scheduled\",\n  \"registration_url\": \"https://lu.ma/example\",\n  \"url\": \"https://www.opencircuitsf.com/events/esp32-intro\",\n  \"event_type\": \"Workshop\",\n  \"tags\": [\n    \"microcontrollers\"\n  ],\n  \"location_note\": \"Ring the buzzer.\",\n  \"description\": \"Bring a laptop. We supply the boards…\"\n}"
         }
       ]
     },
