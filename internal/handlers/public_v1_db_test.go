@@ -67,7 +67,7 @@ func TestPublicToolsNeverReturnUnpublished(t *testing.T) {
 		About:     func() publicapi.AboutText { return publicapi.AboutText{Links: map[string]string{}} },
 		BaseURL:   "https://www.opencircuitsf.com", Version: "t",
 	})
-	srv := httptest.NewServer(publicmcp.NewHandler(reg, nil))
+	srv := httptest.NewServer(publicmcp.NewHandler(reg, nil, nil))
 	defer srv.Close()
 	cs := mcptest.ConnectURL(t, srv.URL+publicmcp.Path, &mcptest.Transport{})
 

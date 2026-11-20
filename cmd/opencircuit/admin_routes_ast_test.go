@@ -157,7 +157,8 @@ func TestAdminRoutesRegisteredOnlyViaTable(t *testing.T) {
 // exactly once, with mux and a call to publicmcp.NewHandler. /api/public/v1/
 // is the public REST API (#0734): no literal route under it, and
 // publicapi.Mount exactly once, with mux and a call to
-// publicapi.NewHTTPRouter. (The Mounts register one "<METHOD> <path>" pattern
+// publicapi.NewHTTPRouter. Both public constructors must be given a
+// non-nil rate limiter as their third argument (#0730). (The Mounts register one "<METHOD> <path>" pattern
 // per method, because a pattern with no method conflicts with the SPA's
 // "GET /" in Go's ServeMux.)
 func TestAPIV1AndMCPMountedOnlyViaRegistry(t *testing.T) {
@@ -168,8 +169,8 @@ func TestAPIV1AndMCPMountedOnlyViaRegistry(t *testing.T) {
 
 // TestAPIV1MountGuardCatchesRogueRoute proves the guard above fails: copies
 // of main.go with a rogue literal v1, MCP or public REST route, with the router or MCP
-// handler swapped for another call, and with a second mount of either each
-// report a violation. The copies live in t.TempDir() and are only parsed,
+// handler swapped for another call, with a second mount of either, and with
+// a public adapter given a nil rate limiter (#0730) each report a violation. The copies live in t.TempDir() and are only parsed,
 // never compiled; main.go itself is never touched.
 func TestAPIV1MountGuardCatchesRogueRoute(t *testing.T) {
 	src, err := os.ReadFile("main.go")
@@ -201,13 +202,16 @@ func TestAPIV1MountGuardCatchesRogueRoute(t *testing.T) {
 		"mcp twice":           strings.Replace(string(src), mcpMount, `mcpserver.Mount(mux, mcpserver.NewHandler(mcpserver.Deps{}))`+"\n\t\t"+mcpMount, 1),
 		"mcp missing":         strings.Replace(string(src), mcpMount, `noMount(mux, mcpserver.NewHandler(`, 1),
 		"public mcp bypassed": strings.Replace(string(src), publicMount, `publicmcp.Mount(mux, handlers.NotAnMCPHandler(`, 1),
-		"public mcp twice":    strings.Replace(string(src), publicMount, `publicmcp.Mount(mux, publicmcp.NewHandler(nil, nil))`+"\n\t\t"+publicMount, 1),
+		"public mcp twice":    strings.Replace(string(src), publicMount, `publicmcp.Mount(mux, publicmcp.NewHandler(nil, nil, publicLimiter))`+"\n\t\t"+publicMount, 1),
 		"public mcp missing":  strings.Replace(string(src), publicMount, `noMount(mux, publicmcp.NewHandler(`, 1),
+		// #0730: either public adapter given no rate limiter.
+		"public mcp unlimited": strings.Replace(string(src), `slog.Default().With("component", "public-mcp"), publicLimiter)`, `slog.Default().With("component", "public-mcp"), nil)`, 1),
+		"public api unlimited": strings.Replace(string(src), `cfg.BaseURL, publicLimiter))`, `cfg.BaseURL, nil))`, 1),
 		// A literal /api/public/v1 route bypasses publicapi.Mount (#0734).
 		"public api rogue": strings.Replace(string(src), publicAPIMount,
 			`mux.Handle("GET /api/public/v1/rogue", http.NotFoundHandler())`+"\n\t\t"+publicAPIMount, 1),
 		"public api bypassed": strings.Replace(string(src), publicAPIMount, `publicapi.Mount(mux, handlers.NotARouter(`, 1),
-		"public api twice":    strings.Replace(string(src), publicAPIMount, `publicapi.Mount(mux, publicapi.NewHTTPRouter(nil, "", nil))`+"\n\t\t"+publicAPIMount, 1),
+		"public api twice":    strings.Replace(string(src), publicAPIMount, `publicapi.Mount(mux, publicapi.NewHTTPRouter(nil, "", publicLimiter))`+"\n\t\t"+publicAPIMount, 1),
 		"public api missing":  strings.Replace(string(src), publicAPIMount, `noMount(mux, publicapi.NewHTTPRouter(`, 1),
 	}
 	for name, body := range cases {
@@ -261,11 +265,15 @@ func v1MountViolations(t *testing.T, path string) []string {
 			publicMCPMounts++
 			if m, ok := call.Args[0].(*ast.Ident); !ok || m.Name != "mux" || !isPkgCall(call.Args[1], "publicmcp", "NewHandler") {
 				violations = append(violations, fmt.Sprintf("%s: publicmcp.Mount must be given mux and publicmcp.NewHandler(...)", pos))
+			} else if !lastArgNonNil(call.Args[1], 3) {
+				violations = append(violations, fmt.Sprintf("%s: publicmcp.NewHandler must be given the public rate limiter, not nil", pos))
 			}
 		case recv.Name == "publicapi" && sel.Sel.Name == "Mount":
 			publicAPIMounts++
 			if m, ok := call.Args[0].(*ast.Ident); !ok || m.Name != "mux" || !isPkgCall(call.Args[1], "publicapi", "NewHTTPRouter") {
 				violations = append(violations, fmt.Sprintf("%s: publicapi.Mount must be given mux and publicapi.NewHTTPRouter(...)", pos))
+			} else if !lastArgNonNil(call.Args[1], 3) {
+				violations = append(violations, fmt.Sprintf("%s: publicapi.NewHTTPRouter must be given the public rate limiter, not nil", pos))
 			}
 		case recv.Name == "mux" && (sel.Sel.Name == "Handle" || sel.Sel.Name == "HandleFunc"):
 			lit, ok := call.Args[0].(*ast.BasicLit)
@@ -326,4 +334,15 @@ func isPkgCall(e ast.Expr, pkg, fn string) bool {
 	}
 	id, ok := sel.X.(*ast.Ident)
 	return ok && id.Name == pkg
+}
+
+// lastArgNonNil reports whether e is a call with n arguments whose last is
+// not the identifier nil (#0730's limiter argument).
+func lastArgNonNil(e ast.Expr, n int) bool {
+	call, ok := e.(*ast.CallExpr)
+	if !ok || len(call.Args) != n {
+		return false
+	}
+	id, ok := call.Args[n-1].(*ast.Ident)
+	return !ok || id.Name != "nil"
 }

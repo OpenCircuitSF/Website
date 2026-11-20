@@ -2,9 +2,11 @@ package publicapi
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/brennanMKE/OpenCircuitSF/internal/api"
 )
@@ -21,7 +23,14 @@ const OpenAPIPath = "/api/public/v1/openapi.json"
 type Op struct {
 	api.Operation
 	Summarize func(out any) string
+	// Cached makes Invoke keep successful results for ListCacheTTL, keyed
+	// by name and input (#0730). Set it only on list operations whose
+	// output depends on nothing but the input and published data.
+	Cached bool
 }
+
+// WithCache returns o with Cached set.
+func (o Op) WithCache() Op { o.Cached = true; return o }
 
 // Define is api.Define plus a typed summariser.
 func Define[In, Out any](op api.Operation, fn func(context.Context, In) (Out, error), summarize func(Out) string) Op {
@@ -50,11 +59,14 @@ type Registry struct {
 	names   map[string]bool
 	paths   map[string]bool
 	frozen  bool
+	logger  *slog.Logger
+	cache   *resultCache
+	now     func() time.Time
 }
 
 // NewRegistry returns an empty registry reporting version.
 func NewRegistry(version string) *Registry {
-	return &Registry{version: version, names: map[string]bool{}, paths: map[string]bool{}}
+	return &Registry{version: version, names: map[string]bool{}, paths: map[string]bool{}, cache: newResultCache(), now: time.Now}
 }
 
 // Add registers ops. It panics ("publicapi: Add <name>: <reason>") on
@@ -123,9 +135,35 @@ func (r *Registry) Ops() []Op { return append([]Op(nil), r.ops...) }
 // Version is the version the registry was built with.
 func (r *Registry) Version() string { return r.version }
 
-// Invoke runs op on in, a value op.Decode (or #0734's REST binder)
-// returned. It is the single call path every adapter uses, so logging and
-// caching (#0730) belong here.
+// SetLogger sets the logger for call records; nil means slog.Default().
+func (r *Registry) SetLogger(l *slog.Logger) { r.logger = l }
+
+// Invalidate empties the list cache. cmd/opencircuit registers it with
+// seo.Site's OnInvalidate, so any publish or edit that clears the site's
+// caches clears this one (#0730).
+func (r *Registry) Invalidate() { r.cache.invalidate() }
+
+// Invoke runs op on in, a value op.Decode (or the REST binder) returned.
+// It is the single call path every adapter uses, so it serves a Cached
+// op from the list cache when it can and logs one record per call
+// (#0730). A result started before an Invalidate is never cached.
 func (r *Registry) Invoke(ctx context.Context, op Op, in any) (any, error) {
-	return op.Call(ctx, in)
+	start := r.now()
+	key, gen := "", uint64(0)
+	if op.Cached {
+		if k, ok := cacheKey(op.Name, in); ok {
+			out, hit, g := r.cache.get(k, start)
+			if hit {
+				r.logCall(ctx, op, in, start, true, nil)
+				return out, nil
+			}
+			key, gen = k, g
+		}
+	}
+	out, err := op.Call(ctx, in)
+	if err == nil && key != "" {
+		r.cache.put(key, out, gen, start)
+	}
+	r.logCall(ctx, op, in, start, false, err)
+	return out, err
 }

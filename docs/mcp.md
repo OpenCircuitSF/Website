@@ -446,10 +446,19 @@ unsent or withheld newsletter issues (all of these are the same "not found"
 as an unknown slug); attendees, RSVPs, subscribers, internal notes, capacity
 and costs. It returns only what the public website already shows.
 
+**Limits.** 60 requests a minute per client IP, shared with
+`/api/public/v1/`; past that, HTTP 429 with `Retry-After` (seconds) before
+the MCP layer runs. `list_upcoming_events`, `search_events` and
+`list_newsletter_issues` results are cached for up to 60 seconds, but
+publishing or editing an event or newsletter issue clears the cache at once.
+Each tool call is logged with its name, its arguments (`query` cut to 64
+characters) and its latency; no IP is logged.
+
 **Tests.** `internal/publicapi` (the registry's refusals and limits),
 `internal/publicmcp` (the SDK client against the handler),
 `internal/handlers` (`public_v1_test.go`, and the DB-backed
 `TestPublicToolsNeverReturnUnpublished`) and `cmd/opencircuit`
-(`TestMountAndServe_PublicMCPMounted`):
+(`TestMountAndServe_PublicMCPMounted`, `TestMountAndServe_PublicMCPRateLimited`,
+`TestMountAndServe_PublicCacheInvalidatedBySite`):
 
-    ISSUE=NNNN scripts/check.sh go ./internal/publicapi/... ./internal/publicmcp/... ./internal/handlers/... ./cmd/opencircuit/...
+    ISSUE=NNNN scripts/check.sh go ./internal/publicapi/... ./internal/publicmcp/... ./internal/seo/... ./internal/middleware/... ./internal/handlers/... ./cmd/opencircuit/...

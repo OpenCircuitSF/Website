@@ -152,7 +152,7 @@ func BuildPublicRegistry(d PublicDeps) *publicapi.Registry {
 				return PublicEventList{}, err
 			}
 			return PublicEventList{Events: d.Workshops.publicEvents(ctx, base, filterByDate(upcoming, from, to), publicapi.ClampLimit(in.Limit))}, nil
-		}, func(out PublicEventList) string { return countSummary(len(out.Events), "upcoming event") }),
+		}, func(out PublicEventList) string { return countSummary(len(out.Events), "upcoming event") }).WithCache(),
 
 		publicapi.Define(api.Operation{
 			Name: "search_events", Method: http.MethodGet, Path: publicapi.Prefix + "events/search",
@@ -180,7 +180,7 @@ func BuildPublicRegistry(d PublicDeps) *publicapi.Registry {
 				}
 			}
 			return PublicEventList{Events: d.Workshops.publicEvents(ctx, base, hits, publicapi.ClampLimit(in.Limit))}, nil
-		}, func(out PublicEventList) string { return countSummary(len(out.Events), "matching event") }),
+		}, func(out PublicEventList) string { return countSummary(len(out.Events), "matching event") }).WithCache(),
 
 		publicapi.Define(api.Operation{
 			Name: "get_event", Method: http.MethodGet, Path: publicapi.Prefix + "events/{slug}",
@@ -230,7 +230,7 @@ func BuildPublicRegistry(d PublicDeps) *publicapi.Registry {
 				out.Issues = append(out.Issues, publicIssue(base, c))
 			}
 			return out, nil
-		}, func(out PublicNewsletterList) string { return countSummary(len(out.Issues), "newsletter issue") }),
+		}, func(out PublicNewsletterList) string { return countSummary(len(out.Issues), "newsletter issue") }).WithCache(),
 
 		publicapi.Define(api.Operation{
 			Name: "get_newsletter_issue", Method: http.MethodGet, Path: publicapi.Prefix + "newsletter/{slug}",

@@ -21,11 +21,10 @@ var Methods = []string{http.MethodGet, http.MethodOptions, http.MethodPost, http
 // and OPTIONS is a 204 preflight. No request header is read for
 // authentication: there is none.
 //
-// limit wraps every operation route (not the OpenAPI document, the
-// 404/405 catch-all or the CORS preflight); nil passes through. It is the
-// seam for #0730's per-IP limiter, shared with /mcp: #0730 swaps its type
-// for *Limiter.
-func NewHTTPRouter(reg *Registry, baseURL string, limit func(http.Handler) http.Handler) http.Handler {
+// limiter wraps every operation route (not the OpenAPI document, the
+// 404/405 catch-all or the CORS preflight); it is the per-IP budget shared
+// with /mcp (#0730), and nil means unlimited, for tests only.
+func NewHTTPRouter(reg *Registry, baseURL string, limiter *Limiter) http.Handler {
 	reg.Freeze()
 	doc, err := buildOpenAPI(reg, baseURL)
 	if err != nil {
@@ -38,11 +37,7 @@ func NewHTTPRouter(reg *Registry, baseURL string, limit func(http.Handler) http.
 		_, _ = w.Write(doc)
 	})
 	for _, op := range reg.Ops() {
-		var h http.Handler = serve(reg, op)
-		if limit != nil {
-			h = limit(h)
-		}
-		inner.Handle("GET "+op.Path, h)
+		inner.Handle("GET "+op.Path, limiter.Wrap(serve(reg, op)))
 	}
 	inner.HandleFunc(Prefix, func(w http.ResponseWriter, r *http.Request) {
 		probe := r.Clone(r.Context())

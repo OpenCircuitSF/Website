@@ -237,3 +237,18 @@ func TestRateLimiterXFFRotationBypassFixed(t *testing.T) {
 		t.Errorf("accepted = %d, want 3 (burst) — rotating X-Forwarded-For must not bypass the limiter", accepted)
 	}
 }
+
+func TestRateLimiterAllow(t *testing.T) {
+	rl := NewRateLimiter(rate.Every(time.Minute), 2)
+	for i := 0; i < 2; i++ {
+		if _, ok := rl.Allow("k"); !ok {
+			t.Fatalf("Allow %d refused", i)
+		}
+	}
+	if wait, ok := rl.Allow("k"); ok || wait <= 0 {
+		t.Errorf("third Allow = %v, %v; want refused with a positive wait", wait, ok)
+	}
+	if _, ok := rl.Allow("other"); !ok {
+		t.Error("another key shares the bucket")
+	}
+}

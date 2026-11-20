@@ -2017,10 +2017,15 @@ func mountAndServe(
 	// stores exist (never under STORAGE=json).
 	if publicWorkshopsH != nil && publicArchiveH != nil {
 		publicReg := handlers.BuildPublicRegistry(handlers.PublicDeps{Workshops: publicWorkshopsH, Archive: publicArchiveH, About: seo.About, BaseURL: cfg.BaseURL, Version: version})
-		publicmcp.Mount(mux, publicmcp.NewHandler(publicReg, slog.Default().With("component", "public-mcp")))
+		publicReg.SetLogger(slog.Default().With("component", "public-api"))
+		// #0730: a publish or edit clears the list cache with the site's own caches.
+		site.OnInvalidate(publicReg.Invalidate)
+		// #0730: one per-IP budget for the whole public surface (/mcp and
+		// /api/public/v1/), separate from every admin limiter.
+		publicLimiter := publicapi.NewLimiter()
+		publicmcp.Mount(mux, publicmcp.NewHandler(publicReg, slog.Default().With("component", "public-mcp"), publicLimiter))
 		// #0734: the same registry as REST, GET-only, CORS *, no auth.
-		// #0730 wires the shared per-IP limiter here (the nil).
-		publicapi.Mount(mux, publicapi.NewHTTPRouter(publicReg, cfg.BaseURL, nil))
+		publicapi.Mount(mux, publicapi.NewHTTPRouter(publicReg, cfg.BaseURL, publicLimiter))
 	}
 
 	// Preference center (#0031) and confirmation (#0030) — public,
@@ -2185,6 +2190,8 @@ func mountAndServe(
 	// #0656: a student workshop guide slug at /workshops/{slug} is served by
 	// the SPA handler instead of redirecting (see MountLegacyWorkshopRedirects).
 	handlers.MountLegacyWorkshopRedirects(mux, spa)
+	// #0735: /agents 301s to the MCP docs page.
+	handlers.MountDocsRedirects(mux)
 
 	// Per-guide Open Graph card (#0656, Decision 3 in issues/0656.md): every
 	// guide's card lives under /guides/{slug}/og.png, including the workshop

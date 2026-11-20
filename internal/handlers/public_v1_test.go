@@ -330,3 +330,18 @@ func TestGetAbout(t *testing.T) {
 		t.Errorf("summary = %q", s)
 	}
 }
+
+// TestPublicListOpsAreCached is #0730: exactly the three list operations
+// use the registry's list cache.
+func TestPublicListOpsAreCached(t *testing.T) {
+	var got []string
+	for _, op := range BuildPublicRegistry(PublicDeps{}).Ops() {
+		if op.Cached {
+			got = append(got, op.Name)
+		}
+	}
+	slices.Sort(got)
+	if want := []string{"list_newsletter_issues", "list_upcoming_events", "search_events"}; !slices.Equal(got, want) {
+		t.Errorf("cached ops = %v, want %v", got, want)
+	}
+}

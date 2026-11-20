@@ -91,6 +91,11 @@ func (rl *RateLimiter) MiddlewareByKey(key func(*http.Request) string) func(http
 	}
 }
 
+// Allow spends one token from key's bucket. When the bucket is empty it
+// spends nothing and returns how long until a token is available. For
+// callers that write their own refusal (publicapi.Limiter, #0730).
+func (rl *RateLimiter) Allow(key string) (time.Duration, bool) { return rl.allow(key, time.Now()) }
+
 // allow spends one token from key's bucket. When the bucket is empty it spends
 // nothing and returns how long until a token is available.
 func (rl *RateLimiter) allow(key string, now time.Time) (time.Duration, bool) {

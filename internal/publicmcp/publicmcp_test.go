@@ -3,6 +3,7 @@ package publicmcp
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -55,7 +56,7 @@ func stubRegistry() *publicapi.Registry {
 
 func serve(t *testing.T) string {
 	t.Helper()
-	srv := httptest.NewServer(NewHandler(stubRegistry(), nil))
+	srv := httptest.NewServer(NewHandler(stubRegistry(), nil, nil))
 	t.Cleanup(srv.Close)
 	return srv.URL
 }
@@ -210,5 +211,34 @@ func TestMountRegistersOnlyMCPPath(t *testing.T) {
 		if (rec.Code == 299) != c.reach {
 			t.Errorf("%s %s = %d, reach want %v", c.method, c.path, rec.Code, c.reach)
 		}
+	}
+}
+
+// TestRateLimitedBeforeSDK is #0730: past publicapi.RequestsPerMinute a
+// request is a plain HTTP 429 with the v1 error envelope, not JSON-RPC.
+func TestRateLimitedBeforeSDK(t *testing.T) {
+	srv := httptest.NewServer(NewHandler(stubRegistry(), nil, publicapi.NewLimiter()))
+	t.Cleanup(srv.Close)
+	post := func() (int, http.Header, string) {
+		req, _ := http.NewRequest(http.MethodPost, srv.URL, strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		resp, err := srv.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, resp.Header, string(b)
+	}
+	for i := 0; i < publicapi.RequestsPerMinute; i++ {
+		if code, _, body := post(); code == http.StatusTooManyRequests {
+			t.Fatalf("request %d: 429 %s", i, body)
+		}
+	}
+	code, hdr, body := post()
+	var e api.ErrorBody
+	if code != http.StatusTooManyRequests || hdr.Get("Retry-After") == "" || json.Unmarshal([]byte(body), &e) != nil || e.Error.Code != api.CodeRateLimited || strings.Contains(body, "jsonrpc") {
+		t.Errorf("over budget = %d Retry-After %q %s", code, hdr.Get("Retry-After"), body)
 	}
 }

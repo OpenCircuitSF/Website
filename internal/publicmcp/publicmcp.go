@@ -23,10 +23,12 @@ const instructions = `Read-only public information about Open Circuit SF, a San 
 
 // NewHandler freezes reg and returns the /mcp handler: one *mcp.Server
 // holding every operation in reg as a tool, behind the SDK's stateless,
-// JSON-only Streamable HTTP handler, with nothing wrapped around it. The
+// JSON-only Streamable HTTP handler, behind limiter, the per-IP budget
+// shared with /api/public/v1/ (#0730): over budget is a plain HTTP 429
+// before the SDK runs. limiter nil means unlimited, for tests only. The
 // stateless handler answers GET and DELETE with 405. logger nil means
 // slog.Default().
-func NewHandler(reg *publicapi.Registry, logger *slog.Logger) http.Handler {
+func NewHandler(reg *publicapi.Registry, logger *slog.Logger, limiter *publicapi.Limiter) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -39,7 +41,7 @@ func NewHandler(reg *publicapi.Registry, logger *slog.Logger) http.Handler {
 	for _, op := range reg.Ops() {
 		s.AddTool(toolFor(op), handlerFor(reg, op))
 	}
-	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, &mcp.StreamableHTTPOptions{
+	return limiter.Wrap(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, &mcp.StreamableHTTPOptions{
 		Stateless:    true,
 		JSONResponse: true,
 		// Apache proxies with ProxyPreserveHost On, so a production request
@@ -51,7 +53,7 @@ func NewHandler(reg *publicapi.Registry, logger *slog.Logger) http.Handler {
 		MaxRequestBodyBytes:          api.MaxBodyBytes,
 		PropagateRequestCancellation: true,
 		Logger:                       logger,
-	})
+	}))
 }
 
 // Mount registers h for Path on mux, one pattern per method the Streamable

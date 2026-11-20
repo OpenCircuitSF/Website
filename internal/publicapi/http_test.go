@@ -137,16 +137,14 @@ func TestNotFoundBodyIsUniform(t *testing.T) {
 func TestLimitWrapsOperations(t *testing.T) {
 	reg := NewRegistry("1")
 	reg.Add(def(good()))
-	h := NewHTTPRouter(reg, "x", func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("X-Wrapped", "1")
-			next.ServeHTTP(w, r)
-		})
-	})
-	if do(h, http.MethodGet, Prefix+"x", nil).Header().Get("X-Wrapped") != "1" {
+	h := NewHTTPRouter(reg, "x", NewLimiter())
+	for i := 0; i < RequestsPerMinute; i++ {
+		do(h, http.MethodGet, Prefix+"x", nil)
+	}
+	if do(h, http.MethodGet, Prefix+"x", nil).Code != http.StatusTooManyRequests {
 		t.Error("operation not wrapped")
 	}
-	if do(h, http.MethodGet, OpenAPIPath, nil).Header().Get("X-Wrapped") != "" {
+	if do(h, http.MethodGet, OpenAPIPath, nil).Code != http.StatusOK {
 		t.Error("OpenAPI document wrapped")
 	}
 }

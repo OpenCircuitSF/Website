@@ -23,6 +23,8 @@ type Site struct {
 	robots   []byte
 	cards    *cardCache
 	feed     *Feed
+	hooksMu  sync.Mutex
+	hooks    []func() // OnInvalidate's, run by Invalidate (#0730)
 	guideArt map[string]guideArt
 	thumbMu  sync.Mutex
 	thumbs   map[string]guideThumb
@@ -69,12 +71,14 @@ func newSite(indexHTML []byte, baseURL string, source WorkshopSource, archive Ar
 // #0273, see their own doc comments) rather than an exported
 // Sitemap.Invalidate/cardCache.Invalidate -- *Site is the only type meant to
 // satisfy either caller's single-method invalidator interface (see
-// invalidator_satisfier_guard_test.go).
+// invalidator_satisfier_guard_test.go). It then runs every OnInvalidate
+// hook, which is how the public API's list cache is cleared too (#0730).
 func (s *Site) Invalidate() {
 	s.renderer.Invalidate()
 	s.sitemap.invalidate()
 	s.cards.invalidate()
 	s.feed.invalidate()
+	s.runInvalidateHooks()
 }
 
 // Middleware wraps next (in practice, handlers.NewSPAHandler's catch-all)

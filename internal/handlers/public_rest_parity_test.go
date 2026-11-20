@@ -24,7 +24,7 @@ func TestPublicRESTAndMCPParity(t *testing.T) {
 	ev := pubV1Workshop("parity-event", time.Now().Add(72*time.Hour))
 	reg := pubV1Reg(pubV1WorkshopStore{upcoming: []workshops.Workshop{ev}}, nil, pubV1ArchiveStore{})
 	ops := reg.Ops()
-	mcpSrv := httptest.NewServer(publicmcp.NewHandler(reg, nil))
+	mcpSrv := httptest.NewServer(publicmcp.NewHandler(reg, nil, nil))
 	defer mcpSrv.Close()
 	rest := httptest.NewServer(publicapi.NewHTTPRouter(reg, pubV1Base, nil))
 	defer rest.Close()
