@@ -787,6 +787,33 @@ func TestVenueEditInvalidatesServerRenderedPage(t *testing.T) {
 	}
 }
 
+// TestMountAndServe_AgentsRedirectsToDocsMCP pins #0735's main.go mount:
+// /agents 301s to /docs/mcp through the real mux, keeping the query, and
+// /docs/mcp serves its static fallback.
+func TestMountAndServe_AgentsRedirectsToDocsMCP(t *testing.T) {
+	baseURL, client, _, _, _, get := seoWiringServer(t)
+	for path, want := range map[string]string{
+		"/agents":           "/docs/mcp",
+		"/agents/":          "/docs/mcp",
+		"/agents?utm_src=x": "/docs/mcp?utm_src=x",
+	} {
+		resp, err := client.Get(baseURL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusMovedPermanently || resp.Header.Get("Location") != want {
+			t.Errorf("GET %s: status=%d Location=%q, want 301 to %q", path, resp.StatusCode, resp.Header.Get("Location"), want)
+		}
+	}
+	body := get("/docs/mcp", http.StatusOK)
+	for _, needle := range []string{"Use Open Circuit SF with AI agents", "https://www.opencircuitsf.com/mcp", "list_upcoming_events"} {
+		if !strings.Contains(body, needle) {
+			t.Errorf("/docs/mcp fallback missing %q", needle)
+		}
+	}
+}
+
 func TestMountAndServe_OldWorkshopURLsRedirectAndKeepUnfurl(t *testing.T) {
 	baseURL, client, workshopsStore, _, cookie, get := seoWiringServer(t)
 	ctx := context.Background()

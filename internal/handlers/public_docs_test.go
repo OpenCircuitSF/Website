@@ -96,13 +96,17 @@ func TestPublicDocsMCPPageMatchesRegistry(t *testing.T) {
 				sawJSON = true
 				var cfg struct {
 					MCPServers map[string]struct {
-						URL string `json:"url"`
+						Type string `json:"type"`
+						URL  string `json:"url"`
 					} `json:"mcpServers"`
 				}
 				if !json.Valid([]byte(b.Text)) || json.Unmarshal([]byte(b.Text), &cfg) != nil {
 					t.Errorf("mcpServers JSON block is not valid JSON")
 				} else if got := cfg.MCPServers["opencircuitsf"].URL; got != endpoint {
 					t.Errorf("mcpServers.opencircuitsf.url = %q, want %q", got, endpoint)
+				}
+				if got := cfg.MCPServers["opencircuitsf"].Type; got != "http" {
+					t.Errorf("mcpServers.opencircuitsf.type = %q, want \"http\"", got)
 				}
 			}
 		}
