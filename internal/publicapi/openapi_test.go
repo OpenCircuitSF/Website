@@ -69,6 +69,9 @@ func TestOpenAPIMatchesRegistry(t *testing.T) {
 			if e.OperationID != op.Name || e.MCPTool != op.Name {
 				t.Errorf("%s: operationId %q x-mcp-tool %q", op.Name, e.OperationID, e.MCPTool)
 			}
+			if _, ok := e.Responses["429"]; !ok {
+				t.Errorf("%s: no 429 response (#0730's rate limit)", op.Name)
+			}
 			var names, wantNames []string
 			for _, p := range e.Parameters {
 				names = append(names, p.In+":"+p.Name)

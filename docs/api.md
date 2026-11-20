@@ -609,6 +609,7 @@ above:
 - **GET only.** Any other method is a JSON `405` with `Allow: GET, HEAD, OPTIONS`; `OPTIONS` is a `204` CORS preflight.
 - **CORS `*`.** Every response carries `Access-Control-Allow-Origin: *`, so a browser app on any site can read it. The admin `/api/v1/` sends no CORS headers.
 - **Cached.** A success is `Cache-Control: public, max-age=60`; an error is `no-store`.
+- **Rate limited.** 60 requests a minute per client IP, one budget shared with `/mcp` (`#0730`); past that, `429 rate_limited` with `Retry-After` (seconds). `OPTIONS` and `openapi.json` are not counted. List results may be served from a server-side cache for up to 60 seconds; publishing or editing an event or newsletter issue clears it at once.
 
 It serves the same operations as the public MCP server, built from one
 registry, so a route and its tool return the same JSON:

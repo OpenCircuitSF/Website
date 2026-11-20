@@ -53,6 +53,8 @@ func buildOpenAPI(reg *Registry, baseURL string) ([]byte, error) {
 			"200": map[string]any{"description": "success", "content": map[string]any{
 				"application/json": map[string]any{"schema": op.OutputSchema()}}},
 			"400": errRef("validation: fields names each invalid field"),
+			// #0730: every operation sits behind the per-IP Limiter.
+			"429": errRef("rate_limited: over the per-IP budget; wait Retry-After seconds"),
 			"500": errRef("internal error"),
 		}
 		if strings.Contains(op.Path, "{") {
