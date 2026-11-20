@@ -17,8 +17,6 @@
   import WorkshopDetail from './views/WorkshopDetail.svelte';
   import ArchiveIndex from './views/ArchiveIndex.svelte';
   import ArchiveEntry from './views/ArchiveEntry.svelte';
-  import About from './views/About.svelte';
-  import PrivacyPolicy from './views/PrivacyPolicy.svelte';
   import Subscribe from './views/Subscribe.svelte';
   import SubscribeThanks from './views/SubscribeThanks.svelte';
   import NotFound from './views/NotFound.svelte';
@@ -204,9 +202,9 @@
   {:else if $currentRoute.name === 'archive-detail'}
     <ArchiveEntry />
   {:else if $currentRoute.name === 'about'}
-    <About />
+    <LazyView key="about" />
   {:else if $currentRoute.name === 'privacy'}
-    <PrivacyPolicy />
+    <LazyView key="privacy" />
   {:else if $currentRoute.name === 'docs'}
     <LazyView key="docs" />
   {:else if $currentRoute.name === 'subscribe'}

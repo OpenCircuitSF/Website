@@ -47,8 +47,6 @@
 // -- the same "reported loudly, not skipped" shape #0242/#0243's guard
 // uses for the live-region classification problem.
 import { APP_NAME } from './branding';
-import aboutPage from '../content/about.json';
-import privacyPage from '../content/privacy.json';
 import type { Route, RouteName } from './router';
 import { topicGuideBySlug } from './guides';
 import { docsPageByPath } from './docsPages';
@@ -95,12 +93,15 @@ const STATIC_HEADING: Record<RouteName, string> = {
   // fallback — web/src/views/TopicGuide.svelte's <h1> is the topic's own
   // catalog title; titleForRoute uses it when the slug is known.
   'topic-guide': 'Guide',
-  // guarded — web/src/views/About.svelte, whose <h1> is #0520's shared
-  // source (web/src/content/about.json's own h1): this table reads the same
-  // file the view and the server renderer read.
-  about: aboutPage.h1,
-  // guarded — web/src/views/PrivacyPolicy.svelte, same single-source shape.
-  privacy: privacyPage.h1,
+  // guarded — web/src/views/About.svelte: pageTitle.guard.test.ts follows
+  // the view through <StaticPage content> to web/src/content/about.json's h1
+  // and asserts it equals this literal. A literal, not an import, so the JSON
+  // body stays out of the entry chunk (#0736) -- docsPages.ts uses the same
+  // literal-plus-parity-test pattern.
+  about: `About ${APP_NAME}`,
+  // guarded — web/src/views/PrivacyPolicy.svelte, same shape against
+  // web/src/content/privacy.json's h1 (#0736).
+  privacy: 'Privacy Policy',
   // fallback — web/src/views/Docs.svelte renders each page's h1 from web/src/content/docs/*.json; titleForRoute reads docsPages.ts
   docs: 'Docs',
   // guarded — web/src/views/Subscribe.svelte

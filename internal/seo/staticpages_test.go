@@ -5,6 +5,7 @@
 package seo
 
 import (
+	"encoding/json"
 	"encoding/xml"
 	"html"
 	"os"
@@ -160,15 +161,14 @@ func TestRender_SingleSourcePagesStructure(t *testing.T) {
 }
 
 // TestStaticSourceIsTheOneSource checks the single-source contract's SPA
-// half (#0520 criterion 2): each view must still import its content JSON,
-// and links.ts must re-export the external URLs from about.json rather than
-// retyping them -- the guard-kept second copies this issue removed must
-// not quietly regrow inside the views.
+// half (#0520 criterion 2): each view must still import its content JSON --
+// the guard-kept second copies this issue removed must not quietly regrow
+// inside the views. links.ts holds literals since #0736; its parity with
+// about.json is TestLinksTSMatchesAboutJSON's job.
 func TestStaticSourceIsTheOneSource(t *testing.T) {
 	cases := []struct{ svelte, ref string }{
 		{"web/src/views/About.svelte", "../content/about.json"},
 		{"web/src/views/PrivacyPolicy.svelte", "../content/privacy.json"},
-		{"web/src/lib/links.ts", "../content/about.json"},
 		{"web/src/views/Docs.svelte", "../content/docs/"},
 	}
 	for _, c := range cases {
@@ -275,6 +275,36 @@ func TestRender_DocsCodeAndInternalLinks(t *testing.T) {
 	for _, p := range docsPaths() {
 		if got := strings.Count(string(r.Render(p)), "<h1"); got != 1 {
 			t.Errorf("%s: <h1> count = %d, want 1", p, got)
+		}
+	}
+}
+
+// TestLinksTSMatchesAboutJSON pins web/src/lib/links.ts's two URL literals
+// to about.json's "links" map (#0736): links.ts stopped importing the JSON so
+// the entry chunk would not carry it, and this keeps the two from drifting.
+func TestLinksTSMatchesAboutJSON(t *testing.T) {
+	raw, err := os.ReadFile(repoPath("web/src/content/about.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var about struct {
+		Links map[string]string `json:"links"`
+	}
+	if err := json.Unmarshal(raw, &about); err != nil {
+		t.Fatal(err)
+	}
+	src, err := os.ReadFile(repoPath("web/src/lib/links.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, name := range map[string]string{"discord": "DISCORD_URL", "luma": "LUMA_URL"} {
+		want := about.Links[key]
+		if want == "" {
+			t.Fatalf("about.json links.%s is empty or missing; cannot check %s", key, name)
+		}
+		line := "export const " + name + " = '" + want + "';"
+		if !strings.Contains(string(src), line) {
+			t.Errorf("links.ts %s does not match about.json links.%s = %q; want the line %q", name, key, want, line)
 		}
 	}
 }

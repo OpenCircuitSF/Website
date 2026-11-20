@@ -5,7 +5,7 @@
 #
 #     scripts/check.sh                       # build + vet + scoped Go tests + web checks
 #     scripts/check.sh go ./internal/mailing/...   # just those Go packages
-#     scripts/check.sh web                   # just npm run check + npm test
+#     scripts/check.sh web                   # just npm run check + npm test + entry-chunk budget
 #     scripts/check.sh build                 # go build + go vet + npm run check only (#0607)
 #     scripts/check.sh all                   # the whole Go suite (a batch's review pass only)
 #     scripts/check.sh guards                # the standalone shell guard tests (see below)
@@ -868,6 +868,7 @@ go_test() {
 web_check() {
   step "npm run check"; runpipe "cd web && npm run check 2>&1 | tail -$TAIL"
   step "npm test";      runpipe "cd web && npm test 2>&1 | tail -$TAIL"
+  step "entry-chunk budget (#0736, PRD §7.6)"; runpipe "cd web && npm run budget 2>&1 | tail -$TAIL"
 }
 
 # #0161: gofmt drift is otherwise invisible — `go vet` does not check
